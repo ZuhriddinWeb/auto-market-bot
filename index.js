@@ -418,7 +418,21 @@ async function createAdConversation(conversation, ctx) {
             const photoArr = res.message.photo;
             if (Array.isArray(photoArr) && photoArr.length > 0) {
               ad.photos.push(photoArr[photoArr.length - 1].file_id);
-              if (ad.photos.length === 6) { step = "PREVIEW"; break; }
+              
+              // Эски хабарни (тугмани) ўчирамиз
+              try {
+                await ctx.api.deleteMessage(ctx.chat.id, msgPrompt.message_id);
+              } catch (e) {}
+
+              if (ad.photos.length === 6) { 
+                await ctx.reply("✅ Максимал 6 та расм қабул қилинди.");
+                step = "PREVIEW"; 
+                break; 
+              }
+
+              // Янги тугмани пастдан чиқарамиз
+              msgPrompt = await ctx.reply(`✅ <b>${ad.photos.length}-расм қабул қилинди!</b>\nЯна расм юборинг ёки «✅ Бўлди (Юбориш)» тугмасини босинг.`, { reply_markup: kb, parse_mode: "HTML" });
+              chatToClean.push(msgPrompt.message_id);
             }
           }
         }
