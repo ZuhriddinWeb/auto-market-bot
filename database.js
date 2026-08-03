@@ -1,25 +1,36 @@
-const Database = require('better-sqlite3');
-const db = new Database('auto_market.db');
+const mysql = require("mysql2/promise");
+require("dotenv").config();
 
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS ads (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    userId BIGINT,
-    carDetails TEXT,
-    year TEXT,
-    probeg TEXT,
-    paint TEXT,
-    color TEXT,
-    transmission TEXT,
-    fuel TEXT,
-    price TEXT,
-    phone TEXT,
-    region TEXT,
-    photoId TEXT, -- Bu yerda barcha rasm IDlari vergul bilan saqlanadi
-    status TEXT DEFAULT 'pending',
-    channelMsgId TEXT,
-    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`).run();
+// MySQL bazasiga ulanish (Railway yoki VPS dagi MYSQL_URL ni .env dan oladi)
+const pool = mysql.createPool(process.env.MYSQL_URL);
 
-module.exports = db;
+async function initDB() {
+  try {
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS ads (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        userId BIGINT,
+        carDetails VARCHAR(255),
+        year VARCHAR(10),
+        probeg VARCHAR(50),
+        paint VARCHAR(50),
+        color VARCHAR(50),
+        transmission VARCHAR(50),
+        fuel VARCHAR(50),
+        price VARCHAR(50),
+        phone VARCHAR(20),
+        region VARCHAR(100),
+        photoId TEXT,
+        status VARCHAR(20) DEFAULT 'pending',
+        channelMsgId BIGINT
+      )
+    `);
+    console.log("✅ MySQL bazasiga muvaffaqiyatli ulandi va jadval tayyor!");
+  } catch (err) {
+    console.error("❌ MySQL ulanishida xatolik:", err.message);
+  }
+}
+
+initDB();
+
+module.exports = pool;

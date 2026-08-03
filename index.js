@@ -1,7 +1,7 @@
 require("dotenv").config();
 const { Bot, session, InlineKeyboard, Keyboard, InputFile } = require("grammy");
 const { conversations, createConversation } = require("@grammyjs/conversations");
-const db = require("./database");
+const db = require("./database"); // MySQL pool ulangan bo'lishi kerak
 const sharp = require("sharp");
 const axios = require("axios");
 const fs = require("fs");
@@ -12,6 +12,12 @@ const ADMIN_ID = Number(process.env.ADMIN_ID);
 const CHANNEL_ID = process.env.CHANNEL_ID.startsWith("@")
   ? process.env.CHANNEL_ID
   : `@${process.env.CHANNEL_ID}`;
+
+// Расмларни сақлаш учун алоҳида папка яратиш
+const collagesDir = path.join(__dirname, "collages");
+if (!fs.existsSync(collagesDir)) {
+  fs.mkdirSync(collagesDir, { recursive: true });
+}
 
 bot.catch((err) => console.error(`Хатолик:`, err.error));
 bot.use(session({ initial: () => ({}) }));
@@ -45,7 +51,7 @@ async function deleteMsgs(ctx, msgIds) {
 }
 
 /**
- * ✅ Расмларни монтиж қилиш (Collage)
+ * ✅ Расмларни монтиж қилиш (Collage) - Алоҳида папкага сақлаш
  */
 async function createCollage(photoUrls) {
   const buffers = await Promise.all(
@@ -67,7 +73,8 @@ async function createCollage(photoUrls) {
     left: (index % columns) * 600,
   }));
 
-  const collagePath = path.join(__dirname, `collage_${Date.now()}.jpg`);
+  // Расмни collages папкасида сақлаш
+  const collagePath = path.join(collagesDir, `collage_${Date.now()}.jpg`);
   await sharp({
     create: { width: canvasWidth, height: canvasHeight, channels: 3, background: { r: 255, g: 255, b: 255 } },
   })
@@ -467,13 +474,15 @@ async function createAdConversation(conversation, ctx) {
         if (action === "cancel_ad") break;
         
         if (action === "submit_ad") {
-          // BAZAGA SAQLASH VA ADMINGA YUBORISH
-          const info = db.prepare(`INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-            .run(ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","));
+          // MYSQL INSERT BAZAGA SAQLASH
+          const [result] = await db.execute(
+            `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(",")]
+          );
           
-          const adId = info.lastInsertRowid;
+          const adId = result.insertId; // MySQL auto_increment id ni olish
           
-          // Adminga qayta rasm yasab yuboramiz (shart emas, bazadan o'qiydigan callback bor, lekin tezlik uchun)
+          // Adminga qayta rasm yasab yuboramiz
           const adminCollage = await createCollage(photoUrls);
           await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
             caption: `🆔 <b>ID: ${adId}</b>\n\n${caption}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>`,
@@ -516,7 +525,10 @@ bot.use(createConversation(createAdConversation));
  */
 bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
-  const ad = db.prepare("SELECT * FROM ads WHERE id = ?").get(adId);
+  
+  // MYSQL SELECT
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  const ad = rows[0];
 
   if (ad && ad.status === "pending") {
     const photos = ad.photoId.split(",");
@@ -542,7 +554,9 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
         caption: caption, reply_markup: channelMarkup, parse_mode: "HTML",
       });
 
-      db.prepare("UPDATE ads SET status='active', channelMsgId=? WHERE id=?").run(msg.message_id, adId);
+      // MYSQL UPDATE
+      await db.execute("UPDATE ads SET status='active', channelMsgId=? WHERE id=?", [msg.message_id, adId]);
+      
       if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
       
       await ctx.editMessageCaption({ caption: "✅ Каналга жойланди!", parse_mode: "HTML" });
@@ -561,9 +575,14 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
  */
 bot.callbackQuery(/^reject:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
-  const ad = db.prepare("SELECT * FROM ads WHERE id = ?").get(adId);
+  
+  // MYSQL SELECT
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  const ad = rows[0];
+  
   if (ad && ad.status === "pending") {
-    db.prepare("UPDATE ads SET status='rejected' WHERE id=?").run(adId);
+    // MYSQL UPDATE
+    await db.execute("UPDATE ads SET status='rejected' WHERE id=?", [adId]);
     await ctx.editMessageCaption({ caption: "❌ <b>Эълон рад этилди.</b>", parse_mode: "HTML" });
     try {
         await bot.api.sendMessage(ad.userId, `❌ <b>Эълонингиз рад этилди.</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз қоидаларга мос келмаганлиги сабабли рад этилди. Илтимос, маълумотларни тўғрилаб қайтадан эълон беринг.`, { parse_mode: "HTML", reply_markup: mainMenu });
@@ -577,7 +596,9 @@ bot.callbackQuery(/^reject:(\d+)/, async (ctx) => {
  * ✅ МЕНИНГ ЭЪЛОНЛАРИМ
  */
 bot.hears("📂 Менинг эълонларим", async (ctx) => {
-  const ads = db.prepare("SELECT * FROM ads WHERE userId = ? AND status = 'active'").all(ctx.from.id);
+  // MYSQL SELECT Array
+  const [ads] = await db.execute("SELECT * FROM ads WHERE userId = ? AND status = 'active'", [ctx.from.id]);
+  
   if (ads.length === 0) return ctx.reply("📭 <b>Сизда ҳозирда фаол эълонлар йўқ.</b>", { parse_mode: "HTML" });
 
   for (const ad of ads) {
@@ -589,7 +610,10 @@ bot.hears("📂 Менинг эълонларим", async (ctx) => {
 
 bot.callbackQuery(/^sold_req:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
-  const ad = db.prepare("SELECT * FROM ads WHERE id = ?").get(adId);
+  
+  // MYSQL SELECT
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  const ad = rows[0];
 
   if (ad && ad.status === 'active') {
       await bot.api.sendMessage(ADMIN_ID, `💰 <b>СОТИЛДИ ХАБАРИ!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Мошина: ${ad.carDetails}</b>\n👤 <b>Узер:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>`, {
@@ -604,12 +628,19 @@ bot.callbackQuery(/^sold_req:(\d+)/, async (ctx) => {
 
 bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
-  const ad = db.prepare("SELECT * FROM ads WHERE id = ?").get(adId);
+  
+  // MYSQL SELECT
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  const ad = rows[0];
+  
   if (ad && ad.status === 'active') {
       try {
         const newCaption = `💰 <b>СОТИЛДИ!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Нархи: ${ad.price}$</b>\n\n❌ <b>Эълон ёпилди.</b>`;
         await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, parse_mode: "HTML" });
-        db.prepare("UPDATE ads SET status='sold' WHERE id=?").run(adId);
+        
+        // MYSQL UPDATE
+        await db.execute("UPDATE ads SET status='sold' WHERE id=?", [adId]);
+        
         await ctx.editMessageText("✅ <b>Каналда сотилди деб белгиланди!</b>", { parse_mode: "HTML" });
         await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналда "СОТИЛДИ" деб белгиланди.`, { parse_mode: "HTML" });
       } catch (e) {
