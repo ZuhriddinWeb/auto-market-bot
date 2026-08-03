@@ -522,6 +522,5 @@ bot.command("start", (ctx) => {
 });
 
 bot.hears("📝 Эълон Ясаш", (ctx) => ctx.conversation.enter("createAdConversation"));
-
 bot.start();
 console.log("Бот муваффақиятли ишга тушди...");
