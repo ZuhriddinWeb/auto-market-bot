@@ -33,13 +33,23 @@ async function safeAnswerCbq(ctx) {
 }
 
 /**
+ * ✅ Хабарларни тозалаш (чатни ифлослантирмаслик учун)
+ */
+async function deleteMsgs(ctx, msgIds) {
+  for (const id of msgIds) {
+    try {
+      if (id) await ctx.api.deleteMessage(ctx.chat.id, id);
+    } catch (e) {}
+  }
+  msgIds.length = 0; // Arrayni tozalash
+}
+
+/**
  * ✅ Расмларни монтиж қилиш (Collage)
  */
 async function createCollage(photoUrls) {
   const buffers = await Promise.all(
-    photoUrls.map((url) =>
-      axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data)
-    )
+    photoUrls.map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
   );
 
   const resizedImages = await Promise.all(
@@ -59,12 +69,7 @@ async function createCollage(photoUrls) {
 
   const collagePath = path.join(__dirname, `collage_${Date.now()}.jpg`);
   await sharp({
-    create: {
-      width: canvasWidth,
-      height: canvasHeight,
-      channels: 3,
-      background: { r: 255, g: 255, b: 255 },
-    },
+    create: { width: canvasWidth, height: canvasHeight, channels: 3, background: { r: 255, g: 255, b: 255 } },
   })
     .composite(composites)
     .jpeg({ quality: 90 })
@@ -74,285 +79,434 @@ async function createCollage(photoUrls) {
 }
 
 /**
- * ✅ ЭЪЛОН ЯРАТИШ ЖАРАЁНИ (Conversation)
+ * ✅ ЭЪЛОН ЯРАТИШ ЖАРАЁНИ (PRO - STATE MACHINE)
  */
 async function createAdConversation(conversation, ctx) {
-  const adData = {};
+  const ad = { photos: [] };
+  let step = "BRAND";
+  let isEditing = false; // Tahrirlash rejimida ekanligini bilish uchun
+  const chatToClean = []; // O'chirilishi kerak bo'lgan xabarlar ID si
 
-  await ctx.reply(
-    "📝 <b>Эълон бериш жараёни бошланди.</b>\n\nИсталган вақтда жараённи бекор қилиш ва асосий менюга қайтиш учун <b>/cancel</b> сўзини ёзинг.", 
-    { parse_mode: "HTML", reply_markup: { remove_keyboard: true } }
-  );
-
-  // --- ҚАДАМ 1: Бренд ва Модель ---
+  // Кенгайтирилган Авто-каталог
   const carCatalog = {
-    Chevrolet: ["Matiz", "Spark", "Nexia 1", "Nexia 2", "Nexia 3", "Cobalt", "Gentra", "Lacetti", "Damas", "Tracker", "Malibu 1", "Malibu 2", "Captiva", "Equinox", "Tahoe"],
-    BYD: ["Chazor", "Song Plus", "Song Pro", "Han", "Tang", "Seagull"],
-    Kia: ["K5", "K8", "Sportage", "Seltos", "Carnival", "Sorento", "Cerato", "Bongo"],
-    Chery: ["Tiggo 7 Pro", "Tiggo 8 Pro", "Arrizo 6 Pro"],
-    Hyundai: ["Accent", "Elantra", "Sonata", "Tucson", "Santa Fe"],
-    Lada: ["Vesta", "Largus", "Niva Legend"],
-    Boshqa: [],
+    "Chevrolet": ["Cobalt", "Gentra", "Lacetti", "Spark", "Nexia 1", "Nexia 2", "Nexia 3", "Matiz", "Damas", "Labo", "Tracker", "Onix", "Monza", "Malibu 1", "Malibu 2", "Captiva", "Equinox", "Tahoe", "Traverse"],
+    "Daewoo": ["Matiz", "Nexia 1", "Tico", "Damas"],
+    "BYD": ["Chazor", "Song Plus", "Song Pro", "Han", "Tang", "Seagull", "Yuan Up", "Yuan Plus", "Destroyer 05", "e2"],
+    "Kia": ["K5", "K8", "Sportage", "Sorento", "Carnival", "Cerato", "Seltos", "Sonet", "Bongo"],
+    "Hyundai": ["Accent", "Elantra", "Sonata", "Tucson", "Santa Fe", "Staria", "Porter"],
+    "Chery": ["Tiggo 7 Pro", "Tiggo 8 Pro", "Arrizo 6 Pro"],
+    "Lada": ["Vesta", "Largus", "Granta", "Niva Legend"],
+    "Jetour": ["X70", "X70 Plus", "X90 Plus", "Dashing"],
+    "Toyota": ["Camry", "Corolla", "Prado", "Land Cruiser", "RAV4"],
+    "Mercedes": ["C-Class", "E-Class", "S-Class", "GLE", "G-Class"],
+    "BMW": ["3-Series", "5-Series", "7-Series", "X5", "X7"],
+    "Zeekr": ["001", "007", "009", "X"],
+    "Li Auto": ["L7", "L8", "L9"],
+    "Tesla": ["Model 3", "Model Y", "Model S"],
+    "Бошқа": [],
   };
 
-  const brandK = new InlineKeyboard();
-  Object.keys(carCatalog).forEach((b, i) => {
-    brandK.text(b, `brand:${b}`);
-    if ((i + 1) % 3 === 0) brandK.row();
-  });
+  await ctx.reply("📝 <b>Эълон бериш бошланди.</b>", { reply_markup: { remove_keyboard: true }, parse_mode: "HTML" });
 
-  await ctx.reply("🚗 <b>Автомобил маркасини танланг:</b>", { reply_markup: brandK, parse_mode: "HTML" });
-  let bRes = await conversation.waitFor(["callback_query:data", "message:text"]);
-  if (bRes.message?.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-
-  if (bRes.callbackQuery) {
-    adData.brand = bRes.callbackQuery.data.split(":")[1];
-    await safeAnswerCbq(bRes);
-  } else {
-    adData.brand = bRes.message.text;
-  }
-
-  if (carCatalog[adData.brand] && carCatalog[adData.brand].length > 0) {
-    const modelK = new InlineKeyboard();
-    carCatalog[adData.brand].forEach((m, i) => {
-      modelK.text(m, `model:${m}`);
-      if ((i + 1) % 3 === 0) modelK.row();
-    });
-
-    await ctx.reply(`🚙 <b>${adData.brand}</b> моделини танланг:`, { reply_markup: modelK, parse_mode: "HTML" });
-    let mRes = await conversation.waitFor(["callback_query:data", "message:text"]);
-    if (mRes.message?.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-
-    adData.model = mRes.callbackQuery ? mRes.callbackQuery.data.split(":")[1] : mRes.message.text;
-    await safeAnswerCbq(mRes);
-  } else {
-    await ctx.reply("✍️ <b>Модель номини ёзинг:</b>", { parse_mode: "HTML" });
-    let mRes = await conversation.waitFor("message:text");
-    if (mRes.message.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-    adData.model = mRes.message.text;
-  }
-
-  // --- ҚАДАМ 2: Йили ---
-  const yK = new InlineKeyboard();
-  for (let y = 2026; y >= 1996; y--) {
-    yK.text(y.toString(), `y:${y}`);
-    if ((2026 - y + 1) % 4 === 0) yK.row();
-  }
-
-  await ctx.reply("📅 <b>Йилини танланг ёки ёзинг:</b>", { reply_markup: yK, parse_mode: "HTML" });
   while (true) {
-    let yRes = await conversation.waitFor(["callback_query:data", "message:text"]);
-    if (yRes.message?.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
+    let msgPrompt;
 
-    if (yRes.callbackQuery) {
-      adData.year = yRes.callbackQuery.data.split(":")[1];
-      await safeAnswerCbq(yRes);
-      break;
-    } else {
-      let typedYear = parseInt(yRes.message.text);
-      if (typedYear > 1900 && typedYear <= 2026) {
-        adData.year = typedYear.toString();
-        break;
-      }
-      await ctx.reply("❗️ Илтимос, йилини тўғри киритинг (мас: 2018):");
-    }
-  }
+    try {
+      // ----------------------------------------------------
+      // 1. BRAND (МАРКА)
+      // ----------------------------------------------------
+      if (step === "BRAND") {
+        const kb = new InlineKeyboard();
+        Object.keys(carCatalog).forEach((b, i) => {
+          kb.text(b, `b:${b}`);
+          if ((i + 1) % 3 === 0) kb.row();
+        });
+        kb.row().text("❌ Бекор қилиш", "cancel_ad");
 
-  // --- ҚАДАМ 3: Пробег ---
-  await ctx.reply("👣 <b>Пробегини киритинг (масалан: 35000 ёки Салон):</b>", { parse_mode: "HTML" });
-  let probegRes = await conversation.waitFor("message:text");
-  if (probegRes.message.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-  adData.probeg = probegRes.message.text;
+        msgPrompt = await ctx.reply("🚗 <b>Автомобил маркасини танланг:</b>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
 
-  // --- ҚАДАМ 4: Краска ---
-  const pK = new InlineKeyboard().text("Тоза", "p:Тоза").text("Петно", "p:Петно").text("Бор", "p:Бор");
-  await ctx.reply("💎 <b>Краскаси ҳолатини танланг ёки ёзинг:</b>", { reply_markup: pK, parse_mode: "HTML" });
-  let krRes = await conversation.waitFor(["callback_query:data", "message:text"]);
-  if (krRes.message?.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-  adData.paint = krRes.callbackQuery ? krRes.callbackQuery.data.split(":")[1] : krRes.message.text;
-  await safeAnswerCbq(krRes);
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
 
-  // --- ҚАДАМ 5: Ранги ---
-  await ctx.reply("🎨 <b>Мошина рангини ёзинг:</b>", { parse_mode: "HTML" });
-  let colorRes = await conversation.waitFor("message:text");
-  if (colorRes.message.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-  adData.color = colorRes.message.text;
-
-  // --- ҚАДАМ 6: Каробка ---
-  const tK = new InlineKeyboard()
-    .text("Mexanika", "t:Mexanika").text("Avtomat", "t:Avtomat").row()
-    .text("Robot", "t:Robot").text("Variator", "t:Variator");
-
-  await ctx.reply("⚙️ <b>Коробка турини танланг:</b>", { reply_markup: tK, parse_mode: "HTML" });
-  let trRes = await conversation.waitFor(["callback_query:data", "message:text"]);
-  if (trRes.message?.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-  adData.trans = trRes.callbackQuery ? trRes.callbackQuery.data.split(":")[1] : trRes.message.text;
-  await safeAnswerCbq(trRes);
-
-  // --- ҚАДАМ 7: Ёқилғи ---
-  const fK = new InlineKeyboard()
-    .text("Benzin", "f:Benzin").text("Benzin+Metan", "f:Benzin+Metan").row()
-    .text("Benzin+Propan", "f:Benzin+Propan").text("Gibrid", "f:Gibrid").row()
-    .text("Elektr", "f:Elektr");
-
-  await ctx.reply("⛽ <b>Ёқилғи турини танланг:</b>", { reply_markup: fK, parse_mode: "HTML" });
-  let flRes = await conversation.waitFor(["callback_query:data", "message:text"]);
-  if (flRes.message?.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-  adData.fuel = flRes.callbackQuery ? flRes.callbackQuery.data.split(":")[1] : flRes.message.text;
-  await safeAnswerCbq(flRes);
-
-  // --- ҚАДАМ 8: Нархи (Валидация билан) ---
-  await ctx.reply("💰 <b>Нархини киритинг ($):</b>\n<i>Фақат сонлардан фойдаланинг. Масалан: 7500</i>", { parse_mode: "HTML" });
-  while (true) {
-    let priceRes = await conversation.waitFor("message:text");
-    if (priceRes.message.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-    
-    let numericPrice = priceRes.message.text.replace(/\D/g, ""); // Фақат рақамларни ажратиб олиш
-    if (numericPrice.length > 0) {
-      adData.price = numericPrice;
-      break;
-    }
-    await ctx.reply("❗️ Илтимос, нархни фақат рақамларда киритинг (мас: 7500):");
-  }
-
-  // --- ҚАДАМ 9: Телефон рақам (Актив контакт сўраш) ---
-  const phoneKeyboard = new Keyboard().requestContact("📱 Рақамимни юбориш").resized().oneTime();
-  await ctx.reply("☎️ <b>Телефон рақамингизни юборинг ёки киритинг:</b>\n<i>(Масалан: 998901234567)</i>", { 
-    reply_markup: phoneKeyboard, 
-    parse_mode: "HTML" 
-  });
-  
-  while (true) {
-    let phoneRes = await conversation.waitFor(["message:contact", "message:text"]);
-    if (phoneRes.message?.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-
-    if (phoneRes.message?.contact) {
-      adData.phone = phoneRes.message.contact.phone_number.replace(/\D/g, "");
-      break;
-    } else if (phoneRes.message?.text) {
-      let numericPhone = phoneRes.message.text.replace(/\D/g, "");
-      if (numericPhone.length >= 7) {
-        adData.phone = numericPhone;
-        break;
-      }
-    }
-    await ctx.reply("❗️ Илтимос, тўғри телефон рақамини киритинг:");
-  }
-  await ctx.reply("✅ Рақам қабул қилинди.", { reply_markup: { remove_keyboard: true } });
-
-  // --- ҚАДАМ 10: Вилоятлар ---
-  const regions = [
-    "Тошкент ш.", "Тошкент вил.", "Сирдарё", "Жиззах", "Самарқанд", "Фарғона", "Наманган", 
-    "Андижон", "Қашқадарё", "Сурхондарё", "Бухоро", "Навоий", "Хоразм", "Қорақалпоғистон",
-  ];
-  const regK = new InlineKeyboard();
-  regions.forEach((r, i) => {
-    regK.text(r, `r:${r}`);
-    if ((i + 1) % 2 === 0) regK.row();
-  });
-
-  await ctx.reply("🚩 <b>Вилоятни танланг:</b>", { reply_markup: regK, parse_mode: "HTML" });
-  let rgRes = await conversation.waitFor(["callback_query:data", "message:text"]);
-  if (rgRes.message?.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-  adData.region = rgRes.callbackQuery ? rgRes.callbackQuery.data.split(":")[1] : rgRes.message.text;
-  await safeAnswerCbq(rgRes);
-
-  // --- ҚАДАМ 11: Расмлар (Альбомни тўғри қабул қилиш) ---
-  const photoIds = [];
-  const doneK = new InlineKeyboard().text("✅ Бўлди (Юбориш)", "done_photos");
-
-  await ctx.reply(
-    "📸 <b>Мошинангиз расмларини юборинг (1-6 та):</b>\n\n<i>Расмларни белгилаб бирданига юборишингиз мумкин. Барча расмларни юбориб бўлгач, пастдаги «✅ Бўлди» тугмасини босинг.</i>",
-    { parse_mode: "HTML", reply_markup: doneK }
-  );
-
-  while (photoIds.length < 6) {
-    const pCtx = await conversation.waitFor(["message:photo", "callback_query:data", "message:text"]);
-
-    if (pCtx.message?.text === "/cancel") return ctx.reply("❌ Бекор қилинди.", { reply_markup: mainMenu });
-
-    if (pCtx.callbackQuery?.data === "done_photos") {
-      await safeAnswerCbq(pCtx);
-      if (photoIds.length === 0) {
-        await ctx.reply("❗️ Камида 1 та расм юборишингиз керак!", { reply_markup: doneK });
-        continue;
-      }
-      break;
-    }
-
-    if (pCtx.message?.photo) {
-      const photoArr = pCtx.message.photo;
-      if (Array.isArray(photoArr) && photoArr.length > 0) {
-        const lastPhoto = photoArr[photoArr.length - 1]; // eng kattasi
-        photoIds.push(lastPhoto.file_id);
+        if (res.callbackQuery?.data === "cancel_ad") break;
         
-        if (photoIds.length === 6) {
-          await ctx.reply("✅ Максимал 6 та расм қабул қилинди.");
-          break;
+        ad.brand = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "MODEL";
+      }
+
+      // ----------------------------------------------------
+      // 2. MODEL (МОДЕЛ)
+      // ----------------------------------------------------
+      else if (step === "MODEL") {
+        const kb = new InlineKeyboard();
+        if (carCatalog[ad.brand] && carCatalog[ad.brand].length > 0) {
+          carCatalog[ad.brand].forEach((m, i) => {
+            kb.text(m, `m:${m}`);
+            if ((i + 1) % 3 === 0) kb.row();
+          });
+        }
+        kb.row().text("🔙 Орқага", "back_BRAND").text("❌ Бекор қилиш", "cancel_ad");
+
+        msgPrompt = await ctx.reply(`🚙 <b>${ad.brand}</b> моделини танланг ёки ёзинг:`, { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_BRAND") { step = "BRAND"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.model = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "YEAR";
+      }
+
+      // ----------------------------------------------------
+      // 3. YEAR (ЙИЛ)
+      // ----------------------------------------------------
+      else if (step === "YEAR") {
+        const kb = new InlineKeyboard();
+        for (let y = 2026; y >= 2011; y--) { kb.text(y.toString(), `y:${y}`); if ((2026 - y + 1) % 4 === 0) kb.row(); }
+        kb.row().text("🔙 Орқага", "back_MODEL").text("❌ Бекор қилиш", "cancel_ad");
+
+        msgPrompt = await ctx.reply("📅 <b>Йилини танланг ёки ёзинг:</b>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_MODEL") { step = "MODEL"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.year = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text.replace(/\D/g, "");
+        if (!ad.year || ad.year.length < 4) { await ctx.reply("❗️ Хато йил киритилди."); continue; }
+        
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "PROBEG";
+      }
+
+      // ----------------------------------------------------
+      // 4. PROBEG (ПРОБЕГ)
+      // ----------------------------------------------------
+      else if (step === "PROBEG") {
+        const kb = new InlineKeyboard().text("Салон (0 км)", "pr:Салон").row().text("🔙 Орқага", "back_YEAR").text("❌ Бекор", "cancel_ad");
+        
+        msgPrompt = await ctx.reply("👣 <b>Пробегини киритинг (масалан: 35000):</b>\n<i>Агар мошина янги бўлса 'Салон' ни танланг.</i>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_YEAR") { step = "YEAR"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.probeg = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "PAINT";
+      }
+
+      // ----------------------------------------------------
+      // 5. PAINT (КРАСКА)
+      // ----------------------------------------------------
+      else if (step === "PAINT") {
+        const kb = new InlineKeyboard().text("Тоза", "p:Тоза").text("Петно", "p:Петно").text("Бор", "p:Бор")
+          .row().text("🔙 Орқага", "back_PROBEG").text("❌ Бекор", "cancel_ad");
+
+        msgPrompt = await ctx.reply("💎 <b>Краскаси ҳолатини танланг ёки ёзинг:</b>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_PROBEG") { step = "PROBEG"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.paint = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "COLOR";
+      }
+
+      // ----------------------------------------------------
+      // 6. COLOR (РАНГ)
+      // ----------------------------------------------------
+      else if (step === "COLOR") {
+        const kb = new InlineKeyboard().text("Оқ", "c:Оқ").text("Қора", "c:Қора").text("Мокрый асфальт", "c:Мокрый асфальт")
+          .row().text("Кўк", "c:Кўк").text("Қизил", "c:Қизил").text("Кумушранг (Стальной)", "c:Кумушранг")
+          .row().text("🔙 Орқага", "back_PAINT").text("❌ Бекор", "cancel_ad");
+
+        msgPrompt = await ctx.reply("🎨 <b>Мошина рангини танланг ёки ёзинг:</b>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_PAINT") { step = "PAINT"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.color = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "TRANS";
+      }
+
+      // ----------------------------------------------------
+      // 7. TRANSMISSION (КАРОБКА)
+      // ----------------------------------------------------
+      else if (step === "TRANS") {
+        const kb = new InlineKeyboard().text("Механика", "t:Механика").text("Автомат", "t:Автомат")
+          .row().text("Робот", "t:Робот").text("Вариатор", "t:Вариатор")
+          .row().text("🔙 Орқага", "back_COLOR").text("❌ Бекор", "cancel_ad");
+
+        msgPrompt = await ctx.reply("⚙️ <b>Коробка турини танланг:</b>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_COLOR") { step = "COLOR"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.trans = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "FUEL";
+      }
+
+      // ----------------------------------------------------
+      // 8. FUEL (ЁҚИЛҒИ)
+      // ----------------------------------------------------
+      else if (step === "FUEL") {
+        const kb = new InlineKeyboard().text("Бензин", "f:Бензин").text("Бензин+Метан", "f:Бензин+Метан")
+          .row().text("Бензин+Пропан", "f:Бензин+Пропан").text("Дизель", "f:Дизель")
+          .row().text("Электр", "f:Электр").text("Гибрид", "f:Гибрид")
+          .row().text("🔙 Орқага", "back_TRANS").text("❌ Бекор", "cancel_ad");
+
+        msgPrompt = await ctx.reply("⛽ <b>Ёқилғи турини танланг:</b>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_TRANS") { step = "TRANS"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.fuel = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "PRICE";
+      }
+
+      // ----------------------------------------------------
+      // 9. PRICE (НАРХ)
+      // ----------------------------------------------------
+      else if (step === "PRICE") {
+        const kb = new InlineKeyboard().text("🔙 Орқага", "back_FUEL").text("❌ Бекор", "cancel_ad");
+        msgPrompt = await ctx.reply("💰 <b>Нархини киритинг ($):</b>\n<i>Фақат сонлардан фойдаланинг. Масалан: 7500</i>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_FUEL") { step = "FUEL"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        let numericPrice = res.message?.text?.replace(/\D/g, "");
+        if (!numericPrice) { await ctx.reply("❗️ Илтимос, фақат рақам киритинг."); continue; }
+        
+        ad.price = numericPrice;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "PHONE";
+      }
+
+      // ----------------------------------------------------
+      // 10. PHONE (ТЕЛЕФОН)
+      // ----------------------------------------------------
+      else if (step === "PHONE") {
+        const kb = new InlineKeyboard().text("🔙 Орқага", "back_PRICE").text("❌ Бекор", "cancel_ad");
+        // Eslatma: InlineKeyboard bilan contact so'rab bo'lmaydi, shuning uchun faqat yozishni so'raymiz
+        msgPrompt = await ctx.reply("☎️ <b>Телефон рақамингизни киритинг:</b>\n<i>(Масалан: 901234567 ёки 998901234567)</i>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text", "message:contact"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_PRICE") { step = "PRICE"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        let phoneText = res.message?.contact ? res.message.contact.phone_number : res.message?.text;
+        let numericPhone = phoneText?.replace(/\D/g, "");
+        if (!numericPhone || numericPhone.length < 7) { await ctx.reply("❗️ Тўғри рақам киритинг."); continue; }
+        
+        ad.phone = numericPhone.startsWith("998") ? numericPhone : `998${numericPhone}`;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "REGION";
+      }
+
+      // ----------------------------------------------------
+      // 11. REGION (ВИЛОЯТ)
+      // ----------------------------------------------------
+      else if (step === "REGION") {
+        const regions = ["Тошкент ш.", "Тошкент вил.", "Сирдарё", "Жиззах", "Самарқанд", "Фарғона", "Наманган", "Андижон", "Қашқадарё", "Сурхондарё", "Бухоро", "Навоий", "Хоразм", "Қорақалпоғистон"];
+        const kb = new InlineKeyboard();
+        regions.forEach((r, i) => {
+          kb.text(r, `r:${r}`);
+          if ((i + 1) % 2 === 0) kb.row();
+        });
+        kb.row().text("🔙 Орқага", "back_PHONE").text("❌ Бекор", "cancel_ad");
+
+        msgPrompt = await ctx.reply("🚩 <b>Вилоятни танланг:</b>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_PHONE") { step = "PHONE"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.region = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "PHOTOS";
+      }
+
+      // ----------------------------------------------------
+      // 12. PHOTOS (РАСМЛАР)
+      // ----------------------------------------------------
+      else if (step === "PHOTOS") {
+        const kb = new InlineKeyboard().text("✅ Бўлди (Юбориш)", "done_photos").row().text("🔙 Орқага", "back_REGION").text("❌ Бекор", "cancel_ad");
+        
+        msgPrompt = await ctx.reply("📸 <b>Мошинангиз расмларини юборинг (1-6 та):</b>\n\n<i>Расмларни белгилаб бирданига юбориш мумкин. Барчасини юбориб бўлгач, «✅ Бўлди» ни босинг.</i>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+        
+        ad.photos = []; // Rasmlarni qayta boshlash
+
+        while (ad.photos.length < 6) {
+          const res = await conversation.waitFor(["message:photo", "callback_query:data"]);
+          if (res.message) chatToClean.push(res.message.message_id);
+
+          if (res.callbackQuery?.data === "cancel_ad") { step = "CANCEL"; break; }
+          if (res.callbackQuery?.data === "back_REGION") { step = "REGION"; await safeAnswerCbq(res); break; }
+          
+          if (res.callbackQuery?.data === "done_photos") {
+            await safeAnswerCbq(res);
+            if (ad.photos.length === 0) {
+              let m = await ctx.reply("❗️ Камида 1 та расм юборишингиз керак!");
+              chatToClean.push(m.message_id);
+              continue;
+            }
+            step = "PREVIEW";
+            break;
+          }
+
+          if (res.message?.photo) {
+            const photoArr = res.message.photo;
+            if (Array.isArray(photoArr) && photoArr.length > 0) {
+              ad.photos.push(photoArr[photoArr.length - 1].file_id);
+              if (ad.photos.length === 6) { step = "PREVIEW"; break; }
+            }
+          }
+        }
+        
+        if (step === "CANCEL") break;
+        if (step === "REGION") { await deleteMsgs(ctx, chatToClean); continue; }
+        
+        await deleteMsgs(ctx, chatToClean);
+        // Step allaqachon PREVIEW ga o'zgargan
+      }
+
+      // ----------------------------------------------------
+      // 13. PREVIEW & EDIT (ОЛДИНДАН КЎРИШ ВА ТАҲРИРЛАШ)
+      // ----------------------------------------------------
+      else if (step === "PREVIEW") {
+        isEditing = false; // Normal holatga qaytamiz
+        let waitMsg = await ctx.reply("⏳ <b>Эълон тайёрланмоқда, кутинг...</b>", { parse_mode: "HTML" });
+        
+        const photoUrls = await Promise.all(ad.photos.map(async (id) => {
+            const file = await bot.api.getFile(id);
+            return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+        }));
+        const collagePath = await createCollage(photoUrls);
+        
+        const caption = 
+          `🚗 <b>Мошина:</b> ${ad.brand} ${ad.model}\n` +
+          `📅 <b>Йили:</b> ${ad.year}\n👣 <b>Пробег:</b> ${ad.probeg}\n` +
+          `💎 <b>Краска:</b> ${ad.paint}\n🎨 <b>Ранги:</b> ${ad.color}\n` +
+          `⚙️ <b>Коробка:</b> ${ad.trans}\n⛽ <b>Ёқилғи:</b> ${ad.fuel}\n` +
+          `💰 <b>Нархи:</b> ${ad.price}$\n☎️ <b>Тел:</b> +${ad.phone}\n🚩 <b>Вилоят:</b> ${ad.region}`;
+
+        const kb = new InlineKeyboard()
+          .text("✅ АДМИНГА ЮБОРИШ", "submit_ad").row()
+          .text("✏️ Марка", "edit_BRAND").text("✏️ Модел", "edit_MODEL").text("✏️ Йили", "edit_YEAR").row()
+          .text("✏️ Пробег", "edit_PROBEG").text("✏️ Краска", "edit_PAINT").text("✏️ Ранг", "edit_COLOR").row()
+          .text("✏️ Коробка", "edit_TRANS").text("✏️ Ёқилғи", "edit_FUEL").text("✏️ Нарх", "edit_PRICE").row()
+          .text("✏️ Рақам", "edit_PHONE").text("✏️ Вилоят", "edit_REGION").text("📸 Расм", "edit_PHOTOS").row()
+          .text("❌ Бекор қилиш", "cancel_ad");
+
+        await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
+        const previewMsg = await ctx.replyWithPhoto(new InputFile(collagePath), {
+          caption: `📋 <b>ЭЪЛОН ТАЙЁР!</b> Қуйида текширинг ёки хатоси бўлса таҳрирланг:\n\n${caption}`,
+          reply_markup: kb, parse_mode: "HTML"
+        });
+        
+        if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath); // Rasmni o'chiramiz
+
+        const res = await conversation.waitFor("callback_query:data");
+        const action = res.callbackQuery.data;
+        await safeAnswerCbq(res);
+        await ctx.api.deleteMessage(ctx.chat.id, previewMsg.message_id); // Preview xabarni o'chirish
+
+        if (action === "cancel_ad") break;
+        
+        if (action === "submit_ad") {
+          // BAZAGA SAQLASH VA ADMINGA YUBORISH
+          const info = db.prepare(`INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+            .run(ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","));
+          
+          const adId = info.lastInsertRowid;
+          
+          // Adminga qayta rasm yasab yuboramiz (shart emas, bazadan o'qiydigan callback bor, lekin tezlik uchun)
+          const adminCollage = await createCollage(photoUrls);
+          await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
+            caption: `🆔 <b>ID: ${adId}</b>\n\n${caption}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>`,
+            reply_markup: new InlineKeyboard().text("✅ Қабул қилиш", `approve:${adId}`).text("❌ Рад этиш", `reject:${adId}`),
+            parse_mode: "HTML",
+          });
+          if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
+
+          await ctx.reply(
+            "✅ <b>Эълонингиз админга муваффақиятли юборилди!</b>\n\n" +
+            "Текширувдан сўнг каналга жойланади. Эълонларингизни пастдаги <b>📂 Менинг эълонларим</b> тугмаси орқали бошқаришингиз мумкин.",
+            { parse_mode: "HTML", reply_markup: mainMenu }
+          );
+          return; // Conversation tugadi
+        }
+
+        // Tahrirlash bosilganda
+        if (action.startsWith("edit_")) {
+          isEditing = true;
+          step = action.split("_")[1];
         }
       }
-    } else {
-        await ctx.reply("📸 Илтимос, фақат <b>расм</b> юборинг ёки «✅ Бўлди» ни босинг.", { reply_markup: doneK, parse_mode: "HTML" });
+
+    } catch (err) {
+      console.log(err);
+      await ctx.reply("Хатолик юз берди. Илтимос, /start ни босиб қайтадан уриниб кўринг.");
+      break;
     }
   }
 
-  if (photoIds.length === 0) return ctx.reply("❌ Расм юборилмади. Эълон бекор қилинди.", { reply_markup: mainMenu });
-
-  await ctx.reply("⏳ <b>Маълумотлар тайёрланмоқда, кутинг...</b>", { parse_mode: "HTML" });
-
-  const photoUrls = await Promise.all(
-    photoIds.map(async (id) => {
-      const file = await bot.api.getFile(id);
-      return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
-    })
-  );
-
-  const collagePath = await createCollage(photoUrls);
-  
-  // Тел рақамни форматлаш (+998 бўлмаса қўшиш)
-  let finalPhone = adData.phone.startsWith("998") ? adData.phone : `998${adData.phone}`;
-
-  const caption =
-    `🚗 <b>Мошина: ${adData.brand} ${adData.model}</b>\n📅 <b>Йили: ${adData.year}</b>\n👣 <b>Пробег: ${adData.probeg}</b>\n` +
-    `💎 <b>Краска: ${adData.paint}</b>\n🎨 <b>Ранги: ${adData.color}</b>\n⚙️ <b>Коробка: ${adData.trans}</b>\n` +
-    `⛽ <b>Ёқилғи: ${adData.fuel}</b>\n💰 <b>Нархи: ${adData.price}$</b>\n☎️ <b>Тел: +${finalPhone}</b>\n🚩 <b>Вилоят: ${adData.region}</b>`;
-
-  await ctx.replyWithPhoto(new InputFile(collagePath), {
-    caption: `📝 <b>Сизнинг эълонингиз:</b>\n\n${caption}`,
-    reply_markup: new InlineKeyboard().text("✅ Тасдиқлаш ва Юбориш", "confirm").text("❌ Бекор қилиш", "cancel_ad"),
-    parse_mode: "HTML",
-  });
-
-  const choice = await conversation.waitFor("callback_query:data");
-  await safeAnswerCbq(choice);
-
-  if (choice.callbackQuery.data === "confirm") {
-    const info = db.prepare(
-        `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).run(
-        ctx.from.id, `${adData.brand} ${adData.model}`, adData.year, adData.probeg, adData.paint, 
-        adData.color, adData.trans, adData.fuel, adData.price, finalPhone, adData.region, photoIds.join(",")
-      );
-
-    const adId = info.lastInsertRowid;
-
-    await bot.api.sendPhoto(ADMIN_ID, new InputFile(collagePath), {
-      caption: `🆔 <b>ID: ${adId}</b>\n\n${caption}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>`,
-      reply_markup: new InlineKeyboard().text("✅ Қабул қилиш", `approve:${adId}`).text("❌ Рад этиш", `reject:${adId}`),
-      parse_mode: "HTML",
-    });
-
-    await ctx.reply(
-      "✅ <b>Эълонингиз админга юборилди!</b>\n\n" +
-      "Тасдиқланганидан сўнг каналда эълон қилинади. " +
-      "Агар машинангиз сотилса, пастки <b>📂 Менинг эълонларим</b> тугмаси орқали эълонингизни топиб, <b>💰 Сотилди</b> тугмасини босишни унутманг!",
-      { parse_mode: "HTML", reply_markup: mainMenu }
-    );
-  } else {
-    await ctx.reply("❌ <b>Эълон бекор қилинди.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
-  }
-
-  if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
+  // Break bo'lganda keladigan joy (Cancel)
+  await ctx.reply("❌ <b>Эълон бериш бекор қилинди.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
+  await deleteMsgs(ctx, chatToClean);
 }
 
 bot.use(createConversation(createAdConversation));
@@ -372,48 +526,27 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
         return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
       })
     );
-
     const collagePath = await createCollage(photoUrls);
 
     const caption =
-      `🆔 ID: ${ad.id}\n` +
-      `🚗 Мошина: ${ad.carDetails}\n` +
-      `📅 Йили: ${ad.year}\n` +
-      `👣 Пробег: ${ad.probeg}\n` +
-      `💎 Краскаси: ${ad.paint}\n` +
-      `🎨 Ранги: ${ad.color}\n` +
-      `✅ Каробка: ${ad.transmission}\n` +
-      `⛽ Ёқилғи: ${ad.fuel}\n` +
-      `💰 Нархи: ${ad.price}$\n` +
-      `☎️ +${ad.phone}\n` +
-      `🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
-      `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n` +
-      `👉 https://t.me/engarzonidamoshina`;
+      `🆔 ID: ${ad.id}\n🚗 Мошина: ${ad.carDetails}\n📅 Йили: ${ad.year}\n👣 Пробег: ${ad.probeg}\n` +
+      `💎 Краскаси: ${ad.paint}\n🎨 Ранги: ${ad.color}\n✅ Каробка: ${ad.transmission}\n` +
+      `⛽ Ёқилғи: ${ad.fuel}\n💰 Нархи: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
+      `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
 
-    const channelMarkup = new InlineKeyboard()
-      .url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75")
-      .row()
-      .url("🤖 ЭЪЛОН БЕРИШ (Текин)", "https://t.me/arzonida_bot")
-      .url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
+    const channelMarkup = new InlineKeyboard().url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
+      .url("🤖 ЭЪЛОН БЕРИШ (Текин)", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
 
     try {
       const msg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
-        caption: caption,
-        reply_markup: channelMarkup,
-        parse_mode: "HTML",
+        caption: caption, reply_markup: channelMarkup, parse_mode: "HTML",
       });
 
       db.prepare("UPDATE ads SET status='active', channelMsgId=? WHERE id=?").run(msg.message_id, adId);
       if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
       
       await ctx.editMessageCaption({ caption: "✅ Каналга жойланди!", parse_mode: "HTML" });
-      
-      // Фойдаланувчига эълон чиққанини хабар қилиш
-      await bot.api.sendMessage(
-        ad.userId, 
-        `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналга жойланди.\n\nКанални кўриш: https://t.me/engarzonidamoshina`,
-        { parse_mode: "HTML", reply_markup: mainMenu }
-      );
+      await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналга жойланди.\n\nКанални кўриш: https://t.me/engarzonidamoshina`, { parse_mode: "HTML", reply_markup: mainMenu });
     } catch (e) {
       console.error(e);
       await ctx.reply("Хатолик: Каналга юбориб бўлмади. Бот каналда админ эканлигини текширинг.");
@@ -424,25 +557,17 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
 });
 
 /**
- * ✅ АДМИН РАД ЭТИШИ (Фойдаланувчига хабар юбориш билан)
+ * ✅ АДМИН РАД ЭТИШИ
  */
 bot.callbackQuery(/^reject:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
   const ad = db.prepare("SELECT * FROM ads WHERE id = ?").get(adId);
-  
   if (ad && ad.status === "pending") {
     db.prepare("UPDATE ads SET status='rejected' WHERE id=?").run(adId);
     await ctx.editMessageCaption({ caption: "❌ <b>Эълон рад этилди.</b>", parse_mode: "HTML" });
-    
     try {
-        await bot.api.sendMessage(
-            ad.userId,
-            `❌ <b>Эълонингиз рад этилди.</b>\n\nСизнинг <b>${ad.carDetails}</b> учун берган эълонингиз қоидаларга мос келмаганлиги ёки маълумотлари нотўғри бўлганлиги сабабли админ томонидан рад этилди.\n\nИлтимос, маълумотларни текшириб, қайтадан эълон беринг.`,
-            { parse_mode: "HTML", reply_markup: mainMenu }
-        );
-    } catch (e) {
-        console.log("Foydalanuvchiga xabar yuborib bo'lmadi");
-    }
+        await bot.api.sendMessage(ad.userId, `❌ <b>Эълонингиз рад этилди.</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз қоидаларга мос келмаганлиги сабабли рад этилди. Илтимос, маълумотларни тўғрилаб қайтадан эълон беринг.`, { parse_mode: "HTML", reply_markup: mainMenu });
+    } catch (e) {}
   } else {
       await ctx.answerCallbackQuery("Бу эълон аллақачон кўриб чиқилган.");
   }
@@ -457,8 +582,7 @@ bot.hears("📂 Менинг эълонларим", async (ctx) => {
 
   for (const ad of ads) {
     await ctx.reply(`🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Мошина: ${ad.carDetails}</b>\n💰 <b>Нархи: ${ad.price}$</b>`, {
-      reply_markup: new InlineKeyboard().text("💰 Сотилди", `sold_req:${ad.id}`),
-      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard().text("💰 Сотилди", `sold_req:${ad.id}`), parse_mode: "HTML",
     });
   }
 });
@@ -468,19 +592,11 @@ bot.callbackQuery(/^sold_req:(\d+)/, async (ctx) => {
   const ad = db.prepare("SELECT * FROM ads WHERE id = ?").get(adId);
 
   if (ad && ad.status === 'active') {
-      await bot.api.sendMessage(
-        ADMIN_ID,
-        `💰 <b>СОТИЛДИ ХАБАРИ!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Мошина: ${ad.carDetails}</b>\n👤 <b>Узер:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>`,
-        {
-          reply_markup: new InlineKeyboard().text("✅ Тасдиқлаш (Каналда белгилаш)", `confirm_sold:${adId}`),
-          parse_mode: "HTML",
-        }
-      );
-
-      await ctx.answerCallbackQuery({ text: "Сўров админга юборилди." });
-      await ctx.editMessageText(`🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Мошина: ${ad.carDetails}</b>\n\n⏳ <i>Сотилди деб белгилаш бўйича сўров админга юборилди...</i>`, {
-        parse_mode: "HTML",
+      await bot.api.sendMessage(ADMIN_ID, `💰 <b>СОТИЛДИ ХАБАРИ!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Мошина: ${ad.carDetails}</b>\n👤 <b>Узер:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>`, {
+          reply_markup: new InlineKeyboard().text("✅ Тасдиқлаш (Каналда белгилаш)", `confirm_sold:${adId}`), parse_mode: "HTML",
       });
+      await ctx.answerCallbackQuery({ text: "Сўров админга юборилди." });
+      await ctx.editMessageText(`🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Мошина: ${ad.carDetails}</b>\n\n⏳ <i>Сотилди деб белгилаш бўйича сўров админга юборилди...</i>`, { parse_mode: "HTML" });
   } else {
       await ctx.answerCallbackQuery({ text: "Бу эълон аллақачон ёпилган ёки топилмади.", show_alert: true });
   }
@@ -489,20 +605,13 @@ bot.callbackQuery(/^sold_req:(\d+)/, async (ctx) => {
 bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
   const ad = db.prepare("SELECT * FROM ads WHERE id = ?").get(adId);
-
   if (ad && ad.status === 'active') {
       try {
         const newCaption = `💰 <b>СОТИЛДИ!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Нархи: ${ad.price}$</b>\n\n❌ <b>Эълон ёпилди.</b>`;
         await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, parse_mode: "HTML" });
         db.prepare("UPDATE ads SET status='sold' WHERE id=?").run(adId);
         await ctx.editMessageText("✅ <b>Каналда сотилди деб белгиланди!</b>", { parse_mode: "HTML" });
-        
-        // Foydalanuvchiga xabar yuborish
-        await bot.api.sendMessage(
-            ad.userId, 
-            `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналда "СОТИЛДИ" деб белгиланди.`,
-            { parse_mode: "HTML" }
-        );
+        await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналда "СОТИЛДИ" деб белгиланди.`, { parse_mode: "HTML" });
       } catch (e) {
         await ctx.reply("Хатолик: Каналдаги хабарни таҳрирлаб бўлмади.");
       }
@@ -516,8 +625,7 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
  */
 bot.command("start", (ctx) => {
   ctx.reply("🌟 <b>Хуш келибсиз!</b>\n\nЭълон бериш ёки ўз эълонларингизни бошқариш учун пастки тугмалардан фойдаланинг.", {
-    reply_markup: mainMenu,
-    parse_mode: "HTML",
+    reply_markup: mainMenu, parse_mode: "HTML",
   });
 });
 
