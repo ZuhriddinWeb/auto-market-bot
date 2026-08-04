@@ -738,7 +738,30 @@ bot.command("start", async (ctx) => {
 });
 
 bot.hears("📝 Эълон Ясаш", async (ctx) => {
+  // 1. Обунани текшириш
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
+
+  // 2. Анти-спам: Тасдиқ кутаётган эълони борлигини текшириш
+  const [[pendingAds]] = await db.execute(
+    "SELECT COUNT(*) as count FROM ads WHERE userId = ? AND status = 'pending'",
+    [ctx.from.id]
+  );
+  
+  if (pendingAds.count > 0) {
+    return ctx.reply("⏳ <b>Сизнинг олдинги эълонингиз ҳали админлар томонидан кўриб чиқилмоқда.</b>\n\nИлтимос, у тасдиқлангунча ёки рад этилгунча кутиб туринг.", { parse_mode: "HTML" });
+  }
+
+  // 3. Лимит: Бир вақтнинг ўзида нечта фаол эълони бўлиши мумкинлиги (масалан, 3 та)
+  const [[activeAds]] = await db.execute(
+    "SELECT COUNT(*) as count FROM ads WHERE userId = ? AND status = 'active'",
+    [ctx.from.id]
+  );
+  
+  if (activeAds.count >= 3) {
+    return ctx.reply("❗️ <b>Сизда чеклов мавжуд!</b>\n\nБир вақтнинг ўзида энг кўпи билан <b>3 та</b> фаол эълонингиз бўлиши мумкин. Янги эълон бериш учун '📂 Менинг эълонларим' бўлимидан эскиларини 'Сотилди' деб белгиланг.", { parse_mode: "HTML" });
+  }
+
+  // Ҳаммаси жойида бўлса, эълон бериш жараёнини бошлаш
   ctx.conversation.enter("createAdConversation");
 });
 
