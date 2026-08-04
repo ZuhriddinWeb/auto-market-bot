@@ -87,33 +87,56 @@ async function deleteMsgs(ctx, msgIds) {
 /**
  * ✅ Расмларни монтиж қилиш (Коллаж + ВАТЕРМАРКА)
  */
-// Буни createCollage функциясидан сал тепароққа қўямиз (кеш учун)
 let cachedWatermarkText = null; 
 
 /**
- * ✅ Расмларни монтиж қилиш (Коллаж + 100% ишлайдиган ВАТЕРМАРКА)
+ * ✅ Расмларни монтиж қилиш (Ақлли ГРИД + 100% ишлайдиган ВАТЕРМАРКА)
  */
 async function createCollage(photoUrls) {
+  // 1. Расмларни интернетдан юклаб олиш
   const buffers = await Promise.all(
     photoUrls.map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
   );
 
-  const resizedImages = await Promise.all(
-    buffers.map((buf) => sharp(buf).resize(600, 600, { fit: "cover" }).toBuffer())
+  // 2. Динамик ўлчамларни ҳисоблаш (Smart Grid)
+  const layoutParams = [];
+  const canvasWidth = 1200;
+  let canvasHeight = 0;
+  const len = buffers.length;
+
+  if (len === 1) {
+    // Агар 1 та расм бўлса, бутун экран (1200x900)
+    layoutParams.push({ width: 1200, height: 900, left: 0, top: 0 });
+    canvasHeight = 900;
+  } else {
+    // Агар 2 ва ундан кўп бўлса, ақлли грид
+    for (let i = 0; i < len; i++) {
+      if (i === len - 1 && len % 2 !== 0) {
+        // Охирги тоқ расм (масалан 3 ёки 5-чи) бўлса, пастда бутун энига чўзилади
+        layoutParams.push({ width: 1200, height: 600, left: 0, top: Math.floor(i / 2) * 600 });
+        canvasHeight = Math.max(canvasHeight, (Math.floor(i / 2) + 1) * 600);
+      } else {
+        // Жуфт расмлар ёнма-ён (600x600)
+        layoutParams.push({ width: 600, height: 600, left: (i % 2) * 600, top: Math.floor(i / 2) * 600 });
+        canvasHeight = Math.max(canvasHeight, (Math.floor(i / 2) + 1) * 600);
+      }
+    }
+  }
+
+  // 3. Расмларни шу ўлчамларга мослаб қирқиш ва жойлаштириш
+  const composites = await Promise.all(
+    buffers.map(async (buf, i) => {
+      const param = layoutParams[i];
+      const resized = await sharp(buf).resize(param.width, param.height, { fit: "cover" }).toBuffer();
+      return {
+        input: resized,
+        top: param.top,
+        left: param.left
+      };
+    })
   );
 
-  const columns = 2;
-  const rows = Math.ceil(resizedImages.length / columns);
-  const canvasWidth = columns * 600;
-  const canvasHeight = rows * 600;
-
-  const composites = resizedImages.map((input, index) => ({
-    input,
-    top: Math.floor(index / columns) * 600,
-    left: (index % columns) * 600,
-  }));
-
-  // 1. Қора ярим шаффоф фон (тасмаси)
+  // 4. Қора ярим шаффоф фон (тасмаси)
   const rectHeight = 120;
   const rectY = Math.floor((canvasHeight / 2) - (rectHeight / 2));
   
@@ -128,7 +151,7 @@ async function createCollage(photoUrls) {
     left: 0
   });
 
-  // 2. Ёзувни интернетдан тайёр шаффоф расм сифатида тортиб олиш (Сервер шрифтига муҳтож эмасмиз)
+  // 5. Ёзувни интернетдан тайёр шаффоф расм сифатида тортиб олиш
   if (!cachedWatermarkText) {
     try {
       const url = `https://placehold.co/${canvasWidth}x${rectHeight}/transparent/ffffff/png?text=%40engarzonidamoshina&font=Montserrat`;
@@ -139,7 +162,6 @@ async function createCollage(photoUrls) {
     }
   }
 
-  // Кешланган ёзувли расмни қора тасма устига қўшиш
   if (cachedWatermarkText) {
     composites.push({
       input: cachedWatermarkText,
@@ -148,7 +170,9 @@ async function createCollage(photoUrls) {
     });
   }
 
-  const collagePath = path.join(collagesDir, `collage_${Date.now()}.jpg`);
+  // 6. Якуний коллажни сақлаш
+  const collagePath = path.join(__dirname, `collage_${Date.now()}.jpg`);
+  
   await sharp({
     create: { width: canvasWidth, height: canvasHeight, channels: 3, background: { r: 255, g: 255, b: 255 } },
   })
