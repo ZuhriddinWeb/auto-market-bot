@@ -38,6 +38,12 @@ if (!fs.existsSync(collagesDir)) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS banned_users (
+        userId BIGINT PRIMARY KEY,
+        banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
     console.log("✅ 'users' жадвали текширилди (тайёр).");
   } catch (error) {
     console.error("❌ Жадвал яратишда хатолик:", error);
@@ -47,7 +53,22 @@ if (!fs.existsSync(collagesDir)) {
 bot.catch((err) => console.error(`Хатолик:`, err.error));
 bot.use(session({ initial: () => ({}) }));
 bot.use(conversations());
-
+bot.use(async (ctx, next) => {
+  if (ctx.from && ctx.from.id !== ADMIN_ID) {
+    try {
+      const [banned] = await db.execute("SELECT * FROM banned_users WHERE userId = ?", [ctx.from.id]);
+      if (banned.length > 0) {
+        if (ctx.callbackQuery) {
+           await ctx.answerCallbackQuery({ text: "🚫 Сиз қоидабузарлик сабабли ботдан блоклангансиз!", show_alert: true });
+        } else {
+           await ctx.reply("🚫 <b>Кечирасиз, сиз ботдан блоклангансиз.</b> Энди эълон бера олмайсиз.", { parse_mode: "HTML", reply_markup: { remove_keyboard: true } });
+        }
+        return; // Кодни шу ерда тўхтатади, ичкарига ўтказмайди
+      }
+    } catch(e) {}
+  }
+  await next();
+});
 const mainMenu = new Keyboard()
   .text("📝 Эълон Ясаш").text("🔍 Мошина қидириш").row()
   .text("📂 Менинг эълонларим").resized();
@@ -212,7 +233,40 @@ bot.command("admin", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   await ctx.reply("👨‍💻 <b>Админ панелга хуш келибсиз!</b>\nҚуйидаги менюдан керакли бўлимни танланг:", { reply_markup: adminMenu, parse_mode: "HTML" });
 });
+/**
+ * ✅ АДМИН УЧУН БЛОКЛАШ ТИЗИМИ
+ */
+bot.command("ban", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const match = ctx.message.text.split(" ");
+  if (match.length < 2) return ctx.reply("Қўллаш тартиби: /ban [ID рақам]");
+  
+  const targetId = parseInt(match[1]);
+  if (!targetId) return ctx.reply("❗️ ID рақам бўлиши керак.");
 
+  try {
+    await db.execute("INSERT IGNORE INTO banned_users (userId) VALUES (?)", [targetId]);
+    await ctx.reply(`✅ <b>${targetId}</b> ID эгаси қора рўйхатга тушди!`, { parse_mode: "HTML" });
+    await bot.api.sendMessage(targetId, "🚫 <b>Сиз қоидабузарлик сабабли ботдан блокландингиз.</b>", { parse_mode: "HTML", reply_markup: { remove_keyboard: true } }).catch(() => {});
+  } catch(e) {
+    ctx.reply("Хатолик юз берди.");
+  }
+});
+
+bot.command("unban", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const match = ctx.message.text.split(" ");
+  if (match.length < 2) return ctx.reply("Қўллаш тартиби: /unban [ID рақам]");
+  
+  const targetId = parseInt(match[1]);
+  try {
+    await db.execute("DELETE FROM banned_users WHERE userId = ?", [targetId]);
+    await ctx.reply(`✅ <b>${targetId}</b> ID эгаси блокдан чиқарилди.`, { parse_mode: "HTML" });
+    await bot.api.sendMessage(targetId, "✅ <b>Блокингиз очилди.</b> Ботдан қайта фойдаланишингиз мумкин. /start", { parse_mode: "HTML" }).catch(() => {});
+  } catch(e) {
+    ctx.reply("Хатолик юз берди.");
+  }
+});
 bot.callbackQuery("admin_close", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   await ctx.deleteMessage();
