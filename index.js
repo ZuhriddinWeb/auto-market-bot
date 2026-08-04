@@ -87,6 +87,12 @@ async function deleteMsgs(ctx, msgIds) {
 /**
  * ✅ Расмларни монтиж қилиш (Коллаж + ВАТЕРМАРКА)
  */
+// Буни createCollage функциясидан сал тепароққа қўямиз (кеш учун)
+let cachedWatermarkText = null; 
+
+/**
+ * ✅ Расмларни монтиж қилиш (Коллаж + 100% ишлайдиган ВАТЕРМАРКА)
+ */
 async function createCollage(photoUrls) {
   const buffers = await Promise.all(
     photoUrls.map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
@@ -107,27 +113,40 @@ async function createCollage(photoUrls) {
     left: (index % columns) * 600,
   }));
 
-  // Ватермарка яратиш (Хира текст)
-  const fontSize = Math.floor(canvasWidth * 0.05); // Shrift kattaligini hisoblash
-  const rectHeight = Math.floor(fontSize * 2.5); // Qora fonning balandligi
-  const rectY = (canvasHeight / 2) - (rectHeight / 2); // Qo'q markazni topish
-
-  const watermarkSvg = `
-    <svg width="${canvasWidth}" height="${canvasHeight}" xmlns="http://www.w3.org/2000/svg">
-      <!-- 1. Qora yarim shaffof fon (tasmasi) yozuv doim aniq ko'rinishi uchun -->
+  // 1. Қора ярим шаффоф фон (тасмаси)
+  const rectHeight = 120;
+  const rectY = Math.floor((canvasHeight / 2) - (rectHeight / 2));
+  
+  const blackBandSvg = `
+    <svg width="${canvasWidth}" height="${canvasHeight}">
       <rect x="0" y="${rectY}" width="${canvasWidth}" height="${rectHeight}" fill="rgba(0, 0, 0, 0.5)" />
-      
-      <!-- 2. Oq rangdagi kanal nomi -->
-      <text x="50%" y="50%" dy="0.35em" text-anchor="middle" font-family="sans-serif" font-size="${fontSize}px" fill="#ffffff" font-weight="bold" letter-spacing="2">
-        @engarzonidamoshina
-      </text>
     </svg>`;
 
   composites.push({
-    input: Buffer.from(watermarkSvg),
+    input: Buffer.from(blackBandSvg),
     top: 0,
     left: 0
   });
+
+  // 2. Ёзувни интернетдан тайёр шаффоф расм сифатида тортиб олиш (Сервер шрифтига муҳтож эмасмиз)
+  if (!cachedWatermarkText) {
+    try {
+      const url = `https://placehold.co/${canvasWidth}x${rectHeight}/transparent/ffffff/png?text=%40engarzonidamoshina&font=Montserrat`;
+      const response = await axios.get(url, { responseType: "arraybuffer" });
+      cachedWatermarkText = Buffer.from(response.data);
+    } catch (error) {
+      console.error("Watermark yuklashda xatolik:", error.message);
+    }
+  }
+
+  // Кешланган ёзувли расмни қора тасма устига қўшиш
+  if (cachedWatermarkText) {
+    composites.push({
+      input: cachedWatermarkText,
+      top: rectY,
+      left: 0
+    });
+  }
 
   const collagePath = path.join(collagesDir, `collage_${Date.now()}.jpg`);
   await sharp({
