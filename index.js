@@ -792,9 +792,14 @@ bot.hears("📂 Менинг эълонларим", async (ctx) => {
 /**
  * ✅ НАРХНИ ПАСАЙТИРИШ ЖАРАЁНИ
  */
+/**
+ * ✅ НАРХНИ ПАСАЙТИРИШ ЖАРАЁНИ (ЯНГИЛАНГАН ВА ТЎҒИРЛАНГАН)
+ */
 async function editPriceConversation(conversation, ctx) {
-  const adId = ctx.session.editAdId;
-  if (!adId) return;
+  // Session ўрнига ID ни тўғридан-тўғри тугмадан (callback_query) оламиз
+  const cbData = ctx.callbackQuery?.data;
+  if (!cbData) return;
+  const adId = cbData.split(":")[1]; // "edit_price:12" ичидан 12 ни ажратиб олади
 
   const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
   const ad = rows[0];
@@ -807,12 +812,12 @@ async function editPriceConversation(conversation, ctx) {
   
   const res = await conversation.waitFor("message:text");
   if (res.message.text === "/cancel") {
-    return ctx.reply("❌ Нарх ўзгартириш бекор қилинди.", { reply_markup: mainMenu });
+    return ctx.reply("❌ Нарх ўзгартириш бекор қилинди.", { reply_markup: mainMenu }); //
   }
 
   let newPrice = res.message.text.replace(/\D/g, "");
   if (!newPrice) {
-    return ctx.reply("❗️ Хато нарх киритилди. Амалиёт бекор қилинди.", { reply_markup: mainMenu });
+    return ctx.reply("❗️ Хато нарх киритилди. Амалиёт бекор қилинди.", { reply_markup: mainMenu }); //
   }
 
   const waitMsg = await ctx.reply("⏳ <i>Каналдаги эълон янгиланмоқда...</i>", { parse_mode: "HTML" });
@@ -838,20 +843,18 @@ async function editPriceConversation(conversation, ctx) {
     await db.execute("UPDATE ads SET price = ? WHERE id = ?", [newPrice, adId]);
 
     await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
-    await ctx.reply(`✅ <b>Нарх муваффақиятли туширилди!</b>\nКаналда мошинангиз нархи <b>${newPrice}$</b> бўлиб ўзгарди.`, { parse_mode: "HTML", reply_markup: mainMenu });
+    await ctx.reply(`✅ <b>Нарх муваффақиятли туширилди!</b>\nКаналда мошинангиз нархи <b>${newPrice}$</b> бўлиб ўзгарди.`, { parse_mode: "HTML", reply_markup: mainMenu }); //
 
   } catch (error) {
     console.error(error);
     await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
-    await ctx.reply("❌ Хатолик: Каналдаги хабарни янгилаб бўлмади. Эҳтимол эски хабар каналдан ўчирилган бўлиши мумкин.", { reply_markup: mainMenu });
+    await ctx.reply("❌ Хатолик: Каналдаги хабарни янгилаб бўлмади. Эҳтимол эски хабар каналдан ўчирилган бўлиши мумкин.", { reply_markup: mainMenu }); //
   }
 }
 bot.use(createConversation(editPriceConversation));
 
 // "Нархни тушириш" тугмаси босилганда ишлайдиган код
 bot.callbackQuery(/^edit_price:(\d+)/, async (ctx) => {
-  const adId = ctx.match[1];
-  ctx.session.editAdId = adId; // ID ni session'ga saqlaymiz
   await ctx.answerCallbackQuery();
   await ctx.conversation.enter("editPriceConversation");
 });
