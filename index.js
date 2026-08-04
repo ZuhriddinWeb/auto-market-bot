@@ -770,7 +770,7 @@ bot.hears("📝 Эълон Ясаш", async (ctx) => {
 
 bot.hears("🔍 Мошина қидириш", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
-  ctx.conversation.enter("searchCarConversation");
+  await ctx.conversation.enter("searchCarConversation");
 });
 
 bot.hears("📂 Менинг эълонларим", async (ctx) => {
