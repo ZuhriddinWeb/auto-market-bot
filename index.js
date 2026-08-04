@@ -265,13 +265,21 @@ async function searchCarConversation(conversation, ctx) {
 
   await ctx.reply(`✅ <b>Топилди: ${filtered.length} та эълон!</b>\nЭнг сўнгги эълонлар:`, {parse_mode: "HTML", reply_markup: mainMenu});
 
-  const resultsToSend = filtered.slice(-3);
-  for(const ad of resultsToSend) {
-     const caption = `🚗 <b>${ad.carDetails}</b>\n📅 Йили: ${ad.year}\n👣 Пробег: ${ad.probeg}\n💰 Нархи: ${ad.price}$\n☎️ Тел: +${ad.phone}`;
-     const photos = ad.photoId.split(",");
+const resultsToSend = filtered.slice(-3);
+  for (const ad of resultsToSend) {
      try {
-        await ctx.replyWithPhoto(photos[0], {caption: caption, parse_mode: "HTML"});
-     } catch(e) {}
+        if (ad.channelMsgId) {
+           // Каналдаги хабарни 100% ўзини нусхалаб юборади (Коллаж, тўлиқ текст ва кнопкалари билан)
+           await ctx.api.copyMessage(ctx.chat.id, CHANNEL_ID, ad.channelMsgId);
+        } else {
+           // Агар жуда эски эълон бўлса ва базада channelMsgId сақланмаган бўлса, эҳтиёт шарт ишлайдиган қисм
+           const caption = `🚗 <b>${ad.carDetails}</b>\n📅 Йили: ${ad.year}\n👣 Пробег: ${ad.probeg}\n💰 Нархи: ${ad.price}$\n☎️ Тел: +${ad.phone}`;
+           const photos = ad.photoId.split(",");
+           await ctx.replyWithPhoto(photos[0], {caption: caption, parse_mode: "HTML"});
+        }
+     } catch(e) {
+        console.error("Қидирув хабарини юборишда хатолик:", e.message);
+     }
   }
 }
 bot.use(createConversation(searchCarConversation));
