@@ -52,7 +52,8 @@ if (!fs.existsSync(collagesDir)) {
 
 bot.catch((err) => console.error(`Хатолик:`, err.error));
 bot.use(session({ initial: () => ({}) }));
-bot.use(conversations());
+
+// 1. АВВАЛ БЛОКЛАНГАНЛАРНИ ТЕКШИРАМИЗ (Хавфсизлик учун бу энг тепада туриши шарт!)
 bot.use(async (ctx, next) => {
   if (ctx.from && ctx.from.id !== ADMIN_ID) {
     try {
@@ -63,12 +64,27 @@ bot.use(async (ctx, next) => {
         } else {
            await ctx.reply("🚫 <b>Кечирасиз, сиз ботдан блоклангансиз.</b> Энди эълон бера олмайсиз.", { parse_mode: "HTML", reply_markup: { remove_keyboard: true } });
         }
-        return; // Кодни шу ерда тўхтатади, ичкарига ўтказмайди
+        return; 
       }
     } catch(e) {}
   }
   await next();
 });
+
+// 2. ҲАР БИР ҚАДАМДА "ЁЗМОҚДА..." СТАТУСИНИ ВА КУТИШНИ КЎРСАТИШ
+bot.use(async (ctx, next) => {
+  if (ctx.message || ctx.callbackQuery) {
+     ctx.api.sendChatAction(ctx.chat?.id, "typing").catch(() => {});
+  }
+  await next();
+});
+
+// 3. ЭНДИ ЖАРАЁНЛАРНИ (CONVERSATIONS) УЛАЙМИЗ
+bot.use(conversations());
+
+const mainMenu = new Keyboard()
+  .text("📝 Эълон Ясаш").text("🔍 Мошина қидириш").row()
+  .text("📂 Менинг эълонларим").resized();
 const mainMenu = new Keyboard()
   .text("📝 Эълон Ясаш").text("🔍 Мошина қидириш").row()
   .text("📂 Менинг эълонларим").resized();
@@ -108,16 +124,20 @@ bot.callbackQuery("check_sub_ad", async (ctx) => {
 async function safeAnswerCbq(ctx) {
   try {
     const id = ctx?.callbackQuery?.id || ctx?.update?.callback_query?.id;
-    if (id) await ctx.api.answerCallbackQuery(id);
+    // Тугма босилганда экранининг тепасида (Toast) хабар чиқади
+    if (id) await ctx.api.answerCallbackQuery(id, { text: "⏳ Илтимос кутинг, сўровингиз қайта ишланмоқда..." });
   } catch (_) {}
 }
 
 async function deleteMsgs(ctx, msgIds) {
-  for (const id of msgIds) {
-    try {
-      if (id) await ctx.api.deleteMessage(ctx.chat.id, id);
-    } catch (e) {}
-  }
+  if (!msgIds || msgIds.length === 0) return;
+  
+  // Хабарларни битта-битта эмас, балки бир вақтнинг ўзида (параллел) ўчириш. 
+  // Бу сервер секинлашганда ботни камида 3-4 баравар тезлаштиради!
+  await Promise.all(
+    msgIds.map(id => ctx.api.deleteMessage(ctx.chat.id, id).catch(() => {}))
+  );
+  
   msgIds.length = 0; 
 }
 
