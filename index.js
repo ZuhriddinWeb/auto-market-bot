@@ -108,9 +108,10 @@ async function createCollage(photoUrls) {
   }));
 
   // Ватермарка яратиш (Хира текст)
+// Ватермарка яратиш (Хира текст)
   const watermarkSvg = `
-    <svg width="${canvasWidth}" height="${canvasHeight}">
-      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" font-family="Arial, sans-serif" font-size="${Math.floor(canvasWidth * 0.05)}" fill="rgba(255, 255, 255, 0.45)" stroke="rgba(0, 0, 0, 0.3)" stroke-width="2" font-weight="bold">
+    <svg width="${canvasWidth}" height="${canvasHeight}" xmlns="http://www.w3.org/2000/svg">
+      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="${Math.floor(canvasWidth * 0.06)}" fill="rgba(255, 255, 255, 0.7)" stroke="rgba(0, 0, 0, 0.6)" stroke-width="3" font-weight="bold">
         @engarzonidamoshina
       </text>
     </svg>`;
