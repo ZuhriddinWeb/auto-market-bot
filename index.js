@@ -779,11 +779,81 @@ bot.hears("📂 Менинг эълонларим", async (ctx) => {
   if (ads.length === 0) return ctx.reply("📭 <b>Сизда ҳозирда фаол эълонлар йўқ.</b>", { parse_mode: "HTML" });
 
   for (const ad of ads) {
+    // 2 ТА ТУГМА ҚЎШИЛДИ: Сотилди ва Нархни тушириш
+    const kb = new InlineKeyboard()
+      .text("💰 Сотилди", `sold_req:${ad.id}`)
+      .text("📉 Нархни тушириш", `edit_price:${ad.id}`);
+
     await ctx.reply(`🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Мошина: ${ad.carDetails}</b>\n💰 <b>Нархи: ${ad.price}$</b>`, {
-      reply_markup: new InlineKeyboard().text("💰 Сотилди", `sold_req:${ad.id}`), parse_mode: "HTML",
+      reply_markup: kb, parse_mode: "HTML",
     });
   }
 });
+/**
+ * ✅ НАРХНИ ПАСАЙТИРИШ ЖАРАЁНИ
+ */
+async function editPriceConversation(conversation, ctx) {
+  const adId = ctx.session.editAdId;
+  if (!adId) return;
 
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  const ad = rows[0];
+  
+  if (!ad || ad.status !== 'active') {
+     return ctx.reply("❌ Бу эълон фаол эмас ёки аллақачон ёпилган.");
+  }
+
+  await ctx.reply(`📉 <b>${ad.carDetails}</b> учун янги нархни киритинг ($):\n<i>(Масалан: 8500)</i>\n\nБекор қилиш учун /cancel ни босинг.`, { parse_mode: "HTML" });
+  
+  const res = await conversation.waitFor("message:text");
+  if (res.message.text === "/cancel") {
+    return ctx.reply("❌ Нарх ўзгартириш бекор қилинди.", { reply_markup: mainMenu });
+  }
+
+  let newPrice = res.message.text.replace(/\D/g, "");
+  if (!newPrice) {
+    return ctx.reply("❗️ Хато нарх киритилди. Амалиёт бекор қилинди.", { reply_markup: mainMenu });
+  }
+
+  const waitMsg = await ctx.reply("⏳ <i>Каналдаги эълон янгиланмоқда...</i>", { parse_mode: "HTML" });
+
+  try {
+    // Каналдаги хабарни таҳрирлаш (Эски нархни чизиб ташлаб, янгисини ёзиш)
+    const newCaption = 
+      `🆔 ID: ${ad.id}\n🚗 Мошина: ${ad.carDetails}\n📅 Йили: ${ad.year}\n👣 Пробег: ${ad.probeg}\n` +
+      `💎 Краскаси: ${ad.paint}\n🎨 Ранги: ${ad.color}\n✅ Каробка: ${ad.transmission}\n` +
+      `⛽ Ёқилғи: ${ad.fuel}\n💰 Нархи: <s>${ad.price}$</s> <b>${newPrice}$ 📉</b>\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
+      `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
+
+    const channelMarkup = new InlineKeyboard().url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
+      .url("🤖 ЭЪЛОН БЕРИШ (Текин)", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
+
+    await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, {
+      caption: newCaption,
+      reply_markup: channelMarkup,
+      parse_mode: "HTML"
+    });
+
+    // Базада янги нархни сақлаб қўйиш
+    await db.execute("UPDATE ads SET price = ? WHERE id = ?", [newPrice, adId]);
+
+    await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
+    await ctx.reply(`✅ <b>Нарх муваффақиятли туширилди!</b>\nКаналда мошинангиз нархи <b>${newPrice}$</b> бўлиб ўзгарди.`, { parse_mode: "HTML", reply_markup: mainMenu });
+
+  } catch (error) {
+    console.error(error);
+    await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
+    await ctx.reply("❌ Хатолик: Каналдаги хабарни янгилаб бўлмади. Эҳтимол эски хабар каналдан ўчирилган бўлиши мумкин.", { reply_markup: mainMenu });
+  }
+}
+bot.use(createConversation(editPriceConversation));
+
+// "Нархни тушириш" тугмаси босилганда ишлайдиган код
+bot.callbackQuery(/^edit_price:(\d+)/, async (ctx) => {
+  const adId = ctx.match[1];
+  ctx.session.editAdId = adId; // ID ni session'ga saqlaymiz
+  await ctx.answerCallbackQuery();
+  await ctx.conversation.enter("editPriceConversation");
+});
 bot.start();
 console.log("Бот муваффақиятли ишга тушди...");
