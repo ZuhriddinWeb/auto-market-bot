@@ -29,6 +29,15 @@ if (!fs.existsSync(collagesDir)) {
         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS alerts (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        userId BIGINT,
+        query VARCHAR(255),
+        maxPrice INT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
     console.log("✅ 'users' жадвали текширилди (тайёр).");
   } catch (error) {
     console.error("❌ Жадвал яратишда хатолик:", error);
@@ -281,6 +290,8 @@ const resultsToSend = filtered.slice(-3);
         console.error("Қидирув хабарини юборишда хатолик:", e.message);
      }
   }
+  const alertKb = new InlineKeyboard().text("🔔 Қидирувга обуна бўлиш", `al_sub:${query.substring(0, 20)}:${maxPrice}`);
+  await ctx.reply(`<i>Агар шундай мошиналар сотувга чиққанда биринчилардан бўлиб хабардор бўлишни истасангиз, пастдаги тугмани босинг:</i>`, { parse_mode: "HTML", reply_markup: alertKb });
 }
 bot.use(createConversation(searchCarConversation));
 
@@ -663,6 +674,20 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
       
       await ctx.editMessageCaption({ caption: "✅ Каналга жойланди!", parse_mode: "HTML" });
       await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналга жойланди.\n\nКанални кўриш: https://t.me/engarzonidamoshina`, { parse_mode: "HTML", reply_markup: mainMenu });
+      try {
+        const [alerts] = await db.execute("SELECT * FROM alerts");
+        const adPrice = parseInt(ad.price.replace(/\D/g, "")) || 0;
+        const adDetails = ad.carDetails.toLowerCase();
+
+        for (const alert of alerts) {
+            if (adDetails.includes(alert.query) && adPrice <= alert.maxPrice) {
+                try {
+                    await bot.api.sendMessage(alert.userId, `🔔 <b>СИЗ ҚИДИРАЁТГАН МОШИНА ЧИҚДИ!</b>\n\nБизнинг каналга сизнинг талабингизга мос мошина жойланди:`, { parse_mode: "HTML" });
+                    await bot.api.copyMessage(alert.userId, CHANNEL_ID, msg.message_id);
+                } catch(e) {}
+            }
+        }
+      } catch(e) { console.error("Хабарнома юборишда хато:", e); }
     } catch (e) {
       await ctx.reply("Хатолик: Каналга юбориб бўлмади. Бот каналда админ эканлигини текширинг.");
     }
@@ -865,6 +890,20 @@ bot.use(createConversation(editPriceConversation));
 bot.callbackQuery(/^edit_price:(\d+)/, async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.conversation.enter("editPriceConversation");
+});
+/**
+ * ✅ АҚЛЛИ ХАБАРНОМАГА ОБУНА БЎЛИШ
+ */
+bot.callbackQuery(/^al_sub:(.+):(\d+)$/, async (ctx) => {
+  const query = ctx.match[1];
+  const maxPrice = parseInt(ctx.match[2]);
+  
+  try {
+    await db.execute("INSERT INTO alerts (userId, query, maxPrice) VALUES (?, ?, ?)", [ctx.from.id, query, maxPrice]);
+    await ctx.editMessageText(`✅ <b>Қидирувга обуна бўлдингиз!</b>\n\nЭнди ботга <b>${maxPrice}$</b> гача бўлган <b>${query}</b> қўшилса ва админ тасдиқласа, сизга автоматик тарзда хабар бераман.`, { parse_mode: "HTML" });
+  } catch(e) {
+    await ctx.answerCallbackQuery({ text: "Хатолик юз берди.", show_alert: true });
+  }
 });
 bot.start();
 console.log("Бот муваффақиятли ишга тушди...");
