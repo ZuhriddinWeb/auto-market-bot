@@ -132,14 +132,25 @@ async function safeAnswerCbq(ctx) {
 
 async function deleteMsgs(ctx, msgIds) {
   if (!msgIds || msgIds.length === 0) return;
-  
-  // Хабарларни битта-битта эмас, балки бир вақтнинг ўзида (параллел) ўчириш. 
-  // Бу сервер секинлашганда ботни камида 3-4 баравар тезлаштиради!
+
+  // 1. Жараён бошланганида чатга вақтинчалик "Кутинг" хабарини чиқарамиз
+  let waitMsg;
+  try {
+    waitMsg = await ctx.reply("⏳ <i>Илтимос, бир оз кутинг...</i>", { parse_mode: "HTML" });
+  } catch (e) {}
+
+  // 2. Эски хабарларни ва тугмаларни сервердан ўчирамиз
   await Promise.all(
     msgIds.map(id => ctx.api.deleteMessage(ctx.chat.id, id).catch(() => {}))
   );
-  
   msgIds.length = 0; 
+
+  // 3. Сервер ишни тугатгач, янги қадам чиқишидан олдин ҳалиги "Кутинг" хабарини ҳам ўчириб ташлаймиз
+  if (waitMsg) {
+    try {
+      await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
+    } catch (e) {}
+  }
 }
 
 // Watermark kesh
