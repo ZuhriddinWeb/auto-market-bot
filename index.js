@@ -133,24 +133,27 @@ async function safeAnswerCbq(ctx) {
 async function deleteMsgs(ctx, msgIds) {
   if (!msgIds || msgIds.length === 0) return;
 
-  // 1. Жараён бошланганида чатга вақтинчалик "Кутинг" хабарини чиқарамиз
-  let waitMsg;
-  try {
-    waitMsg = await ctx.reply("⏳ <i>Илтимос, бир оз кутинг...</i>", { parse_mode: "HTML" });
-  } catch (e) {}
-
-  // 2. Эски хабарларни ва тугмаларни сервердан ўчирамиз
-  await Promise.all(
-    msgIds.map(id => ctx.api.deleteMessage(ctx.chat.id, id).catch(() => {}))
-  );
+  const idsToDelete = [...msgIds];
   msgIds.length = 0; 
 
-  // 3. Сервер ишни тугатгач, янги қадам чиқишидан олдин ҳалиги "Кутинг" хабарини ҳам ўчириб ташлаймиз
-  if (waitMsg) {
-    try {
-      await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
-    } catch (e) {}
-  }
+  // 1. ВИЗУАЛ АЛОҚА (UI): Эски тугмаларни дарҳол блоклаб, "Кутилмоқда..." ёзувига айлантирамиз.
+  // Бу орқали сервер 5-6 сония ўйласа ҳам, одамларга жуда чиройли кўринади ва қайта босишнинг олдини олади.
+  try {
+    await ctx.api.editMessageReplyMarkup(ctx.chat.id, idsToDelete[0], {
+      reply_markup: new InlineKeyboard().text("⏳ Кутилмоқда...", "ignore")
+    });
+  } catch (e) {}
+
+  // 2. ЎЧИРИШНИ КЕЧИКТИРИШ: Хабарларни ўчиришни 3 сонияга (3000 ms) кечиктирамиз.
+  // Бу вақт ичида сервер бемалол ўйлаб, янги саволни пастга ташлашга улгуради.
+  // Янги савол чиққач, экран унга қулфланади ва эски хабар ўчганида чат мутлақо сакрамайди!
+  setTimeout(async () => {
+    for (const id of idsToDelete) {
+      try {
+        await ctx.api.deleteMessage(ctx.chat.id, id);
+      } catch (e) {}
+    }
+  }, 3000); 
 }
 
 // Watermark kesh
@@ -456,7 +459,7 @@ async function createAdConversation(conversation, ctx) {
 
       else if (step === "YEAR") {
         const kb = new InlineKeyboard();
-        for (let y = 2026; y >= 2011; y--) { kb.text(y.toString(), `y:${y}`); if ((2026 - y + 1) % 4 === 0) kb.row(); }
+        for (let y = 2026; y >= 1996; y--) { kb.text(y.toString(), `y:${y}`); if ((2026 - y + 1) % 4 === 0) kb.row(); }
         kb.row().text("🔙 Орқага", "back_MODEL").text("❌ Бекор қилиш", "cancel_ad");
         msgPrompt = await ctx.reply("📅 <b>Йилини танланг ёки ёзинг:</b>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
