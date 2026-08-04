@@ -18,7 +18,7 @@ if (!fs.existsSync(collagesDir)) {
   fs.mkdirSync(collagesDir, { recursive: true });
 }
 
-// БОТ ИШГА ТУШГАНДА USERS ЖАДВАЛИНИ АВТОМАТИК ЯРАТИШ
+// БОТ ИШГА ТУШГАНДА ЖАДВАЛЛАРНИ АВТОМАТИК ЯРАТИШ
 (async () => {
   try {
     await db.execute(`
@@ -44,7 +44,7 @@ if (!fs.existsSync(collagesDir)) {
         banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    console.log("✅ 'users' жадвали текширилди (тайёр).");
+    console.log("✅ Жадваллар текширилди (тайёр).");
   } catch (error) {
     console.error("❌ Жадвал яратишда хатолик:", error);
   }
@@ -53,7 +53,7 @@ if (!fs.existsSync(collagesDir)) {
 bot.catch((err) => console.error(`Хатолик:`, err.error));
 bot.use(session({ initial: () => ({}) }));
 
-// 1. АВВАЛ БЛОКЛАНГАНЛАРНИ ТЕКШИРАМИЗ (Хавфсизлик учун бу энг тепада туриши шарт!)
+// 1. БЛОКЛАНГАНЛАРНИ ТЕКШИРИШ
 bot.use(async (ctx, next) => {
   if (ctx.from && ctx.from.id !== ADMIN_ID) {
     try {
@@ -71,7 +71,7 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
-// 2. ҲАР БИР ҚАДАМДА "ЁЗМОҚДА..." СТАТУСИНИ ВА КУТИШНИ КЎРСАТИШ
+// 2. "ЁЗМОҚДА..." СТАТУСИНИ КЎРСАТИШ
 bot.use(async (ctx, next) => {
   if (ctx.message || ctx.callbackQuery) {
      ctx.api.sendChatAction(ctx.chat?.id, "typing").catch(() => {});
@@ -79,15 +79,16 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
-// 3. ЭНДИ ЖАРАЁНЛАРНИ (CONVERSATIONS) УЛАЙМИЗ
+// 3. ЖАРАЁНЛАРНИ УЛАШ
 bot.use(conversations());
 
 const mainMenu = new Keyboard()
   .text("📝 Эълон Ясаш").text("🔍 Мошина қидириш").row()
   .text("📂 Менинг эълонларим").resized();
-const mainMenu = new Keyboard()
-  .text("📝 Эълон Ясаш").text("🔍 Мошина қидириш").row()
-  .text("📂 Менинг эълонларим").resized();
+
+/**
+ * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
+ */
 
 /**
  * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
