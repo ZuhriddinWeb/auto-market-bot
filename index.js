@@ -633,12 +633,12 @@ bot.command("start", (ctx) => {
 
 bot.hears("📝 Эълон Ясаш", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
-  ctx.conversation.enter("createAdConversation");
+  ctx.conversation.enter("createAdConversation"); // <--- Хато шу ерда (await йўқ)
 });
 
 bot.hears("🔍 Мошина қидириш", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
-  ctx.conversation.enter("searchCarConversation");
+  ctx.conversation.enter("searchCarConversation"); // <--- Хато шу ерда (await йўқ)
 });
 
 bot.hears("📂 Менинг эълонларим", async (ctx) => {
