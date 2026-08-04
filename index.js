@@ -129,31 +129,29 @@ async function safeAnswerCbq(ctx) {
     if (id) await ctx.api.answerCallbackQuery(id, { text: "⏳ Илтимос кутинг, сўровингиз қайта ишланмоқда..." });
   } catch (_) {}
 }
-
 async function deleteMsgs(ctx, msgIds) {
   if (!msgIds || msgIds.length === 0) return;
 
   const idsToDelete = [...msgIds];
   msgIds.length = 0; 
+  const chatId = ctx.chat.id; 
 
-  // 1. ВИЗУАЛ АЛОҚА (UI): Эски тугмаларни дарҳол блоклаб, "Кутилмоқда..." ёзувига айлантирамиз.
-  // Бу орқали сервер 5-6 сония ўйласа ҳам, одамларга жуда чиройли кўринади ва қайта босишнинг олдини олади.
+  // 1. Тугмани дарҳол "Кутилмоқда..." га ўзгартириш
   try {
-    await ctx.api.editMessageReplyMarkup(ctx.chat.id, idsToDelete[0], {
+    await ctx.api.editMessageReplyMarkup(chatId, idsToDelete[0], {
       reply_markup: new InlineKeyboard().text("⏳ Кутилмоқда...", "ignore")
     });
   } catch (e) {}
 
-  // 2. ЎЧИРИШНИ КЕЧИКТИРИШ: Хабарларни ўчиришни 3 сонияга (3000 ms) кечиктирамиз.
-  // Бу вақт ичида сервер бемалол ўйлаб, янги саволни пастга ташлашга улгуради.
-  // Янги савол чиққач, экран унга қулфланади ва эски хабар ўчганида чат мутлақо сакрамайди!
+  // 2. Олтин ўрталиқ: 1.5 сония (1500 ms) кутиш.
+  // Бу вақт ичида бот пастга янги саволни ташлашга бемалол улгуради.
   setTimeout(async () => {
     for (const id of idsToDelete) {
       try {
-        await ctx.api.deleteMessage(ctx.chat.id, id);
+        await bot.api.deleteMessage(chatId, id);
       } catch (e) {}
     }
-  }, 3000); 
+  }, 1500); 
 }
 
 // Watermark kesh
