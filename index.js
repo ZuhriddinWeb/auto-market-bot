@@ -246,6 +246,9 @@ bot.callbackQuery("admin_broadcast", async (ctx) => {
 /**
  * ✅ МОШИНА ҚИДИРИШ ЖАРАЁНИ
  */
+/**
+ * ✅ МОШИНА ҚИДИРИШ ЖАРАЁНИ (Тўғирланган)
+ */
 async function searchCarConversation(conversation, ctx) {
   await ctx.reply("🔍 <b>Қайси мошинани қидиряпсиз?</b>\n<i>(Масалан: Cobalt ёки Gentra)</i>\n\nБекор қилиш учун /cancel ни босинг.", { reply_markup: { remove_keyboard: true }, parse_mode: "HTML" });
   const qRes = await conversation.waitFor("message:text");
@@ -268,28 +271,31 @@ async function searchCarConversation(conversation, ctx) {
 
   await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
 
+  // --- МАНА ШУ ЕРДА ЎЗГАРИШ БЎЛДИ ---
   if(filtered.length === 0) {
-     return ctx.reply(`📭 <b>${maxPrice}$</b> гача бўлган <b>${query}</b> топилмади.`, {parse_mode: "HTML", reply_markup: mainMenu});
-  }
+     // Агар мошина топилмаса, шунчаки хабар беради (тўхтатиб қўймайди)
+     await ctx.reply(`📭 <b>${maxPrice}$</b> гача бўлган <b>${query}</b> топилмади.`, {parse_mode: "HTML", reply_markup: mainMenu});
+  } else {
+     // Агар топилса, уларни чиқариб беради
+     await ctx.reply(`✅ <b>Топилди: ${filtered.length} та эълон!</b>\nЭнг сўнгги эълонлар:`, {parse_mode: "HTML", reply_markup: mainMenu});
 
-  await ctx.reply(`✅ <b>Топилди: ${filtered.length} та эълон!</b>\nЭнг сўнгги эълонлар:`, {parse_mode: "HTML", reply_markup: mainMenu});
-
-const resultsToSend = filtered.slice(-3);
-  for (const ad of resultsToSend) {
-     try {
-        if (ad.channelMsgId) {
-           // Каналдаги хабарни 100% ўзини нусхалаб юборади (Коллаж, тўлиқ текст ва кнопкалари билан)
-           await ctx.api.copyMessage(ctx.chat.id, CHANNEL_ID, ad.channelMsgId);
-        } else {
-           // Агар жуда эски эълон бўлса ва базада channelMsgId сақланмаган бўлса, эҳтиёт шарт ишлайдиган қисм
-           const caption = `🚗 <b>${ad.carDetails}</b>\n📅 Йили: ${ad.year}\n👣 Пробег: ${ad.probeg}\n💰 Нархи: ${ad.price}$\n☎️ Тел: +${ad.phone}`;
-           const photos = ad.photoId.split(",");
-           await ctx.replyWithPhoto(photos[0], {caption: caption, parse_mode: "HTML"});
-        }
-     } catch(e) {
-        console.error("Қидирув хабарини юборишда хатолик:", e.message);
+     const resultsToSend = filtered.slice(-3);
+     for (const ad of resultsToSend) {
+         try {
+            if (ad.channelMsgId) {
+               await ctx.api.copyMessage(ctx.chat.id, CHANNEL_ID, ad.channelMsgId);
+            } else {
+               const caption = `🚗 <b>${ad.carDetails}</b>\n📅 Йили: ${ad.year}\n👣 Пробег: ${ad.probeg}\n💰 Нархи: ${ad.price}$\n☎️ Тел: +${ad.phone}`;
+               const photos = ad.photoId.split(",");
+               await ctx.replyWithPhoto(photos[0], {caption: caption, parse_mode: "HTML"});
+            }
+         } catch(e) {
+            console.error("Қидирув хабарини юборишда хатолик:", e.message);
+         }
      }
   }
+
+  // ҲАР ҚАНДАЙ ҲОЛАТДА ҲАМ ОБУНА ТУГМАСИ ЧИҚАДИ
   const alertKb = new InlineKeyboard().text("🔔 Қидирувга обуна бўлиш", `al_sub:${query.substring(0, 20)}:${maxPrice}`);
   await ctx.reply(`<i>Агар шундай мошиналар сотувга чиққанда биринчилардан бўлиб хабардор бўлишни истасангиз, пастдаги тугмани босинг:</i>`, { parse_mode: "HTML", reply_markup: alertKb });
 }
