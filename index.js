@@ -108,10 +108,17 @@ async function createCollage(photoUrls) {
   }));
 
   // Ватермарка яратиш (Хира текст)
-// Ватермарка яратиш (Хира текст)
+  const fontSize = Math.floor(canvasWidth * 0.05); // Shrift kattaligini hisoblash
+  const rectHeight = Math.floor(fontSize * 2.5); // Qora fonning balandligi
+  const rectY = (canvasHeight / 2) - (rectHeight / 2); // Qo'q markazni topish
+
   const watermarkSvg = `
     <svg width="${canvasWidth}" height="${canvasHeight}" xmlns="http://www.w3.org/2000/svg">
-      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif" font-size="${Math.floor(canvasWidth * 0.06)}" fill="rgba(255, 255, 255, 0.7)" stroke="rgba(0, 0, 0, 0.6)" stroke-width="3" font-weight="bold">
+      <!-- 1. Qora yarim shaffof fon (tasmasi) yozuv doim aniq ko'rinishi uchun -->
+      <rect x="0" y="${rectY}" width="${canvasWidth}" height="${rectHeight}" fill="rgba(0, 0, 0, 0.5)" />
+      
+      <!-- 2. Oq rangdagi kanal nomi -->
+      <text x="50%" y="50%" dy="0.35em" text-anchor="middle" font-family="sans-serif" font-size="${fontSize}px" fill="#ffffff" font-weight="bold" letter-spacing="2">
         @engarzonidamoshina
       </text>
     </svg>`;
