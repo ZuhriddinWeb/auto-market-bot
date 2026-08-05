@@ -63,6 +63,18 @@ if (!fs.existsSync(collagesDir)) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    await db.execute(`
+      ALTER TABLE ads 
+      ADD COLUMN IF NOT EXISTS history TEXT DEFAULT NULL, 
+      ADD COLUMN IF NOT EXISTS barter VARCHAR(255) DEFAULT NULL, 
+      ADD COLUMN IF NOT EXISTS videoId VARCHAR(255) DEFAULT NULL
+    `);
+    await db.execute(`
+      ALTER TABLE ad_edits 
+      ADD COLUMN IF NOT EXISTS history TEXT DEFAULT NULL, 
+      ADD COLUMN IF NOT EXISTS barter VARCHAR(255) DEFAULT NULL, 
+      ADD COLUMN IF NOT EXISTS videoId VARCHAR(255) DEFAULT NULL
+    `);
     console.log("✅ Жадваллар текширилди (тайёр).");
   } catch (error) {
     console.error("❌ Жадвал яратишда хатолик:", error);
@@ -748,7 +760,92 @@ async function createAdConversation(conversation, ctx) {
         await deleteMsgs(ctx, chatToClean);
         step = isEditing ? "PREVIEW" : "PHOTOS";
       }
+      // ================= ЯНГИ: 1. ШАФФОФ ТАРИХ =================
+      else if (step === "HISTORY") {
+        const kb = new InlineKeyboard().text("Ўтказиб юбориш", "skip_history").row().text("🔙 Орқага", "back_REGION").text("❌ Бекор", "cancel_ad");
+        msgPrompt = await ctx.reply(
+          "🛠 <b>Мошина тарихи ва хизмат кўрсатиш ҳолати:</b>\n\n" +
+          "<i>Харидорлар ишончини ошириш учун мошинага қандай қаралганини ёзинг. Масалан:\n" +
+          "«2 йил олдин LPG ўрнатилган, ҳар 7500 км да Liqui Moly Molygen 5w-30 қуйилган, 46 минг км да каробка мойи (Addinol SP-4) алмаштирилган.»</i>\n\n" +
+          "Ёзишни истамасангиз «Ўтказиб юбориш» ни босинг.", { reply_markup: kb, parse_mode: "HTML" }
+        );
+        chatToClean.push(msgPrompt.message_id);
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_REGION") { step = "REGION"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
+        if (res.callbackQuery?.data === "skip_history") {
+          ad.history = "Кўрсатилмаган";
+        } else {
+          ad.history = res.message.text;
+        }
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "BARTER";
+      }
+
+      // ================= ЯНГИ: 3. БАРТЕР ТИЗИМИ =================
+      else if (step === "BARTER") {
+        const kb = new InlineKeyboard().text("Йўқ, фақат нақд", "brtr:Йўқ").row().text("🔙 Орқага", "back_HISTORY").text("❌ Бекор", "cancel_ad");
+        msgPrompt = await ctx.reply("🔄 <b>Бартер (Айирбошлаш) борми?</b>\n\n<i>Агар бор бўлса, қайси мошиналарга алмашишингизни ёзинг (Масалан: Фақат Cobalt 2022+ автоматга). Агар йўқ бўлса тугмани босинг.</i>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_HISTORY") { step = "HISTORY"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.barter = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "MEDIA";
+      }
+
+      // ================= ЯНГИ: 6. РАСМ ВА ВИДЕО =================
+      // (Эски "PHOTOS" қадамини шунга алмаштиринг)
+      else if (step === "MEDIA") {
+        const kb = new InlineKeyboard().text("✅ Бўлди (Юбориш)", "done_media").row().text("🔙 Орқага", "back_BARTER").text("❌ Бекор", "cancel_ad");
+        msgPrompt = await ctx.reply("📸🎥 <b>Расм ва қисқа Видео юборинг (Макс 6 та расм, 1 та видео):</b>\n\n<i>Мошинани 30 сониялик видеога олиб юборсангиз, тезроқ сотилади!</i>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+        
+        ad.photos = ad.photos || [];
+        ad.videoId = ad.videoId || null;
+
+        while (ad.photos.length < 6 || !ad.videoId) {
+          const res = await conversation.waitFor(["message:photo", "message:video", "callback_query:data"]);
+          if (res.message) chatToClean.push(res.message.message_id);
+          if (res.callbackQuery?.data === "cancel_ad") { step = "CANCEL"; break; }
+          if (res.callbackQuery?.data === "back_BARTER") { step = "BARTER"; await safeAnswerCbq(res); break; }
+          
+          if (res.callbackQuery?.data === "done_media") {
+            await safeAnswerCbq(res);
+            if (ad.photos.length === 0) {
+              let m = await ctx.reply("❗️ Камида 1 та расм юборишингиз керак!");
+              chatToClean.push(m.message_id);
+              continue;
+            }
+            step = "PREVIEW"; break;
+          }
+
+          if (res.message?.photo) {
+            if (ad.photos.length >= 6) { await ctx.reply("❗️ 6 та расм тўлди."); continue; }
+            const photoArr = res.message.photo;
+            ad.photos.push(photoArr[photoArr.length - 1].file_id);
+            try { await ctx.api.deleteMessage(ctx.chat.id, msgPrompt.message_id); } catch (e) {}
+            msgPrompt = await ctx.reply(`✅ <b>${ad.photos.length}-расм қабул қилинди!</b>\nЯна расм/видео юборинг ёки «✅ Бўлди» ни босинг.`, { reply_markup: kb, parse_mode: "HTML" });
+            chatToClean.push(msgPrompt.message_id);
+          } else if (res.message?.video) {
+            if (ad.videoId) { await ctx.reply("❗️ Сиз аллақачон видео юбордингиз."); continue; }
+            ad.videoId = res.message.video.file_id;
+            try { await ctx.api.deleteMessage(ctx.chat.id, msgPrompt.message_id); } catch (e) {}
+            msgPrompt = await ctx.reply(`✅ <b>Видео қабул қилинди!</b>\nРасм юборишда давом этинг ёки «✅ Бўлди» ни босинг.`, { reply_markup: kb, parse_mode: "HTML" });
+            chatToClean.push(msgPrompt.message_id);
+          }
+        }
+        if (step === "CANCEL") break;
+        if (step === "BARTER") { await deleteMsgs(ctx, chatToClean); continue; }
+        await deleteMsgs(ctx, chatToClean);
+      }
       else if (step === "PHOTOS") {
         const kb = new InlineKeyboard().text("✅ Бўлди (Юбориш)", "done_photos").row().text("🔙 Орқага", "back_REGION").text("❌ Бекор", "cancel_ad");
         msgPrompt = await ctx.reply("📸 <b>Мошинангиз расмларини юборинг (1-6 та):</b>\n\n<i>Расмларни белгилаб бирданига юбориш мумкин. Барчасини юбориб бўлгач, «✅ Бўлди» ни босинг.</i>", { reply_markup: kb, parse_mode: "HTML" });
@@ -789,29 +886,62 @@ async function createAdConversation(conversation, ctx) {
         await deleteMsgs(ctx, chatToClean);
       }
 
-      else if (step === "PREVIEW") {
+else if (step === "PREVIEW") {
         isEditing = false;
-        let waitMsg = await ctx.reply("⏳ <b>Эълон тайёрланмоқда, кутинг...</b>", { parse_mode: "HTML" });
+        // Ўзгариш: Кутиш хабари матни бироз ўзгартирилди
+        let waitMsg = await ctx.reply("⏳ <b>Ақлли тизим эълонни таҳлил қилмоқда...</b>", { parse_mode: "HTML" });
         
+        // ================= ЯНГИ: НАРХ АНАЛИТИКАСИ =================
+        const numericPrice = parseInt(ad.price) || 0;
+        let priceBadge = "";
+        
+        try {
+            const [avgRows] = await db.execute("SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice FROM ads WHERE carDetails LIKE ? AND status = 'active'", [`%${ad.model}%`]);
+            const avgPrice = avgRows[0].avgPrice;
+            
+            if (avgPrice && numericPrice < avgPrice * 0.95) { 
+                priceBadge = " 🔥 (Қайноқ нарх)";
+            } else if (avgPrice && numericPrice > avgPrice * 1.1) {
+                priceBadge = " 📈 (Бозордан бироз қиммат)";
+            }
+        } catch (e) {
+            console.error("Нарх аналитикаси хатоси:", e);
+        }
+        // ==========================================================
+
         const photoUrls = await Promise.all(ad.photos.map(async (id) => {
             const file = await bot.api.getFile(id);
             return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
         }));
         const collagePath = await createCollage(photoUrls);
         
-        const caption = 
+        // ================= ЯНГИ: КАПЦИОНГА МАЪЛУМОТЛАРНИ ҚЎШИШ =================
+        let caption = 
           `🚗 <b>Мошина:</b> ${ad.brand} ${ad.model}\n` +
           `📅 <b>Йили:</b> ${ad.year}\n👣 <b>Пробег:</b> ${ad.probeg}\n` +
           `💎 <b>Краска:</b> ${ad.paint}\n🎨 <b>Ранги:</b> ${ad.color}\n` +
-          `⚙️ <b>Коробка:</b> ${ad.trans}\n⛽ <b>Ёқилғи:</b> ${ad.fuel}\n` +
-          `💰 <b>Нархи:</b> ${ad.price}$\n☎️ <b>Тел:</b> +${ad.phone}\n🚩 <b>Вилоят:</b> ${ad.region}`;
+          `⚙️ <b>Коробка:</b> ${ad.trans}\n⛽ <b>Ёқилғи:</b> ${ad.fuel}\n`;
+
+        // Агар тарих ва бартер "Кўрсатилмаган" ёки "Йўқ" бўлмаса, эълонга қўшамиз
+        if (ad.history && ad.history !== "Кўрсатилмаган") {
+            caption += `🛠 <b>Тарихи:</b> ${ad.history}\n`;
+        }
+        if (ad.barter && ad.barter !== "Йўқ") {
+            caption += `🔄 <b>Бартер:</b> ${ad.barter}\n`;
+        }
+
+        caption += `💰 <b>Нархи:</b> ${ad.price}$${priceBadge}\n☎️ <b>Тел:</b> +${ad.phone}\n🚩 <b>Вилоят:</b> ${ad.region}`;
+        
+        if (ad.videoId) caption += `\n🎥 <i>(Ушбу эълонда видео-обзор мавжуд!)</i>`;
+        // =========================================================================
 
         const kb = new InlineKeyboard()
           .text("✅ АДМИНГА ЮБОРИШ", "submit_ad").row()
           .text("✏️ Марка", "edit_BRAND").text("✏️ Модел", "edit_MODEL").text("✏️ Йили", "edit_YEAR").row()
           .text("✏️ Пробег", "edit_PROBEG").text("✏️ Краска", "edit_PAINT").text("✏️ Ранг", "edit_COLOR").row()
           .text("✏️ Коробка", "edit_TRANS").text("✏️ Ёқилғи", "edit_FUEL").text("✏️ Нарх", "edit_PRICE").row()
-          .text("✏️ Рақам", "edit_PHONE").text("✏️ Вилоят", "edit_REGION").text("📸 Расм", "edit_PHOTOS").row()
+          .text("✏️ Рақам", "edit_PHONE").text("✏️ Вилоят", "edit_REGION")
+          .text("📸🎥 Расм/Видео", "edit_MEDIA").row() // edit_PHOTOS энди edit_MEDIA га ўзгарди
           .text("❌ Бекор қилиш", "cancel_ad");
 
         await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
@@ -832,19 +962,25 @@ async function createAdConversation(conversation, ctx) {
         if (action === "submit_ad") {
           // ТАҲРИРЛАНГАН ЭЪЛОННИ ЮБОРИШ
           if (isFullUpdate) {
-            const [result] = await db.execute(
-              `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-              [updateAdId, ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(",")]
-            );
+            // ЯНГИ: Базага history, barter, videoId қўшилди
+           const [result] = await db.execute(
+           `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           [updateAdId, ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Кўрсатилмаган", ad.barter || "Йўқ", ad.videoId || null]
+          );
             const editId = result.insertId; 
             
             const adminCollage = await createCollage(photoUrls);
-            await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
+            const adminMsg = await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
               caption: `🔄 <b>ЭЪЛОННИ ЯНГИЛАШ СЎРОВИ!</b>\n\n🆔 <b>Эски ID: ${updateAdId}</b>\n\n${caption}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>`,
               reply_markup: new InlineKeyboard().text("✅ Ўзгаришни тасдиқлаш", `approve_edit:${editId}`).text("❌ Рад этиш", `reject_edit:${editId}`),
               parse_mode: "HTML",
             });
             if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
+
+            // ЯНГИ: Агар видео бўлса, админга видеони ҳам юборамиз
+            if (ad.videoId) {
+                await bot.api.sendVideo(ADMIN_ID, ad.videoId, { reply_to_message_id: adminMsg.message_id });
+            }
 
             ctx.session.editAdData = null; // ТОЗАЛАШ
             await ctx.reply("✅ <b>Таҳрирланган эълон админга муваффақиятли юборилди!</b>\n\nТекширувдан сўнг каналдаги эълон янгиланади.", { parse_mode: "HTML", reply_markup: mainMenu });
@@ -852,19 +988,25 @@ async function createAdConversation(conversation, ctx) {
           }
 
           // ЯНГИ ЭЪЛОННИ ЮБОРИШ
+          // ЯНГИ: Базага history, barter, videoId қўшилди
           const [result] = await db.execute(
-            `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(",")]
+          `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Кўрсатилмаган", ad.barter || "Йўқ", ad.videoId || null]
           );
           const adId = result.insertId; 
           
           const adminCollage = await createCollage(photoUrls);
-          await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
+          const adminMsg = await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
             caption: `🆔 <b>ID: ${adId}</b>\n\n${caption}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>`,
             reply_markup: new InlineKeyboard().text("✅ Қабул қилиш", `approve:${adId}`).text("❌ Рад этиш", `reject:${adId}`),
             parse_mode: "HTML",
           });
           if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
+
+          // ЯНГИ: Агар видео бўлса, админга видеони ҳам юборамиз
+          if (ad.videoId) {
+              await bot.api.sendVideo(ADMIN_ID, ad.videoId, { reply_to_message_id: adminMsg.message_id });
+          }
 
           ctx.session.editAdData = null; // ТОЗАЛАШ
           await ctx.reply("✅ <b>Эълонингиз админга муваффақиятли юборилди!</b>\n\nТекширувдан сўнг каналга жойланади.", { parse_mode: "HTML", reply_markup: mainMenu });
