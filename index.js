@@ -304,7 +304,86 @@ bot.command("ban", async (ctx) => {
     ctx.reply("Хатолик юз берди.");
   }
 });
+/**
+ * ✅ АДМИН УЧУН ЭЪЛОННИ ҚАЙТА КЎТАРИШ (BUMP / UP)
+ */
+bot.command("up", async (ctx) => {
+  // Фақат админ ишлата олиши учун текширув
+  if (ctx.from.id !== ADMIN_ID) return;
 
+  const match = ctx.message.text.split(" ");
+  if (match.length < 2) {
+    return ctx.reply("📝 <b>Қўллаш тартиби:</b> /up [ID рақам]\n<i>Масалан: /up 15</i>", { parse_mode: "HTML" });
+  }
+
+  const adId = parseInt(match[1]);
+  if (!adId) return ctx.reply("❗️ ID рақам бўлиши керак.");
+
+  // Базадан эълонни қидирамиз
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND status = 'active'", [adId]);
+  const ad = rows[0];
+
+  if (!ad) return ctx.reply("❌ Бундай ID га эга фаол эълон топилмади ёки у аллақачон сотилган.");
+
+  const waitMsg = await ctx.reply(`⏳ <i>${adId}-ID ли эълон каналга қайта кўтарилмоқда...</i>`, { parse_mode: "HTML" });
+
+  try {
+    const channelMarkup = new InlineKeyboard()
+      .url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
+      .url("🤖 ЭЪЛОН БЕРИШ (Текин)", "https://t.me/arzonida_bot")
+      .url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
+
+    let newMsgId;
+
+    try {
+      // 1-УРИНИШ: Каналдаги эски хабардан тезкор нусха олиш (Расм ясаб ўтирмайди, 1 сонияда тугайди)
+      const newMsg = await bot.api.copyMessage(CHANNEL_ID, CHANNEL_ID, ad.channelMsgId, {
+        reply_markup: channelMarkup
+      });
+      newMsgId = newMsg.message_id;
+
+      // Олдинги эски хабарни каналдан ўчириб ташлаймиз (дубликат бўлмаслиги учун)
+      await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(() => {});
+
+    } catch (copyErr) {
+      // 2-УРИНИШ (Fallback): Агар эски хабар каналдан ўчирилган бўлса, коллажни бошқатдан ясаймиз!
+      const photos = ad.photoId.split(",");
+      const photoUrls = await Promise.all(
+        photos.map(async (id) => {
+          const file = await bot.api.getFile(id);
+          return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+        })
+      );
+      const collagePath = await createCollage(photoUrls);
+
+      const caption =
+        `🆔 ID: ${ad.id}\n🚗 Мошина: ${ad.carDetails}\n📅 Йили: ${ad.year}\n👣 Пробег: ${ad.probeg}\n` +
+        `💎 Краскаси: ${ad.paint}\n🎨 Ранги: ${ad.color}\n✅ Каробка: ${ad.transmission}\n` +
+        `⛽ Ёқилғи: ${ad.fuel}\n💰 Нархи: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
+        `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
+
+      const sentMsg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
+        caption: caption,
+        reply_markup: channelMarkup,
+        parse_mode: "HTML",
+      });
+      newMsgId = sentMsg.message_id;
+      
+      if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
+    }
+
+    // БАЗАНИ ЯНГИЛАШ: Янги ташланган хабарнинг ID сини базага ёзиб қўямиз
+    await db.execute("UPDATE ads SET channelMsgId = ? WHERE id = ?", [newMsgId, adId]);
+
+    await bot.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
+    await ctx.reply(`✅ <b>${adId}-ID</b> ли эълон муваффақиятли қайта кўтарилди!\n\nЭски хабар ўчирилиб, канал охирига (энг янги хабар сифатида) жойланди.`, { parse_mode: "HTML" });
+
+  } catch (err) {
+    console.error(err);
+    await bot.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
+    await ctx.reply("❌ Хатолик юз берди: Эълонни қайта кўтариб бўлмади.");
+  }
+});
 bot.command("unban", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   const match = ctx.message.text.split(" ");
