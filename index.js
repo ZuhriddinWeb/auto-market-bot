@@ -411,29 +411,14 @@ bot.use(createConversation(searchCarConversation));
  * ✅ ЭЪЛОН ЯРАТИШ ЖАРАЁНИ
  */
 async function createAdConversation(conversation, ctx) {
-  let step = "BRAND";
-  let isEditing = false; 
-  const chatToClean = []; 
-
+  const ad = { photos: [] };
   let isFullUpdate = false; 
   let updateAdId = null;
 
-  // 1. БАЗАДАН МАЪЛУМОТ ОЛИШ (conversation.external орқали - бот хотирасини йўқотмаслиги учун)
-  const existingAd = await conversation.external(async () => {
-    if (ctx.session && ctx.session.editAdId) {
-      const id = ctx.session.editAdId;
-      ctx.session.editAdId = null; // Фақат биринчи марта ўқиганда тозалаймиз
-      const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [id]);
-      return rows[0] || null;
-    }
-    return null;
-  });
-
-  const ad = { photos: [] };
-
-  // 2. АГАР МАЪЛУМОТ ТОПИЛСА, БИРДАН PREVIEW ГА ЎТКАЗАМИЗ
-  if (existingAd) {
+  // 1. СЕССИЯДАН МАЪЛУМОТНИ ЎҚИШ (Қайта-қайта ўқилганда ҳам ўчиб кетмайди)
+  if (ctx.session?.editAdData) {
     isFullUpdate = true;
+    const existingAd = ctx.session.editAdData;
     updateAdId = existingAd.id;
 
     const parts = existingAd.carDetails.split(" ");
@@ -449,9 +434,12 @@ async function createAdConversation(conversation, ctx) {
     ad.phone = existingAd.phone;
     ad.region = existingAd.region;
     ad.photos = existingAd.photoId.split(",");
-    
-    step = "PREVIEW"; // Жараённи тўғридан-тўғри Кўриб чиқишга сакратамиз
   }
+
+  // 2. АГАР ТАҲРИРЛАШ БЎЛСА, БИРДАН "PREVIEW" ДАН БОШЛАЙМИЗ
+  let step = isFullUpdate ? "PREVIEW" : "BRAND";
+  let isEditing = false; 
+  const chatToClean = []; 
 
   await ctx.reply(isFullUpdate ? "📝 <b>Эълонни таҳрирлаш бошланди.</b>" : "📝 <b>Эълон бериш бошланди.</b>", { reply_markup: { remove_keyboard: true }, parse_mode: "HTML" });
 
@@ -749,7 +737,7 @@ async function createAdConversation(conversation, ctx) {
         if (action === "cancel_ad") break;
         
         if (action === "submit_ad") {
-          // 1. АГАР БУ ТАҲРИРЛАНГАН ЭЪЛОН БЎЛСА:
+          // ТАҲРИРЛАНГАН ЭЪЛОННИ ЮБОРИШ
           if (isFullUpdate) {
             const [result] = await db.execute(
               `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -765,14 +753,12 @@ async function createAdConversation(conversation, ctx) {
             });
             if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
 
-            await ctx.reply(
-              "✅ <b>Таҳрирланган эълон админга муваффақиятли юборилди!</b>\n\nТекширувдан сўнг каналдаги эълон янгиланади.",
-              { parse_mode: "HTML", reply_markup: mainMenu }
-            );
+            ctx.session.editAdData = null; // ТОЗАЛАШ
+            await ctx.reply("✅ <b>Таҳрирланган эълон админга муваффақиятли юборилди!</b>\n\nТекширувдан сўнг каналдаги эълон янгиланади.", { parse_mode: "HTML", reply_markup: mainMenu });
             return; 
           }
 
-          // 2. АГАР БУ ЯНГИ ЭЪЛОН БЎЛСА:
+          // ЯНГИ ЭЪЛОННИ ЮБОРИШ
           const [result] = await db.execute(
             `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
             [ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(",")]
@@ -787,10 +773,8 @@ async function createAdConversation(conversation, ctx) {
           });
           if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
 
-          await ctx.reply(
-            "✅ <b>Эълонингиз админга муваффақиятли юборилди!</b>\n\nТекширувдан сўнг каналга жойланади. Эълонларингизни пастдаги <b>📂 Менинг эълонларим</b> тугмаси орқали бошқаришингиз мумкин.",
-            { parse_mode: "HTML", reply_markup: mainMenu }
-          );
+          ctx.session.editAdData = null; // ТОЗАЛАШ
+          await ctx.reply("✅ <b>Эълонингиз админга муваффақиятли юборилди!</b>\n\nТекширувдан сўнг каналга жойланади.", { parse_mode: "HTML", reply_markup: mainMenu });
           return; 
         }
 
@@ -805,6 +789,8 @@ async function createAdConversation(conversation, ctx) {
       break;
     }
   }
+  
+  ctx.session.editAdData = null; // ТОЗАЛАШ
   await ctx.reply("❌ <b>Эълон бериш бекор қилинди.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
   await deleteMsgs(ctx, chatToClean);
 }
@@ -983,7 +969,7 @@ bot.hears("📝 Эълон Ясаш", async (ctx) => {
       return ctx.reply("❗️ <b>Сизда чеклов мавжуд!</b>\n\nБир вақтнинг ўзида энг кўпи билан <b>3 та</b> фаол эълонингиз бўлиши мумкин. Янги эълон бериш учун '📂 Менинг эълонларим' бўлимидан эскиларини 'Сотилди' деб белгиланг.", { parse_mode: "HTML" });
     }
   }
-
+ctx.session.editAdData = null;
   // Ҳаммаси жойида бўлса ёки АДМИН бўлса, эълон бериш жараёнини бошлаш
   await ctx.conversation.enter("createAdConversation");
 });
@@ -1013,8 +999,16 @@ bot.hears("📂 Менинг эълонларим", async (ctx) => {
 // "Тўлиқ таҳрирлаш" тугмаси босилганда
 bot.callbackQuery(/^full_edit_req:(\d+)/, async (ctx) => {
   await ctx.answerCallbackQuery("⏳ Маълумотлар юкланмоқда...");
-  ctx.session.editAdId = ctx.match[1]; // Қайси эълон таҳрирланаётганини сессияга сақлаймиз
-  await ctx.conversation.enter("createAdConversation"); // Шу заҳоти яратиш жараёнига ташлаймиз
+  const adId = ctx.match[1];
+  
+  // Базадан эълонни тўлиқ олиб, сессияга сақлаймиз!
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  if (rows.length > 0) {
+    ctx.session.editAdData = rows[0]; 
+    await ctx.conversation.enter("createAdConversation");
+  } else {
+    await ctx.answerCallbackQuery({text: "❌ Эълон топилмади.", show_alert: true});
+  }
 });
 /**
  * ✅ НАРХНИ ПАСАЙТИРИШ ЖАРАЁНИ
