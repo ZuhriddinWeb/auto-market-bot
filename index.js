@@ -44,6 +44,25 @@ if (!fs.existsSync(collagesDir)) {
         banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS ad_edits (
+        editId BIGINT AUTO_INCREMENT PRIMARY KEY,
+        oldAdId BIGINT,
+        userId BIGINT,
+        carDetails VARCHAR(255),
+        year INT,
+        probeg VARCHAR(255),
+        paint VARCHAR(255),
+        color VARCHAR(255),
+        transmission VARCHAR(255),
+        fuel VARCHAR(255),
+        price VARCHAR(255),
+        phone VARCHAR(255),
+        region VARCHAR(255),
+        photoId TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
     console.log("✅ Жадваллар текширилди (тайёр).");
   } catch (error) {
     console.error("❌ Жадвал яратишда хатолик:", error);
@@ -397,6 +416,37 @@ async function createAdConversation(conversation, ctx) {
   let isEditing = false; 
   const chatToClean = []; 
 
+  let isFullUpdate = false; // Таҳрирлаш режимими ёки йўқми?
+  let updateAdId = null;
+
+  if (ctx.session?.editAdId) {
+    isFullUpdate = true;
+    updateAdId = ctx.session.editAdId;
+    ctx.session.editAdId = null; // Тозалаб юборамиз
+
+    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [updateAdId]);
+    const existingAd = rows[0];
+
+    if (existingAd) {
+      const parts = existingAd.carDetails.split(" ");
+      ad.brand = parts[0] || "Бошқа";
+      ad.model = parts.slice(1).join(" ") || "";
+      ad.year = existingAd.year;
+      ad.probeg = existingAd.probeg;
+      ad.paint = existingAd.paint;
+      ad.color = existingAd.color;
+      ad.trans = existingAd.transmission;
+      ad.fuel = existingAd.fuel;
+      ad.price = existingAd.price;
+      ad.phone = existingAd.phone;
+      ad.region = existingAd.region;
+      ad.photos = existingAd.photoId.split(",");
+      step = "PREVIEW"; // Бирдан таҳрирлаш менюсига сакратамиз
+    }
+  }
+
+  await ctx.reply(isFullUpdate ? "📝 <b>Эълонни таҳрирлаш бошланди.</b>" : "📝 <b>Эълон бериш бошланди.</b>", { reply_markup: { remove_keyboard: true }, parse_mode: "HTML" });
+
   const carCatalog = {
     "Chevrolet": ["Cobalt", "Gentra", "Lacetti", "Spark", "Nexia 1", "Nexia 2", "Nexia 3", "Matiz", "Damas", "Labo", "Tracker", "Onix", "Monza", "Malibu 1", "Malibu 2", "Captiva", "Equinox", "Tahoe", "Traverse"],
     "Daewoo": ["Matiz", "Nexia 1", "Tico", "Damas"],
@@ -692,7 +742,31 @@ async function createAdConversation(conversation, ctx) {
 
         if (action === "cancel_ad") break;
         
-        if (action === "submit_ad") {
+       if (action === "submit_ad") {
+          // 1. АГАР БУ ТАҲРИРЛАНГАН ЭЪЛОН БЎЛСА:
+          if (isFullUpdate) {
+            const [result] = await db.execute(
+              `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+              [updateAdId, ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(",")]
+            );
+            const editId = result.insertId; 
+            
+            const adminCollage = await createCollage(photoUrls);
+            await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
+              caption: `🔄 <b>ЭЪЛОННИ ЯНГИЛАШ СЎРОВИ!</b>\n\n🆔 <b>Эски ID: ${updateAdId}</b>\n\n${caption}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>`,
+              reply_markup: new InlineKeyboard().text("✅ Ўзгаришни тасдиқлаш", `approve_edit:${editId}`).text("❌ Рад этиш", `reject_edit:${editId}`),
+              parse_mode: "HTML",
+            });
+            if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
+
+            await ctx.reply(
+              "✅ <b>Таҳрирланган эълон админга муваффақиятли юборилди!</b>\n\nТекширувдан сўнг каналдаги эълон янгиланади.",
+              { parse_mode: "HTML", reply_markup: mainMenu }
+            );
+            return; 
+          }
+
+          // 2. АГАР БУ ЯНГИ ЭЪЛОН БЎЛСА (Ўзингизни эски кодингиз):
           const [result] = await db.execute(
             `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
             [ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(",")]
@@ -919,15 +993,22 @@ bot.hears("📂 Менинг эълонларим", async (ctx) => {
   if (ads.length === 0) return ctx.reply("📭 <b>Сизда ҳозирда фаол эълонлар йўқ.</b>", { parse_mode: "HTML" });
 
   for (const ad of ads) {
-    // 2 ТА ТУГМА ҚЎШИЛДИ: Сотилди ва Нархни тушириш
     const kb = new InlineKeyboard()
       .text("💰 Сотилди", `sold_req:${ad.id}`)
-      .text("📉 Нархни тушириш", `edit_price:${ad.id}`);
+      .text("📉 Нархни тушириш", `edit_price:${ad.id}`).row()
+      .text("✏️ Тўлиқ таҳрирлаш", `full_edit_req:${ad.id}`); // <--- ЯНГИ ТУГМА ҚЎШИЛДИ
 
     await ctx.reply(`🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Мошина: ${ad.carDetails}</b>\n💰 <b>Нархи: ${ad.price}$</b>`, {
       reply_markup: kb, parse_mode: "HTML",
     });
   }
+});
+
+// "Тўлиқ таҳрирлаш" тугмаси босилганда
+bot.callbackQuery(/^full_edit_req:(\d+)/, async (ctx) => {
+  await ctx.answerCallbackQuery("⏳ Маълумотлар юкланмоқда...");
+  ctx.session.editAdId = ctx.match[1]; // Қайси эълон таҳрирланаётганини сессияга сақлаймиз
+  await ctx.conversation.enter("createAdConversation"); // Шу заҳоти яратиш жараёнига ташлаймиз
 });
 /**
  * ✅ НАРХНИ ПАСАЙТИРИШ ЖАРАЁНИ
@@ -1010,6 +1091,82 @@ bot.callbackQuery(/^al_sub:(.+):(\d+)$/, async (ctx) => {
     await ctx.editMessageText(`✅ <b>Қидирувга обуна бўлдингиз!</b>\n\nЭнди ботга <b>${maxPrice}$</b> гача бўлган <b>${query}</b> қўшилса ва админ тасдиқласа, сизга автоматик тарзда хабар бераман.`, { parse_mode: "HTML" });
   } catch(e) {
     await ctx.answerCallbackQuery({ text: "Хатолик юз берди.", show_alert: true });
+  }
+});
+bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
+  const editId = ctx.match[1];
+  const [editRows] = await db.execute("SELECT * FROM ad_edits WHERE editId = ?", [editId]);
+  const editData = editRows[0];
+
+  if (!editData) return ctx.answerCallbackQuery("Бу сўров аллақачон кўриб чиқилган ёки ўчирилган.", {show_alert:true});
+
+  const [adRows] = await db.execute("SELECT * FROM ads WHERE id = ?", [editData.oldAdId]);
+  const oldAd = adRows[0];
+
+  if (!oldAd || oldAd.status !== 'active') {
+      await db.execute("DELETE FROM ad_edits WHERE editId = ?", [editId]);
+      return ctx.answerCallbackQuery("Хато: Асл эълон каналда фаол эмас.", {show_alert:true});
+  }
+
+  const photos = editData.photoId.split(",");
+  const photoUrls = await Promise.all(
+    photos.map(async (id) => {
+      const file = await bot.api.getFile(id);
+      return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+    })
+  );
+  const collagePath = await createCollage(photoUrls);
+
+  const newCaption =
+    `🆔 ID: ${oldAd.id}\n🚗 Мошина: ${editData.carDetails}\n📅 Йили: ${editData.year}\n👣 Пробег: ${editData.probeg}\n` +
+    `💎 Краскаси: ${editData.paint}\n🎨 Ранги: ${editData.color}\n✅ Каробка: ${editData.transmission}\n` +
+    `⛽ Ёқилғи: ${editData.fuel}\n💰 Нархи: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n` +
+    `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
+
+  const channelMarkup = new InlineKeyboard().url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
+    .url("🤖 ЭЪЛОН БЕРИШ (Текин)", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
+
+  try {
+    // Каналдаги ХАБАРНИ ва РАСМНИ (Коллажни) алмаштириш
+    await bot.api.editMessageMedia(CHANNEL_ID, oldAd.channelMsgId, {
+        type: "photo",
+        media: new InputFile(collagePath),
+        caption: newCaption,
+        parse_mode: "HTML"
+    }, { reply_markup: channelMarkup });
+
+    // Базадаги асосий эълонни янгилаш
+    await db.execute(
+        `UPDATE ads SET carDetails=?, year=?, probeg=?, paint=?, color=?, transmission=?, fuel=?, price=?, phone=?, region=?, photoId=? WHERE id=?`,
+        [editData.carDetails, editData.year, editData.probeg, editData.paint, editData.color, editData.transmission, editData.fuel, editData.price, editData.phone, editData.region, editData.photoId, oldAd.id]
+    );
+
+    // Вақтинчалик жадвалдан ўчириб ташлаш
+    await db.execute("DELETE FROM ad_edits WHERE editId = ?", [editId]);
+    if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
+
+    await ctx.editMessageCaption({ caption: "✅ <b>Каналдаги эълон муваффақиятли янгиланди!</b>", parse_mode: "HTML" });
+    await bot.api.sendMessage(editData.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг эълонингиз каналда муваффақиятли янгиланди.`, { parse_mode: "HTML", reply_markup: mainMenu });
+
+  } catch (error) {
+    console.error("Каналда хабарни янгилашда хатолик:", error);
+    await ctx.reply("❌ Каналдаги эълонни янгилаб бўлмади. Хабар ўчирилган бўлиши мумкин.");
+  }
+});
+
+bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
+  const editId = ctx.match[1];
+  const [editRows] = await db.execute("SELECT * FROM ad_edits WHERE editId = ?", [editId]);
+  const editData = editRows[0];
+
+  if (editData) {
+    await db.execute("DELETE FROM ad_edits WHERE editId = ?", [editId]);
+    await ctx.editMessageCaption({ caption: "❌ <b>Эълонни янгилаш рад этилди.</b>", parse_mode: "HTML" });
+    try {
+        await bot.api.sendMessage(editData.userId, `❌ <b>Эълонни янгилаш рад этилди.</b>\n\nАдминлар ўзгаришни қоидаларга мос эмас деб топди ва каналдаги эски эълонингиз ўзгаришсиз қолди.`, { parse_mode: "HTML", reply_markup: mainMenu });
+    } catch (e) {}
+  } else {
+      await ctx.answerCallbackQuery("Бу сўров аллақачон кўриб чиқилган.", {show_alert:true});
   }
 });
 bot.start();
