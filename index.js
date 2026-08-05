@@ -976,7 +976,7 @@ async function createAdConversation(conversation, ctx) {
                 await ctx.api.sendVideo(ADMIN_ID, ad.videoId, { reply_to_message_id: adminMsg.message_id });
             }
 
-            ctx.session.editAdData = null; 
+            if (ctx.session) ctx.session.editAdData = null;
             await ctx.reply("✅ <b>Таҳрирланган эълон админга муваффақиятли юборилди!</b>\n\nТекширувдан сўнг каналдаги эълон янгиланади.", { parse_mode: "HTML", reply_markup: mainMenu });
             return; 
           }
@@ -999,7 +999,7 @@ async function createAdConversation(conversation, ctx) {
               await ctx.api.sendVideo(ADMIN_ID, ad.videoId, { reply_to_message_id: adminMsg.message_id });
           }
 
-          ctx.session.editAdData = null; 
+          if (ctx.session) ctx.session.editAdData = null;
           await ctx.reply("✅ <b>Эълонингиз админга муваффақиятли юборилди!</b>\n\nТекширувдан сўнг каналга жойланади.", { parse_mode: "HTML", reply_markup: mainMenu });
           return; 
         }
@@ -1016,9 +1016,9 @@ async function createAdConversation(conversation, ctx) {
     }
   }
   
-  ctx.session.editAdData = null; 
-  await ctx.reply("❌ <b>Эълон бериш бекор қилинди.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
-  await deleteMsgs(ctx, chatToClean);
+if (ctx.session) ctx.session.editAdData = null; // ТОЗАЛАШ
+await ctx.reply("❌ <b>Эълон бериш бекор қилинди.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
+await deleteMsgs(ctx, chatToClean);
 }
 bot.use(createConversation(createAdConversation));
 
@@ -1217,9 +1217,8 @@ bot.hears("📝 Эълон Ясаш", async (ctx) => {
       return ctx.reply("❗️ <b>Сизда чеклов мавжуд!</b>\n\nБир вақтнинг ўзида энг кўпи билан <b>3 та</b> фаол эълонингиз бўлиши мумкин. Янги эълон бериш учун '📂 Менинг эълонларим' бўлимидан эскиларини 'Сотилди' деб белгиланг.", { parse_mode: "HTML" });
     }
   }
-ctx.session.editAdData = null;
-  // Ҳаммаси жойида бўлса ёки АДМИН бўлса, эълон бериш жараёнини бошлаш
-  await ctx.conversation.enter("createAdConversation");
+if (ctx.session) ctx.session.editAdData = null;
+await ctx.conversation.enter("createAdConversation");
 });
 
 bot.hears("🔍 Мошина қидириш", async (ctx) => {
