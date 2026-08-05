@@ -411,38 +411,46 @@ bot.use(createConversation(searchCarConversation));
  * ✅ ЭЪЛОН ЯРАТИШ ЖАРАЁНИ
  */
 async function createAdConversation(conversation, ctx) {
-  const ad = { photos: [] };
   let step = "BRAND";
   let isEditing = false; 
   const chatToClean = []; 
 
-  let isFullUpdate = false; // Таҳрирлаш режимими ёки йўқми?
+  let isFullUpdate = false; 
   let updateAdId = null;
 
-  if (ctx.session?.editAdId) {
-    isFullUpdate = true;
-    updateAdId = ctx.session.editAdId;
-    ctx.session.editAdId = null; // Тозалаб юборамиз
-
-    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [updateAdId]);
-    const existingAd = rows[0];
-
-    if (existingAd) {
-      const parts = existingAd.carDetails.split(" ");
-      ad.brand = parts[0] || "Бошқа";
-      ad.model = parts.slice(1).join(" ") || "";
-      ad.year = existingAd.year;
-      ad.probeg = existingAd.probeg;
-      ad.paint = existingAd.paint;
-      ad.color = existingAd.color;
-      ad.trans = existingAd.transmission;
-      ad.fuel = existingAd.fuel;
-      ad.price = existingAd.price;
-      ad.phone = existingAd.phone;
-      ad.region = existingAd.region;
-      ad.photos = existingAd.photoId.split(",");
-      step = "PREVIEW"; // Бирдан таҳрирлаш менюсига сакратамиз
+  // 1. БАЗАДАН МАЪЛУМОТ ОЛИШ (conversation.external орқали - бот хотирасини йўқотмаслиги учун)
+  const existingAd = await conversation.external(async () => {
+    if (ctx.session && ctx.session.editAdId) {
+      const id = ctx.session.editAdId;
+      ctx.session.editAdId = null; // Фақат биринчи марта ўқиганда тозалаймиз
+      const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [id]);
+      return rows[0] || null;
     }
+    return null;
+  });
+
+  const ad = { photos: [] };
+
+  // 2. АГАР МАЪЛУМОТ ТОПИЛСА, БИРДАН PREVIEW ГА ЎТКАЗАМИЗ
+  if (existingAd) {
+    isFullUpdate = true;
+    updateAdId = existingAd.id;
+
+    const parts = existingAd.carDetails.split(" ");
+    ad.brand = parts[0] || "Бошқа";
+    ad.model = parts.slice(1).join(" ") || "";
+    ad.year = existingAd.year;
+    ad.probeg = existingAd.probeg;
+    ad.paint = existingAd.paint;
+    ad.color = existingAd.color;
+    ad.trans = existingAd.transmission;
+    ad.fuel = existingAd.fuel;
+    ad.price = existingAd.price;
+    ad.phone = existingAd.phone;
+    ad.region = existingAd.region;
+    ad.photos = existingAd.photoId.split(",");
+    
+    step = "PREVIEW"; // Жараённи тўғридан-тўғри Кўриб чиқишга сакратамиз
   }
 
   await ctx.reply(isFullUpdate ? "📝 <b>Эълонни таҳрирлаш бошланди.</b>" : "📝 <b>Эълон бериш бошланди.</b>", { reply_markup: { remove_keyboard: true }, parse_mode: "HTML" });
@@ -464,8 +472,6 @@ async function createAdConversation(conversation, ctx) {
     "Tesla": ["Model 3", "Model Y", "Model S"],
     "Бошқа": [],
   };
-
-  await ctx.reply("📝 <b>Эълон бериш бошланди.</b>", { reply_markup: { remove_keyboard: true }, parse_mode: "HTML" });
 
   while (true) {
     let msgPrompt;
@@ -742,7 +748,7 @@ async function createAdConversation(conversation, ctx) {
 
         if (action === "cancel_ad") break;
         
-       if (action === "submit_ad") {
+        if (action === "submit_ad") {
           // 1. АГАР БУ ТАҲРИРЛАНГАН ЭЪЛОН БЎЛСА:
           if (isFullUpdate) {
             const [result] = await db.execute(
@@ -766,7 +772,7 @@ async function createAdConversation(conversation, ctx) {
             return; 
           }
 
-          // 2. АГАР БУ ЯНГИ ЭЪЛОН БЎЛСА (Ўзингизни эски кодингиз):
+          // 2. АГАР БУ ЯНГИ ЭЪЛОН БЎЛСА:
           const [result] = await db.execute(
             `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
             [ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(",")]
