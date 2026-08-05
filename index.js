@@ -63,18 +63,17 @@ if (!fs.existsSync(collagesDir)) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await db.execute(`
-      ALTER TABLE ads 
-      ADD COLUMN IF NOT EXISTS history TEXT DEFAULT NULL, 
-      ADD COLUMN IF NOT EXISTS barter VARCHAR(255) DEFAULT NULL, 
-      ADD COLUMN IF NOT EXISTS videoId VARCHAR(255) DEFAULT NULL
-    `);
-    await db.execute(`
-      ALTER TABLE ad_edits 
-      ADD COLUMN IF NOT EXISTS history TEXT DEFAULT NULL, 
-      ADD COLUMN IF NOT EXISTS barter VARCHAR(255) DEFAULT NULL, 
-      ADD COLUMN IF NOT EXISTS videoId VARCHAR(255) DEFAULT NULL
-    `);
+  const alterQueries = [
+      "ALTER TABLE ads ADD COLUMN history TEXT DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN videoId VARCHAR(255) DEFAULT NULL",
+      "ALTER TABLE ad_edits ADD COLUMN history TEXT DEFAULT NULL",
+      "ALTER TABLE ad_edits ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
+      "ALTER TABLE ad_edits ADD COLUMN videoId VARCHAR(255) DEFAULT NULL"
+    ];
+    for (const q of alterQueries) {
+      try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
+    }
     console.log("✅ Жадваллар текширилди (тайёр).");
   } catch (error) {
     console.error("❌ Жадвал яратишда хатолик:", error);
@@ -758,7 +757,7 @@ async function createAdConversation(conversation, ctx) {
         ad.region = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
-        step = isEditing ? "PREVIEW" : "PHOTOS";
+        step = isEditing ? "PREVIEW" : "HISTORY";
       }
       // ================= ЯНГИ: 1. ШАФФОФ ТАРИХ =================
       else if (step === "HISTORY") {
@@ -846,45 +845,7 @@ async function createAdConversation(conversation, ctx) {
         if (step === "BARTER") { await deleteMsgs(ctx, chatToClean); continue; }
         await deleteMsgs(ctx, chatToClean);
       }
-      else if (step === "PHOTOS") {
-        const kb = new InlineKeyboard().text("✅ Бўлди (Юбориш)", "done_photos").row().text("🔙 Орқага", "back_REGION").text("❌ Бекор", "cancel_ad");
-        msgPrompt = await ctx.reply("📸 <b>Мошинангиз расмларини юборинг (1-6 та):</b>\n\n<i>Расмларни белгилаб бирданига юбориш мумкин. Барчасини юбориб бўлгач, «✅ Бўлди» ни босинг.</i>", { reply_markup: kb, parse_mode: "HTML" });
-        chatToClean.push(msgPrompt.message_id);
-        
-        ad.photos = [];
-        while (ad.photos.length < 6) {
-          const res = await conversation.waitFor(["message:photo", "callback_query:data"]);
-          if (res.message) chatToClean.push(res.message.message_id);
-          if (res.callbackQuery?.data === "cancel_ad") { step = "CANCEL"; break; }
-          if (res.callbackQuery?.data === "back_REGION") { step = "REGION"; await safeAnswerCbq(res); break; }
-          
-          if (res.callbackQuery?.data === "done_photos") {
-            await safeAnswerCbq(res);
-            if (ad.photos.length === 0) {
-              let m = await ctx.reply("❗️ Камида 1 та расм юборишингиз керак!");
-              chatToClean.push(m.message_id);
-              continue;
-            }
-            step = "PREVIEW"; break;
-          }
-          if (res.message?.photo) {
-            const photoArr = res.message.photo;
-            if (Array.isArray(photoArr) && photoArr.length > 0) {
-              ad.photos.push(photoArr[photoArr.length - 1].file_id);
-              try { await ctx.api.deleteMessage(ctx.chat.id, msgPrompt.message_id); } catch (e) {}
-              if (ad.photos.length === 6) { 
-                await ctx.reply("✅ Максимал 6 та расм қабул қилинди.");
-                step = "PREVIEW"; break; 
-              }
-              msgPrompt = await ctx.reply(`✅ <b>${ad.photos.length}-расм қабул қилинди!</b>\nЯна расм юборинг ёки «✅ Бўлди (Юбориш)» тугмасини босинг.`, { reply_markup: kb, parse_mode: "HTML" });
-              chatToClean.push(msgPrompt.message_id);
-            }
-          }
-        }
-        if (step === "CANCEL") break;
-        if (step === "REGION") { await deleteMsgs(ctx, chatToClean); continue; }
-        await deleteMsgs(ctx, chatToClean);
-      }
+
 
 else if (step === "PREVIEW") {
         isEditing = false;
@@ -1049,11 +1010,22 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
     );
     const collagePath = await createCollage(photoUrls);
 
-    const caption =
+    // ================= ЎЗГАРГАН ҚИСМ: Капцион динамик ясалади =================
+    let caption =
       `🆔 ID: ${ad.id}\n🚗 Мошина: ${ad.carDetails}\n📅 Йили: ${ad.year}\n👣 Пробег: ${ad.probeg}\n` +
       `💎 Краскаси: ${ad.paint}\n🎨 Ранги: ${ad.color}\n✅ Каробка: ${ad.transmission}\n` +
-      `⛽ Ёқилғи: ${ad.fuel}\n💰 Нархи: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
+      `⛽ Ёқилғи: ${ad.fuel}\n`;
+
+    if (ad.history && ad.history !== "Кўрсатилмаган") {
+      caption += `🛠 Тарихи: ${ad.history}\n`;
+    }
+    if (ad.barter && ad.barter !== "Йўқ") {
+      caption += `🔄 Бартер: ${ad.barter}\n`;
+    }
+
+    caption += `💰 Нархи: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
+    // =========================================================================
 
     const channelMarkup = new InlineKeyboard().url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
       .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
@@ -1063,11 +1035,22 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
         caption: caption, reply_markup: channelMarkup, parse_mode: "HTML",
       });
 
+      // ================= ЎЗГАРГАН ҚИСМ: Видео бўлса каналга жўнатилади =================
+      if (ad.videoId) {
+        try {
+          await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: msg.message_id });
+        } catch (vidErr) {
+          console.error("Видеони каналга юборишда хатолик:", vidErr);
+        }
+      }
+      // =========================================================================
+
       await db.execute("UPDATE ads SET status='active', channelMsgId=? WHERE id=?", [msg.message_id, adId]);
       if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
       
       await ctx.editMessageCaption({ caption: "✅ Каналга жойланди!", parse_mode: "HTML" });
       await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналга жойланди.\n\nКанални кўриш: https://t.me/engarzonidamoshina`, { parse_mode: "HTML", reply_markup: mainMenu });
+      
       try {
         const [alerts] = await db.execute("SELECT * FROM alerts");
         const adPrice = parseInt(ad.price.replace(/\D/g, "")) || 0;
@@ -1352,11 +1335,22 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
   );
   const collagePath = await createCollage(photoUrls);
 
-  const newCaption =
+  // ================= ЎЗГАРГАН ҚИСМ: Капцион динамик ясалади =================
+  let newCaption =
     `🆔 ID: ${oldAd.id}\n🚗 Мошина: ${editData.carDetails}\n📅 Йили: ${editData.year}\n👣 Пробег: ${editData.probeg}\n` +
     `💎 Краскаси: ${editData.paint}\n🎨 Ранги: ${editData.color}\n✅ Каробка: ${editData.transmission}\n` +
-    `⛽ Ёқилғи: ${editData.fuel}\n💰 Нархи: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n` +
+    `⛽ Ёқилғи: ${editData.fuel}\n`;
+
+  if (editData.history && editData.history !== "Кўрсатилмаган") {
+    newCaption += `🛠 Тарихи: ${editData.history}\n`;
+  }
+  if (editData.barter && editData.barter !== "Йўқ") {
+    newCaption += `🔄 Бартер: ${editData.barter}\n`;
+  }
+
+  newCaption += `💰 Нархи: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n` +
     `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
+  // =========================================================================
 
   const channelMarkup = new InlineKeyboard().url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
     .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
@@ -1370,11 +1364,22 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
         parse_mode: "HTML"
     }, { reply_markup: channelMarkup });
 
-    // Базадаги асосий эълонни янгилаш
+    // ================= ЎЗГАРГАН ҚИСМ: Видео бўлса каналга жўнатилади =================
+    if (editData.videoId) {
+      try {
+        await bot.api.sendVideo(CHANNEL_ID, editData.videoId, { reply_to_message_id: oldAd.channelMsgId });
+      } catch (vidErr) {
+        console.error("Янги видеони каналга юборишда хатолик:", vidErr);
+      }
+    }
+    // =========================================================================
+
+    // ================= ЎЗГАРГАН ҚИСМ: UPDATE сўровига history, barter, videoId қўшилди =================
     await db.execute(
-        `UPDATE ads SET carDetails=?, year=?, probeg=?, paint=?, color=?, transmission=?, fuel=?, price=?, phone=?, region=?, photoId=? WHERE id=?`,
-        [editData.carDetails, editData.year, editData.probeg, editData.paint, editData.color, editData.transmission, editData.fuel, editData.price, editData.phone, editData.region, editData.photoId, oldAd.id]
+        `UPDATE ads SET carDetails=?, year=?, probeg=?, paint=?, color=?, transmission=?, fuel=?, price=?, phone=?, region=?, photoId=?, history=?, barter=?, videoId=? WHERE id=?`,
+        [editData.carDetails, editData.year, editData.probeg, editData.paint, editData.color, editData.transmission, editData.fuel, editData.price, editData.phone, editData.region, editData.photoId, editData.history || "Кўрсатилмаган", editData.barter || "Йўқ", editData.videoId || null, oldAd.id]
     );
+    // =========================================================================
 
     // Вақтинчалик жадвалдан ўчириб ташлаш
     await db.execute("DELETE FROM ad_edits WHERE editId = ?", [editId]);
