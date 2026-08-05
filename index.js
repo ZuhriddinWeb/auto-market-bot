@@ -1145,7 +1145,7 @@ async function editPriceConversation(conversation, ctx) {
       `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
 
     const channelMarkup = new InlineKeyboard().url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
-      .url("🤖 ЭЪЛОН БЕРИШ (Текин)", "https://t.me/arzonida_bot").row().url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
+      .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
 
     await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, {
       caption: newCaption,
