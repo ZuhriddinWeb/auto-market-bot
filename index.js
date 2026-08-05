@@ -414,33 +414,47 @@ async function createAdConversation(conversation, ctx) {
   const ad = { photos: [] };
   let isFullUpdate = false; 
   let updateAdId = null;
+  let step = "BRAND"; // Одатий ҳолатда бошидан бошлайди
 
-  // 1. СЕССИЯДАН МАЪЛУМОТНИ ЎҚИШ (Қайта-қайта ўқилганда ҳам ўчиб кетмайди)
-  if (ctx.session?.editAdData) {
-    isFullUpdate = true;
-    const existingAd = ctx.session.editAdData;
-    updateAdId = existingAd.id;
+  // 1. АСОСИЙ ЕЧИМ: Сессиядан эмас, босилган тугманинг ўзидан оламиз!
+  const cbData = ctx.callbackQuery?.data;
 
-    const parts = existingAd.carDetails.split(" ");
-    ad.brand = parts[0] || "Бошқа";
-    ad.model = parts.slice(1).join(" ") || "";
-    ad.year = existingAd.year;
-    ad.probeg = existingAd.probeg;
-    ad.paint = existingAd.paint;
-    ad.color = existingAd.color;
-    ad.trans = existingAd.transmission;
-    ad.fuel = existingAd.fuel;
-    ad.price = existingAd.price;
-    ad.phone = existingAd.phone;
-    ad.region = existingAd.region;
-    ad.photos = existingAd.photoId.split(",");
+  // Агар фойдаланувчи "Тўлиқ таҳрирлаш" тугмаси билан кирган бўлса:
+  if (cbData && cbData.startsWith("full_edit_req:")) {
+    const adId = cbData.split(":")[1];
+
+    // Базадан маълумотни АЙНАН conversation ичида ўқиймиз
+    const existingAd = await conversation.external(async () => {
+      const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+      return rows[0] || null;
+    });
+
+    if (existingAd) {
+      isFullUpdate = true;
+      updateAdId = existingAd.id;
+
+      const parts = existingAd.carDetails.split(" ");
+      ad.brand = parts[0] || "Бошқа";
+      ad.model = parts.slice(1).join(" ") || "";
+      ad.year = existingAd.year;
+      ad.probeg = existingAd.probeg;
+      ad.paint = existingAd.paint;
+      ad.color = existingAd.color;
+      ad.trans = existingAd.transmission;
+      ad.fuel = existingAd.fuel;
+      ad.price = existingAd.price;
+      ad.phone = existingAd.phone;
+      ad.region = existingAd.region;
+      ad.photos = existingAd.photoId.split(",");
+      
+      step = "PREVIEW"; // Бирдан таҳрирлаш менюсига сакраймиз!
+    }
   }
 
-  // 2. АГАР ТАҲРИРЛАШ БЎЛСА, БИРДАН "PREVIEW" ДАН БОШЛАЙМИЗ
-  let step = isFullUpdate ? "PREVIEW" : "BRAND";
   let isEditing = false; 
   const chatToClean = []; 
 
+  // Агар ҳаммаси тўғри ишласа, энди бу ерда "Эълонни таҳрирлаш бошланди" деган ёзув чиқади
   await ctx.reply(isFullUpdate ? "📝 <b>Эълонни таҳрирлаш бошланди.</b>" : "📝 <b>Эълон бериш бошланди.</b>", { reply_markup: { remove_keyboard: true }, parse_mode: "HTML" });
 
   const carCatalog = {
