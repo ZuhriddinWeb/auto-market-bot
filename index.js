@@ -290,7 +290,7 @@ bot.use(createConversation(broadcastConversation));
 /**
  * ✅ АДМИН БУЙРУҚЛАРИ
  */
-const adminMenu = new InlineKeyboard().text("📊 Статистика", "admin_stats").row().text("📢 Рассылка", "admin_broadcast").row().text("❌ Ёпиш", "admin_close");
+const adminMenu = new InlineKeyboard().text("📊 Статистика", "admin_stats").row().text("⏳ Кутаётганлар", "admin_pending").row().text("📢 Рассылка", "admin_broadcast").row().text("❌ Ёпиш", "admin_close");
 
 bot.command("admin", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
@@ -437,7 +437,54 @@ bot.callbackQuery("admin_broadcast", async (ctx) => {
   await ctx.deleteMessage();
   await ctx.conversation.enter("broadcastConversation");
 });
+bot.callbackQuery("admin_pending", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.answerCallbackQuery("⏳ Эълон қидирилмоқда...");
+  
+  // 1. Янги эълонларни текширамиз
+  const [pendingAds] = await db.execute("SELECT * FROM ads WHERE status = 'pending' ORDER BY id ASC LIMIT 1");
+  if (pendingAds.length > 0) {
+      const ad = pendingAds[0];
+      const photoUrls = await Promise.all(ad.photoId.split(",").map(async (id) => `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${(await bot.api.getFile(id)).file_path}`));
+      const collagePath = await createCollage(photoUrls);
 
+      let caption = `🆔 <b>ID: ${ad.id}</b>\n🚗 Мошина: ${ad.carDetails}\n📅 Йили: ${ad.year}\n👣 Пробег: ${ad.probeg}\n💎 Краскаси: ${ad.paint}\n🎨 Ранги: ${ad.color}\n✅ Каробка: ${ad.transmission}\n⛽ Ёқилғи: ${ad.fuel}\n`;
+      if (ad.history && ad.history !== "Кўрсатилмаган") caption += `🛠 Тарихи: ${ad.history}\n`;
+      if (ad.barter && ad.barter !== "Йўқ") caption += `🔄 Бартер: ${ad.barter}\n`;
+      caption += `💰 Нархи: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ad.userId}">Профиль</a>`;
+
+      const adminKb = new InlineKeyboard().text("✅ Қабул қилиш", `approve:${ad.id}`).text("❌ Рад этиш", `reject:${ad.id}`);
+      
+      await ctx.deleteMessage().catch(()=>{});
+      const adminMsg = await ctx.replyWithPhoto(new InputFile(collagePath), { caption, reply_markup: adminKb, parse_mode: "HTML" });
+      if (ad.videoId) { try { await ctx.replyWithVideo(ad.videoId, { reply_to_message_id: adminMsg.message_id }); } catch(e){} }
+      if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
+      return;
+  }
+
+  // 2. Таҳрирланган эълонларни текширамиз
+  const [pendingEdits] = await db.execute("SELECT * FROM ad_edits ORDER BY editId ASC LIMIT 1");
+  if (pendingEdits.length > 0) {
+      const editData = pendingEdits[0];
+      const photoUrls = await Promise.all(editData.photoId.split(",").map(async (id) => `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${(await bot.api.getFile(id)).file_path}`));
+      const collagePath = await createCollage(photoUrls);
+
+      let caption = `🔄 <b>ЭЪЛОННИ ЯНГИЛАШ СЎРОВИ!</b>\n\n🆔 Эски ID: ${editData.oldAdId}\n🚗 Мошина: ${editData.carDetails}\n📅 Йили: ${editData.year}\n👣 Пробег: ${editData.probeg}\n💎 Краскаси: ${editData.paint}\n🎨 Ранги: ${editData.color}\n✅ Каробка: ${editData.transmission}\n⛽ Ёқилғи: ${editData.fuel}\n`;
+      if (editData.history && editData.history !== "Кўрсатилмаган") caption += `🛠 Тарихи: ${editData.history}\n`;
+      if (editData.barter && editData.barter !== "Йўқ") caption += `🔄 Бартер: ${editData.barter}\n`;
+      caption += `💰 Нархи: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${editData.userId}">Профиль</a>`;
+
+      const adminKb = new InlineKeyboard().text("✅ Ўзгаришни тасдиқлаш", `approve_edit:${editData.editId}`).text("❌ Рад этиш", `reject_edit:${editData.editId}`);
+      
+      await ctx.deleteMessage().catch(()=>{});
+      const adminMsg = await ctx.replyWithPhoto(new InputFile(collagePath), { caption, reply_markup: adminKb, parse_mode: "HTML" });
+      if (editData.videoId) { try { await ctx.replyWithVideo(editData.videoId, { reply_to_message_id: adminMsg.message_id }); } catch(e){} }
+      if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
+      return;
+  }
+
+  await ctx.editMessageText("✅ <b>Тасдиқ кутаётган эълонлар йўқ!</b> База тоза.", { parse_mode: "HTML", reply_markup: adminMenu });
+});
 
 /**
  * ✅ МОШИНА ҚИДИРИШ ЖАРАЁНИ
@@ -957,6 +1004,10 @@ async function createAdConversation(conversation, ctx) {
         if (action === "cancel_ad") break;
         
         if (action === "submit_ad") {
+          const [[pAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'pending'");
+          const [[pEdits]] = await db.execute("SELECT COUNT(*) as count FROM ad_edits");
+          const totalPending = pAds.count + pEdits.count + 1; // Ўзи билан бирга
+          const countText = `\n\n📦 <b>Тасдиқ кутаётганлар сони: ${totalPending} та</b>`;
           if (isFullUpdate) {
             const [result] = await db.execute(
               `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -966,7 +1017,7 @@ async function createAdConversation(conversation, ctx) {
             
             const adminCollage = await createCollage(photoUrls);
             const adminMsg = await ctx.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
-              caption: `🔄 <b>ЭЪЛОННИ ЯНГИЛАШ СЎРОВИ!</b>\n\n🆔 <b>Эски ID: ${updateAdId}</b>\n\n${caption}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>`,
+              caption: `🔄 <b>ЭЪЛОННИ ЯНГИЛАШ СЎРОВИ!</b>\n\n🆔 <b>Эски ID: ${updateAdId}</b>\n\n${caption}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>${countText}`,
               reply_markup: new InlineKeyboard().text("✅ Ўзгаришни тасдиқлаш", `approve_edit:${editId}`).text("❌ Рад этиш", `reject_edit:${editId}`),
               parse_mode: "HTML",
             });
@@ -989,7 +1040,7 @@ async function createAdConversation(conversation, ctx) {
           
           const adminCollage = await createCollage(photoUrls);
           const adminMsg = await ctx.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
-            caption: `🆔 <b>ID: ${adId}</b>\n\n${caption}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>`,
+            caption: `🆔 <b>ID: ${adId}</b>\n\n${caption}\n\n👤 Фойдаланувчи: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>${countText}`,
             reply_markup: new InlineKeyboard().text("✅ Қабул қилиш", `approve:${adId}`).text("❌ Рад этиш", `reject:${adId}`),
             parse_mode: "HTML",
           });
@@ -1078,7 +1129,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
       await db.execute("UPDATE ads SET status='active', channelMsgId=? WHERE id=?", [msg.message_id, adId]);
       if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
       
-      await ctx.editMessageCaption({ caption: "✅ Каналга жойланди!", parse_mode: "HTML" });
+      await ctx.editMessageCaption({ caption: "✅ Каналга жойланди!", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Кейингисини кўриш", "admin_pending") });
       await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналга жойланди.\n\nКанални кўриш: https://t.me/engarzonidamoshina`, { parse_mode: "HTML", reply_markup: mainMenu });
       
       try {
@@ -1110,7 +1161,7 @@ bot.callbackQuery(/^reject:(\d+)/, async (ctx) => {
   
   if (ad && ad.status === "pending") {
     await db.execute("UPDATE ads SET status='rejected' WHERE id=?", [adId]);
-    await ctx.editMessageCaption({ caption: "❌ <b>Эълон рад этилди.</b>", parse_mode: "HTML" });
+    await ctx.editMessageCaption({ caption: "❌ <b>Эълон рад этилди.</b>", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Кейингисини кўриш", "admin_pending") });
     try {
         await bot.api.sendMessage(ad.userId, `❌ <b>Эълонингиз рад этилди.</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз қоидаларга мос келмаганлиги сабабли рад этилди. Илтимос, маълумотларни тўғрилаб қайтадан эълон беринг.`, { parse_mode: "HTML", reply_markup: mainMenu });
     } catch (e) {}
@@ -1412,7 +1463,7 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
     await db.execute("DELETE FROM ad_edits WHERE editId = ?", [editId]);
     if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
 
-    await ctx.editMessageCaption({ caption: "✅ <b>Каналдаги эълон муваффақиятли янгиланди!</b>", parse_mode: "HTML" });
+    await ctx.editMessageCaption({ caption: "✅ <b>Каналдаги эълон муваффақиятли янгиланди!</b>", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Кейингисини кўриш", "admin_pending") });
     await bot.api.sendMessage(editData.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг эълонингиз каналда муваффақиятли янгиланди.`, { parse_mode: "HTML", reply_markup: mainMenu });
 
   } catch (error) {
@@ -1428,7 +1479,7 @@ bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
 
   if (editData) {
     await db.execute("DELETE FROM ad_edits WHERE editId = ?", [editId]);
-    await ctx.editMessageCaption({ caption: "❌ <b>Эълонни янгилаш рад этилди.</b>", parse_mode: "HTML" });
+    await ctx.editMessageCaption({ caption: "❌ <b>Эълонни янгилаш рад этилди.</b>", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Кейингисини кўриш", "admin_pending") });
     try {
         await bot.api.sendMessage(editData.userId, `❌ <b>Эълонни янгилаш рад этилди.</b>\n\nАдминлар ўзгаришни қоидаларга мос эмас деб топди ва каналдаги эски эълонингиз ўзгаришсиз қолди.`, { parse_mode: "HTML", reply_markup: mainMenu });
     } catch (e) {}
