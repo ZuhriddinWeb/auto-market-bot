@@ -1091,7 +1091,6 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
     );
     const collagePath = await createCollage(photoUrls);
 
-    // ================= ЎЗГАРГАН ҚИСМ: Капцион динамик ясалади =================
     let caption =
       `🆔 ID: ${ad.id}\n🚗 Мошина: ${ad.carDetails}\n📅 Йили: ${ad.year}\n👣 Пробег: ${ad.probeg}\n` +
       `💎 Краскаси: ${ad.paint}\n🎨 Ранги: ${ad.color}\n✅ Каробка: ${ad.transmission}\n` +
@@ -1106,7 +1105,6 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
 
     caption += `💰 Нархи: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
-    // =========================================================================
 
     const channelMarkup = new InlineKeyboard().url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
       .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
@@ -1115,8 +1113,10 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
       const msg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
         caption: caption, reply_markup: channelMarkup, parse_mode: "HTML",
       });
+      
+      // ЯНГИ: Терминалда эълон қайси каналга кетганини аниқ кўрсатади
+      console.log(`✅ YANGI E'LON KANALGA TUSHDI! Kanal: ${CHANNEL_ID}, Xabar ID: ${msg.message_id}`);
 
-      // ================= ЎЗГАРГАН ҚИСМ: Видео бўлса каналга жўнатилади =================
       if (ad.videoId) {
         try {
           await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: msg.message_id });
@@ -1124,13 +1124,18 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
           console.error("Видеони каналга юборишда хатолик:", vidErr);
         }
       }
-      // =========================================================================
 
       await db.execute("UPDATE ads SET status='active', channelMsgId=? WHERE id=?", [msg.message_id, adId]);
       if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
       
       await ctx.editMessageCaption({ caption: "✅ Каналга жойланди!", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Кейингисини кўриш", "admin_pending") });
-      await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналга жойланди.\n\nКанални кўриш: https://t.me/engarzonidamoshina`, { parse_mode: "HTML", reply_markup: mainMenu });
+      
+      // ЯНГИ: Агар узер ботни блок қилиб қўйган бўлса, дастур қулаб тушмаслиги учун ҳимоя (try-catch)
+      try {
+          await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналга жойланди.\n\nКанални кўриш: https://t.me/engarzonidamoshina`, { parse_mode: "HTML", reply_markup: mainMenu });
+      } catch (e) {
+          console.log(`⚠️ ${ad.userId} ID эгаси ботни блок қилгани сабабли хабар борmadi.`);
+      }
       
       try {
         const [alerts] = await db.execute("SELECT * FROM alerts");
@@ -1146,7 +1151,9 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
             }
         }
       } catch(e) { console.error("Хабарнома юборишда хато:", e); }
+      
     } catch (e) {
+      console.error("Kanalga yuborishda xatolik:", e);
       await ctx.reply("Хатолик: Каналга юбориб бўлмади. Бот каналда админ эканлигини текширинг.");
     }
   } else {
