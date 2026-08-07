@@ -125,8 +125,8 @@ bot.use(conversations());
 
 const mainMenu = new Keyboard()
   .text("📝 Эълон Ясаш").text("🔍 Мошина қидириш").row()
-  .text("📂 Менинг эълонларим").text("🎁 Бепул VIP (UP)").resized();
-
+  .text("📂 Менинг эълонларим").text("🎁 Бепул VIP (UP)").row()
+  .text("🧮 Мошина нархлаш").resized();
 /**
  * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
  */
@@ -1104,6 +1104,165 @@ await deleteMsgs(ctx, chatToClean);
 bot.use(createConversation(createAdConversation));
 
 /**
+ * ✅ АВТО-БАҲОЛАШ КАЛЬКУЛЯТОРИ ЖАРАЁНИ
+ */
+async function evaluateCarConversation(conversation, ctx) {
+  const cancelTexts = ["/start", "/cancel", "📝 Эълон Ясаш", "🔍 Мошина қидириш", "📂 Менинг эълонларим", "🎁 Бепул VIP (UP)", "🧮 Мошина нархлаш"];
+  let ad = {};
+  let step = "BRAND";
+  const chatToClean = [];
+
+  const originalWaitFor = conversation.waitFor.bind(conversation);
+  conversation.waitFor = async (args) => {
+    const res = await originalWaitFor(args);
+    if (res.message?.text && cancelTexts.includes(res.message.text)) {
+       Object.defineProperty(res, 'callbackQuery', { get: () => ({ data: "cancel_ad" }), configurable: true });
+    }
+    return res;
+  };
+
+  const carCatalog = {
+    "Chevrolet": ["Cobalt", "Gentra", "Lacetti", "Spark", "Nexia 1", "Nexia 2", "Nexia 3", "Matiz", "Damas", "Labo", "Tracker", "Onix", "Monza", "Malibu 1", "Malibu 2", "Captiva", "Captiva 5", "Equinox", "Tahoe", "Traverse", "Epica", "Orlando"],
+    "Daewoo": ["Matiz", "Nexia 1", "Tico", "Damas"],
+    "BYD": ["Chazor", "Song Plus", "Song Pro", "Song L", "Han", "Tang", "Seal", "Seagull", "Yuan Up", "Yuan Plus", "Destroyer 05", "e2"],
+    "Kia": ["Sonet", "K3", "K4", "K5", "K8", "K9", "Sportage", "Sorento", "Carnival", "Cerato", "Seltos", "EV6", "Bongo"],
+    "Hyundai": ["Accent", "Elantra", "Sonata", "Tucson", "Santa Fe", "Staria", "Porter", "Palisade", "Creta", "Kona"],
+    "Chery": ["Tiggo 2 Pro", "Tiggo 4 Pro", "Tiggo 7 Pro", "Tiggo 8 Pro", "Tiggo 9", "Arrizo 6 Pro"],
+    "Haval": ["Jolion", "M6", "H6", "Dargo", "H9"],
+    "Changan": ["UNI-K", "UNI-T", "UNI-V", "CS35 Plus", "CS55 Plus", "CS75 Plus", "Eado"],
+    "Geely": ["Coolray", "Monjaro", "Tugella", "Okavango", "Emgrand", "Geometry C"],
+    "Exeed": ["RX", "VX", "TXL", "LX"],
+    "Omoda": ["C5", "S5"],
+    "Jetour": ["X70", "X70 Plus", "X90 Plus", "Dashing", "T2"],
+    "Lada": ["Vesta", "Largus", "Granta", "Niva Legend", "Niva Travel", "XRAY"],
+    "Toyota": ["Camry", "Corolla", "Avalon", "Prado", "Land Cruiser 100", "Land Cruiser 200", "Land Cruiser 300", "RAV4", "Highlander", "Hilux", "Prius"],
+    "Lexus": ["LX", "RX", "ES", "NX", "GX"],
+    "Mercedes": ["C-Class", "E-Class", "S-Class", "GLE", "GLS", "G-Class"],
+    "BMW": ["3-Series", "5-Series", "7-Series", "X3", "X5", "X6", "X7"],
+    "Volkswagen": ["ID.4", "ID.6", "Bora", "Lavida", "Passat", "Tiguan", "Touareg"],
+    "Honda": ["CR-V", "Civic", "Accord", "e:NS1"],
+    "Nissan": ["Sylphy", "Altima", "X-Trail", "Qashqai"],
+    "Zeekr": ["001", "007", "009", "X"],
+    "Li Auto": ["L7", "L8", "L9", "Mega"],
+    "Xpeng": ["G6", "G9", "P7"],
+    "Tesla": ["Model 3", "Model Y", "Model S", "Model X"],
+    "Бошқа": [],
+  };
+
+  await ctx.reply("🧮 <b>Ақлли баҳолаш тизимига хуш келибсиз!</b>\n\nМошинангизнинг бозордаги реал нархини маълумотлар базамиздаги эълонлар асосида ҳисоблаб берамиз.", { reply_markup: mainMenu, parse_mode: "HTML" });
+
+  while (true) {
+    let msgPrompt;
+    try {
+      if (step === "BRAND") {
+        const kb = new InlineKeyboard();
+        Object.keys(carCatalog).forEach((b, i) => { kb.text(b, `b:${b}`); if ((i + 1) % 3 === 0) kb.row(); });
+        kb.row().text("❌ Бекор қилиш", "cancel_ad");
+        msgPrompt = await ctx.reply("🚗 <b>Маркани танланг:</b>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+        if (res.callbackQuery?.data === "cancel_ad") break;
+
+        ad.brand = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = "MODEL";
+      }
+      else if (step === "MODEL") {
+        const kb = new InlineKeyboard();
+        if (carCatalog[ad.brand] && carCatalog[ad.brand].length > 0) {
+          carCatalog[ad.brand].forEach((m, i) => { kb.text(m, `m:${m}`); if ((i + 1) % 3 === 0) kb.row(); });
+        }
+        kb.row().text("🔙 Орқага", "back_BRAND").text("❌ Бекор қилиш", "cancel_ad");
+        msgPrompt = await ctx.reply(`🚙 <b>${ad.brand}</b> моделини танланг:`, { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_BRAND") { step = "BRAND"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.model = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = "YEAR";
+      }
+      else if (step === "YEAR") {
+        const kb = new InlineKeyboard();
+        for (let y = 2026; y >= 2005; y--) { kb.text(y.toString(), `y:${y}`); if ((2026 - y + 1) % 4 === 0) kb.row(); }
+        kb.row().text("🔙 Орқага", "back_MODEL").text("❌ Бекор қилиш", "cancel_ad");
+        msgPrompt = await ctx.reply("📅 <b>Йилини танланг ёки ёзинг:</b>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_MODEL") { step = "MODEL"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.year = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text.replace(/\D/g, "");
+        if (!ad.year || ad.year.length < 4) { await ctx.reply("❗️ Хато йил киритилди."); continue; }
+
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = "CALCULATE";
+      }
+      else if (step === "CALCULATE") {
+        let waitMsg = await ctx.reply("⏳ <b>Базадаги эълонлар ва нархлар таҳлил қилинмоқда...</b>", { parse_mode: "HTML" });
+
+        try {
+            // Базадан фаол ёки сотилган ўхшаш моделларни қидирамиз
+            const [rows] = await db.execute(
+                "SELECT price, year FROM ads WHERE carDetails LIKE ? AND status IN ('active', 'sold')",
+                [`%${ad.model}%`]
+            );
+
+            const targetYear = parseInt(ad.year);
+            // Аниқроқ натижа учун йили яқин бўлганларни (+/- 2 йил) филтрлаймиз
+            const relevantAds = rows.filter(r => {
+                const y = parseInt(r.year) || 0;
+                return Math.abs(y - targetYear) <= 2;
+            });
+
+            // Нархларни тозалаб фақат рақамларни оламиз (1000$ дан 200,000$ гача бўлганларни реал деб қабул қиламиз)
+            let validPrices = relevantAds.map(r => parseInt(r.price.replace(/\D/g, ""))).filter(p => p > 1000 && p < 200000);
+
+            await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(()=>{});
+
+            if (validPrices.length === 0) {
+                await ctx.reply(`📭 <b>Кечирасиз, базамизда ${ad.year} йил ${ad.brand} ${ad.model} учун етарли маълумот йўқ.</b>\n\nМошинангизнинг нархи ҳолатига қараб турлича бўлиши мумкин.`, { parse_mode: "HTML", reply_markup: mainMenu });
+            } else {
+                const sum = validPrices.reduce((a, b) => a + b, 0);
+                const avg = sum / validPrices.length;
+
+                // Базавий ҳисоблаш: Ўртача нархнинг -6% ва +6% оралиғини (минимум ва максимум) ҳисоблаймиз
+                const minPrice = Math.round((avg * 0.94) / 100) * 100;
+                const maxPrice = Math.round((avg * 1.06) / 100) * 100;
+
+                const text = 
+                  `📊 <b>СИЗНИНГ МОШИНАНГИЗ БАҲОЛАНДИ!</b>\n\n` +
+                  `🚗 <b>Модель:</b> ${ad.brand} ${ad.model}\n` +
+                  `📅 <b>Йили:</b> ${ad.year}\n\n` +
+                  `Бизнинг базадаги эълонлар ва сотилган мошиналар таҳлилига кўра, ҳозирда бозорда бундай мошиналарнинг ўртача нархи:\n\n` +
+                  `💰 <b>${minPrice}$ - ${maxPrice}$</b> атрофида бўлмоқда.\n\n` +
+                  `<i>⚠️ Эслатма: Аниқ нарх мошинанинг краскаси, пробеги ва умумий ҳолатига қараб ўзгариши мумкин!\n\nМошинангизни ҳозироқ сотувга қўйиш учун «📝 Эълон Ясаш» тугмасини босинг.</i>`;
+
+                await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenu });
+            }
+        } catch(e) {
+            console.error(e);
+            await ctx.reply("❌ Хатолик юз берди. Баҳолаб бўлмади.");
+        }
+        break; // Жараён муваффақиятли тугади
+      }
+    } catch (err) {
+      console.error("Баҳолашда хатолик:", err);
+      await deleteMsgs(ctx, chatToClean);
+      return ctx.reply("😔 <b>Хатолик юз берди.</b> Жараён тўхтатилди.", { parse_mode: "HTML", reply_markup: mainMenu });
+    }
+  }
+  await deleteMsgs(ctx, chatToClean);
+}
+bot.use(createConversation(evaluateCarConversation));
+/**
  * ✅ АДМИН ТАСДИҚЛАШИ (Каналга юбориш)
  */
 bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
@@ -1400,6 +1559,10 @@ bot.hears("🎁 Бепул VIP (UP)", async (ctx) => {
   const kb = new InlineKeyboard().url("📤 Дўстларга юбориш", `https://t.me/share/url?url=${refLink}&text=${shareText}`);
   
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+});
+bot.hears("🧮 Мошина нархлаш", async (ctx) => {
+  if (!(await isSubscribed(ctx))) return askForSub(ctx);
+  await ctx.conversation.enter("evaluateCarConversation");
 });
 // "Тўлиқ таҳрирлаш" тугмаси босилганда
 bot.callbackQuery(/^full_edit_req:(\d+)/, async (ctx) => {
