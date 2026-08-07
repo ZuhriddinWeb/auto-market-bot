@@ -1565,8 +1565,16 @@ bot.hears("🎁 Бепул VIP (UP)", async (ctx) => {
     `<code>${refLink}</code>\n\n` +
     `<i>Шу ҳаволани дўстларингизга ва группаларга тарқатинг!</i>`;
 
-  const shareText = encodeURIComponent("Энг зўр авто-бозор боти. Текинга мошина сотинг ёки ўзингизга мос мошина топинг!");
-  const kb = new InlineKeyboard().url("📤 Дўстларга юбориш", `https://t.me/share/url?url=${refLink}&text=${shareText}`);
+ const shareMessage = 
+    "🚗 Ўзбекистондаги энг қулай онлайн Авто-Бозор!\n\n" +
+    "💸 Эълон бериш мутлақо БЕПУЛ.\n" +
+    "🔍 Ўзингиз излаган мошинани жуда осон топинг.\n\n" +
+    "👇 Ҳозироқ ботга кириб кўринг:\n" + 
+    refLink;
+
+  const shareText = encodeURIComponent(shareMessage);
+  // Бу ерда 'url=' олиб ташланди, ҳаммаси 'text=' ичига жойланди
+  const kb = new InlineKeyboard().url("📤 Дўстларга юбориш", `https://t.me/share/url?text=${shareText}`);
   
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
 });
