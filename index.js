@@ -307,6 +307,12 @@ bot.command("admin", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   await ctx.reply("👨‍💻 <b>Админ панелга хуш келибсиз!</b>\nҚуйидаги менюдан керакли бўлимни танланг:", { reply_markup: adminMenu, parse_mode: "HTML" });
 });
+bot.command("test_analytics", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.reply("⏳ <i>Аналитика ҳисобланмоқда ва каналга юборилмоқда...</i>", { parse_mode: "HTML" });
+  await sendWeeklyAnalytics();
+  await ctx.reply("✅ <b>Тест муваффақиятли якунланди! Канални текширинг.</b>", { parse_mode: "HTML" });
+});
 /**
  * ✅ АДМИН УЧУН БЛОКЛАШ ТИЗИМИ
  */
@@ -1832,5 +1838,107 @@ bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
       await ctx.answerCallbackQuery("Бу сўров аллақачон кўриб чиқилган.", {show_alert:true});
   }
 });
+// =====================================================================
+// 📊 ҲАФТАЛИК БОЗОР АНАЛИТИКАСИ (ЯКШАНБА КУНЛАРИ УЧУН)
+// =====================================================================
+async function sendWeeklyAnalytics() {
+  try {
+    // 1. Бу ҳафта энг кўп қўйилган мошинани топамиз
+    const [topCarRows] = await db.execute(`
+      SELECT carDetails, COUNT(*) as count 
+      FROM ads 
+      WHERE created_at >= NOW() - INTERVAL 7 DAY 
+      GROUP BY carDetails 
+      ORDER BY count DESC 
+      LIMIT 1
+    `);
+    
+    // 2. Бу ҳафта жами нечта янги эълон тушди
+    const [[totalAdsRows]] = await db.execute(`
+      SELECT COUNT(*) as count 
+      FROM ads 
+      WHERE created_at >= NOW() - INTERVAL 7 DAY
+    `);
+
+    let priceTrendText = "";
+    if (topCarRows.length > 0) {
+        const topCar = topCarRows[0].carDetails;
+        
+        // Бу ҳафтаги ўртача нарх
+        const [[thisWeek]] = await db.execute(`
+            SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice 
+            FROM ads 
+            WHERE carDetails = ? AND created_at >= NOW() - INTERVAL 7 DAY
+        `, [topCar]);
+        
+        // Ўтган ҳафтаги ўртача нарх
+        const [[lastWeek]] = await db.execute(`
+            SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice 
+            FROM ads 
+            WHERE carDetails = ? AND created_at >= NOW() - INTERVAL 14 DAY AND created_at < NOW() - INTERVAL 7 DAY
+        `, [topCar]);
+
+        const currAvg = Math.round(thisWeek.avgPrice || 0);
+        const lastAvg = Math.round(lastWeek.avgPrice || 0);
+
+        if (currAvg > 0 && lastAvg > 0) {
+            const diff = currAvg - lastAvg;
+            const percent = Math.round(Math.abs(diff) / lastAvg * 100);
+            
+            if (diff > 0) {
+                priceTrendText = `📈 <b>${topCar}</b> ўртача бозор нархи ўтган ҳафтага нисбатан <b>${percent}% га ошди.</b>`;
+            } else if (diff < 0) {
+                priceTrendText = `📉 <b>${topCar}</b> ўртача бозор нархи ўтган ҳафтага нисбатан <b>${percent}% га тушди.</b>`;
+            } else {
+                priceTrendText = `⚖️ <b>${topCar}</b> ўртача бозор нархи барқарор қолди (${currAvg}$).`;
+            }
+        } else if (currAvg > 0) {
+             priceTrendText = `💰 <b>${topCar}</b> нинг бу ҳафтаги ўртача бозор нархи: <b>${currAvg}$</b>`;
+        }
+    }
+
+    const topCarName = topCarRows.length > 0 ? topCarRows[0].carDetails : "Ҳали маълумот йўқ";
+    const topCarCount = topCarRows.length > 0 ? topCarRows[0].count : 0;
+    const totalAds = totalAdsRows ? totalAdsRows.count : 0;
+
+    // Агар бу ҳафта ҳеч қандай эълон тушмаган бўлса, хабар юбормайди
+    if (totalAds === 0) return; 
+
+    const text = 
+      `📊 <b>ҲАФТАЛИК АВТО-БОЗОР АНАЛИТИКАСИ</b>\n\n` +
+      `<i>Ўтган 7 кун ичида бозоримиздаги ҳолат:</i>\n\n` +
+      `📦 <b>Янги эълонлар сони:</b> ${totalAds} та\n` +
+      `🏆 <b>Энг кўп сотувга қўйилган мошина:</b> ${topCarName} (${topCarCount} та)\n\n` +
+      `${priceTrendText}\n\n` +
+      `👉 Ўзингизга мос мошинани излаш ёки текин эълон бериш учун ботимизга киринг: @arzonida_bot`;
+
+    const kb = new InlineKeyboard()
+      .url("🔍 Мошина қидириш", "https://t.me/arzonida_bot")
+      .url("📢 Каналга қўшилиш", "https://t.me/engarzonidamoshina");
+
+    // Каналга автоматик юбориш
+    await bot.api.sendMessage(CHANNEL_ID, text, { parse_mode: "HTML", reply_markup: kb });
+
+  } catch (err) {
+      console.error("Ҳафталик аналитика хатоси:", err);
+  }
+}
+
+// ⏰ Таймер: Ҳар 30 минутда вақтни текшириб туради
+let lastAnalyticsDate = null;
+setInterval(() => {
+    const now = new Date();
+    // 0 = Якшанба, 10 = Соат 10:xx 
+    if (now.getDay() === 0 && now.getHours() === 10) {
+        const dateStr = now.toISOString().split('T')[0]; // "2026-08-09" шаклида
+        // Бугун учун ҳали жўнатилмаган бўлсагина жўнатади
+        if (lastAnalyticsDate !== dateStr) {
+            lastAnalyticsDate = dateStr;
+            sendWeeklyAnalytics();
+            console.log("✅ Ҳафталик аналитика каналга юборилди!");
+        }
+    }
+}, 60 * 1000 * 30); // Ҳар 30 минутда айланади
+// =====================================================================
 bot.start();
 console.log("Бот муваффақиятли ишга тушди...");
