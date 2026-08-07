@@ -80,7 +80,11 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE ad_edits ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
       "ALTER TABLE ad_edits ADD COLUMN videoId VARCHAR(255) DEFAULT NULL",
       "ALTER TABLE users ADD COLUMN referral_count INT DEFAULT 0",
-      "ALTER TABLE users ADD COLUMN free_ups INT DEFAULT 0"
+      "ALTER TABLE users ADD COLUMN free_ups INT DEFAULT 0",
+
+      "ALTER TABLE ads ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP", // <--- ШУ ҚАТОР ҚЎШИЛДИ
+      "ALTER TABLE ads ADD COLUMN history TEXT DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -1843,11 +1847,11 @@ bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
 // =====================================================================
 async function sendWeeklyAnalytics() {
   try {
-    // 1. Бу ҳафта энг кўп қўйилган мошинани топамиз
+    // 1. Бу ҳафта энг кўп қўйилган мошинани топамиз (Фақат фаол ва сотилганлар)
     const [topCarRows] = await db.execute(`
       SELECT carDetails, COUNT(*) as count 
       FROM ads 
-      WHERE created_at >= NOW() - INTERVAL 7 DAY 
+      WHERE status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 7 DAY 
       GROUP BY carDetails 
       ORDER BY count DESC 
       LIMIT 1
@@ -1857,7 +1861,7 @@ async function sendWeeklyAnalytics() {
     const [[totalAdsRows]] = await db.execute(`
       SELECT COUNT(*) as count 
       FROM ads 
-      WHERE created_at >= NOW() - INTERVAL 7 DAY
+      WHERE status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 7 DAY
     `);
 
     let priceTrendText = "";
@@ -1868,15 +1872,16 @@ async function sendWeeklyAnalytics() {
         const [[thisWeek]] = await db.execute(`
             SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice 
             FROM ads 
-            WHERE carDetails = ? AND created_at >= NOW() - INTERVAL 7 DAY
+            WHERE carDetails = ? AND status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 7 DAY
         `, [topCar]);
         
         // Ўтган ҳафтаги ўртача нарх
         const [[lastWeek]] = await db.execute(`
             SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice 
             FROM ads 
-            WHERE carDetails = ? AND created_at >= NOW() - INTERVAL 14 DAY AND created_at < NOW() - INTERVAL 7 DAY
+            WHERE carDetails = ? AND status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 14 DAY AND created_at < NOW() - INTERVAL 7 DAY
         `, [topCar]);
+
 
         const currAvg = Math.round(thisWeek.avgPrice || 0);
         const lastAvg = Math.round(lastWeek.avgPrice || 0);
