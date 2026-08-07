@@ -1132,7 +1132,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
       
       // ЯНГИ: Агар узер ботни блок қилиб қўйган бўлса, дастур қулаб тушмаслиги учун ҳимоя (try-catch)
       try {
-          await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналга жойланди.\n\nКанални кўриш: https://t.me/engarzonidamoshina`, { parse_mode: "HTML", reply_markup: mainMenu });
+          await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналга жойланди.\n\n💡 <b>Эслатма:</b> Агар мошинангиз сотилса, пастдаги <b>«📂 Менинг эълонларим»</b> бўлимига кириб <b>«Сотилди»</b> деб белгилаб қўйишни унутманг. Шунингдек, ўша ердан эълон нархини пасайтиришингиз ҳам мумкин!\n\nКанални кўриш: https://t.me/engarzonidamoshina`, { parse_mode: "HTML", reply_markup: mainMenu });
       } catch (e) {
           console.log(`⚠️ ${ad.userId} ID эгаси ботни блок қилгани сабабли хабар борmadi.`);
       }
