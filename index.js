@@ -1061,9 +1061,18 @@ async function createAdConversation(conversation, ctx) {
         }
       }
     } catch (err) {
-      console.log(err);
-      await ctx.reply("Хатолик юз берди. Илтимос, /start ни босиб қайтадан уриниб кўринг.", { reply_markup: mainMenu });
-      break;
+      console.error("Эълон яратишда хатолик:", err);
+      
+      // Хатолик бўлганда дарҳол хотирани ва ортиқча хабарларни тозалаймиз
+      if (ctx.session) ctx.session.editAdData = null;
+      await deleteMsgs(ctx, chatToClean);
+      
+      // Узр сўраб, бош менюга қайтарамиз (return қўйилгани учун бошқа хабар чиқмайди)
+      return ctx.reply(
+        "😔 <b>Кечирасиз, тизимда кутилмаган хатолик юз берди.</b>\n\n" +
+        "Эълон яратиш жараёни тўхтатилди. Илтимос, пастдаги <b>«📝 Эълон Ясаш»</b> тугмасини ёки /start буйруғини босиб, жараённи бошқатдан бошланг.", 
+        { parse_mode: "HTML", reply_markup: mainMenu }
+      );
     }
   }
   
