@@ -340,7 +340,7 @@ bot.command("up", async (ctx) => {
 
   try {
     const channelMarkup = new InlineKeyboard()
-      .url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
+      .url("👤 КАНАЛ АДМИНИ", "https://t.me/uzdev75").row()
       .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot")
       .url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
 
@@ -1124,7 +1124,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
     caption += `💰 Нархи: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
 
-    const channelMarkup = new InlineKeyboard().url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
+    const channelMarkup = new InlineKeyboard().url("👤 КАНАЛ АДМИНИ", "https://t.me/uzdev75").row()
       .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
 
     try {
@@ -1373,7 +1373,7 @@ async function editPriceConversation(conversation, ctx) {
       `⛽ Ёқилғи: ${ad.fuel}\n💰 Нархи: <s>${ad.price}$</s> <b>${newPrice}$ 📉</b>\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
 
-    const channelMarkup = new InlineKeyboard().url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
+    const channelMarkup = new InlineKeyboard().url("👤 КАНАЛ АДМИНИ", "https://t.me/uzdev75").row()
       .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
 
     await ctx.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, {
@@ -1455,7 +1455,7 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
     `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
   // =========================================================================
 
-  const channelMarkup = new InlineKeyboard().url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
+  const channelMarkup = new InlineKeyboard().url("👤 КАНАЛ АДМИНИ", "https://t.me/uzdev75").row()
     .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
 
   try {
