@@ -63,6 +63,15 @@ if (!fs.existsSync(collagesDir)) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS favorites (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        userId BIGINT,
+        adId BIGINT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(userId, adId)
+      )
+    `);
   const alterQueries = [
       "ALTER TABLE ads ADD COLUMN history TEXT DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
@@ -341,6 +350,7 @@ bot.command("up", async (ctx) => {
   try {
     const channelMarkup = new InlineKeyboard()
       .url("👤 КАНАЛ АДМИНИ", "https://t.me/uzdev75").row()
+      .url("❤️ Сақлаш (Нарх тушса билиш)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
       .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot")
       .url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
 
@@ -1125,6 +1135,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
       `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
 
     const channelMarkup = new InlineKeyboard().url("👤 КАНАЛ АДМИНИ", "https://t.me/uzdev75").row()
+    .url("❤️ Сақлаш (Нарх тушса билиш)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
       .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
 
     try {
@@ -1250,7 +1261,16 @@ bot.command("start", async (ctx) => {
   } catch (error) {
     console.error("Узерни сақлашда хатолик:", error);
   }
-
+  const payload = ctx.match;
+  if (payload && payload.startsWith("fav_")) {
+      const favAdId = parseInt(payload.split("_")[1]);
+      if (favAdId) {
+          try {
+              await db.execute("INSERT IGNORE INTO favorites (userId, adId) VALUES (?, ?)", [ctx.from.id, favAdId]);
+              await ctx.reply(`❤️ <b>Эълон сақланди!</b> (ID: ${favAdId})\n\nАгар ушбу мошина нархи тушса, бот сизга дарҳол автоматик хабар юборади!`, { parse_mode: "HTML" });
+          } catch(e) {}
+      }
+  }
   const welcomeText = 
     `🚗 <b>Авто-бозоримизга хуш келибсиз!</b>\n\n` +
     `Бу бот орқали сиз мошинангизни тез ва осон сотишингиз ёки ўзингизга мос автомобиль топишингиз мумкин.\n\n` +
@@ -1374,6 +1394,7 @@ async function editPriceConversation(conversation, ctx) {
       `⚠️ Мошина савдосига админ жавобгар эмас, олдиндан тўлов қилманг. Огоҳлик давр талаби ❗\n\n👉 https://t.me/engarzonidamoshina`;
 
     const channelMarkup = new InlineKeyboard().url("👤 КАНАЛ АДМИНИ", "https://t.me/uzdev75").row()
+    .url("❤️ Сақлаш (Нарх тушса билиш)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
       .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
 
     await ctx.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, {
@@ -1384,6 +1405,30 @@ async function editPriceConversation(conversation, ctx) {
 
     await db.execute("UPDATE ads SET price = ? WHERE id = ?", [newPrice, adId]);
 
+    try {
+      const oldPriceNum = parseInt(ad.price) || 0;
+      const newPriceNum = parseInt(newPrice) || 0;
+      const diff = oldPriceNum - newPriceNum;
+
+      if (diff > 0) { // Фақат нарх тушганда ишлайди
+        const [favs] = await db.execute("SELECT userId FROM favorites WHERE adId = ?", [adId]);
+        for (const fav of favs) {
+           try {
+             await bot.api.sendMessage(fav.userId, 
+               `🔔 <b>СИЗ КУЗАТАЁТГАН МОШИНА АРЗОНЛАШДИ!</b>\n\n` +
+               `🚗 <b>${ad.carDetails}</b> нархи <b>${diff}$</b> га тушди.\n\n` +
+               `❌ Эски нарх: <s>${oldPriceNum}$</s>\n` +
+               `✅ Янги нарх: <b>${newPriceNum}$</b>\n\n` +
+               `Каналда кўриш: https://t.me/engarzonidamoshina/${ad.channelMsgId}`, 
+               { parse_mode: "HTML" }
+             );
+           } catch(e) {
+             // Узер ботни блоклаган бўлса инкор қилади
+           }
+        }
+      }
+    } catch (error) { console.error("Хабарнома юборишда хатолик:", error); }
+    
     await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
     await ctx.reply(`✅ <b>Нарх муваффақиятли туширилди!</b>\nКаналда мошинангиз нархи <b>${newPrice}$</b> бўлиб ўзгарди.`, { parse_mode: "HTML", reply_markup: mainMenu }); 
 
@@ -1456,6 +1501,7 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
   // =========================================================================
 
   const channelMarkup = new InlineKeyboard().url("👤 КАНАЛ АДМИНИ", "https://t.me/uzdev75").row()
+  .url("❤️ Сақлаш (Нарх тушса билиш)", `https://t.me/arzonida_bot?start=fav_${oldAd.id}`).row()
     .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
 
   try {

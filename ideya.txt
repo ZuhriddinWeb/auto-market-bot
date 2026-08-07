@@ -1,0 +1,34 @@
+🤖 Bot uchun imkoniyatlar (Foydalanuvchini botda ushlab qolish)
+1. "Tanlanganlar" (❤️ Izbrannoye) va Narx tushishi haqida signal
+Xaridorlar kanalda e'lon ko'rganda uni "Saqlab qo'yish" imkoniyatiga ega bo'lsin. Eng zo'r joyi: agar sotuvchi o'z e'lonining narxini pasaytirsa (biz yozgan edit_price orqali), bot shu e'lonni saqlab qo'ygan barcha xaridorlarga avtomatik xabar yuboradi: "🔔 Siz kuzatayotgan Chevrolet Cobalt narxi 500$ ga tushdi! Yangi narx: 10,000$". Bu odamlarni botdan umuman chiqib ketmaslikka majbur qiladi.
+
+2. Referal tizim (O'yinlashtirish - Gamification)
+Foydalanuvchilarga o'zlarining shaxsiy taklif havolasini (referral link) bering.
+
+Shart: "Botingizga 5 ta do'stingizni taklif qiling".
+
+Sovg'a: "E'loningizni 1 marta bepul VIP qilib (yoki kanal oxiriga /up qilib) beramiz".
+Bu botingizning organik (tekin) o'sishiga juda katta yordam beradi.
+
+3. "Avto-Baholash" kalkulyatori
+Odamlar e'lon berish niyati bo'lmasa ham, "Mening mashinam hozir bozorda qancha turadi ekan?" degan qiziqish bilan botga kirishadi. Botda "Mashina narxini bilish" degan menyu qo'shamiz. Uzer faqat modeli, yili va probegini kiritadi, bot esa MySQL bazadagi o'rtacha narxlarni hisoblab: "Sizning mashinangiz bozorda o'rtacha 8,500$- 9,200$ atrofida baholanmoqda" deb javob beradi.
+
+4. "Ishonchli Sotuvchi" (Verified) maqomi
+Agar bitta uzer bot orqali 2-3 ta mashina sotsa va uning ustidan shikoyat tushmasa, uning e'lonlariga avtomatik tarzda "⭐️ Tasdiqlangan sotuvchi" belgisi qo'shilib chiqadigan qiling. Bu xaridorlarda ishonch uyg'otadi.
+
+📢 Kanal uchun imkoniyatlar (Auditoriyani qizdirish)
+1. Haftalik Bozor Analitikasi (Eksklyuziv kontent)
+Sizda tayyor MySQL baza bor, barcha ma'lumotlar o'zingizning qo'lingizda. Har yakshanba kuni bot avtomatik tarzda infografika yoki matn tayyorlab kanalga tashlasin:
+
+📈 Bu hafta kanalda eng ko'p sotuvga qo'yilgan mashina: Gentra (45 ta)
+
+💰 Chevrolet Tracker'ning o'rtacha bozor narxi 2% ga tushdi.
+Odamlar bunday qiziqarli va real statistikani o'qish uchun kanalni kuzatishda davom etishadi.
+
+2. Izohlarni (Comments) ochiq qoldirish
+O'zbek avto-bozorida xaridorlar narxni muhokama qilishni, tortishishni va o'z fikrini bildirishni yaxshi ko'radi. E'lonlar tagida izohlarni yoqib qo'ying (faqat so'kinishlarni o'chiradigan oddiy anti-mat guruh ulab qo'ysangiz bo'ldi). Kommentariyada "Bunga bu narx qimmat", "Kraskasi toza emasga o'xshayapti" kabi tortishuvlar kanalning aktivligini (ER - Engagement Rate) osmonlarga uchirib yuboradi.
+
+3. So'rovnomalar va foydali maslahatlar
+Har kuni faqat e'lon tashlayversangiz, mashina olmaydigan odamlar zerikib chiqib ketadi. Haftada 1-2 marta foydali maslahatlar yoki bahsli so'rovnomalar bering. Masalan: "Yoz chillasida mator uchun qaysi moy yaxshiroq: Liqui Moly Molygen 5w-30 mi yoki Castrol?" yoki "LPG (Gaz) o'rnatish matorni o'ldiradimi?". Bunday postlar ulashish (share) qilinish ehtimolini oshiradi.
+
+Tizimni yanada qiziqarli qilish uchun birinchi navbatda qaysi birini: Referal (taklif qilish) tizimini bazaga ulashni boshlaymizmi yoki "Tanlanganlar" (Narx tushishini xabar berish) funksiyasini yozaylikmi?
