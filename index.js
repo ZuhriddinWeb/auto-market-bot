@@ -78,7 +78,9 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE ads ADD COLUMN videoId VARCHAR(255) DEFAULT NULL",
       "ALTER TABLE ad_edits ADD COLUMN history TEXT DEFAULT NULL",
       "ALTER TABLE ad_edits ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
-      "ALTER TABLE ad_edits ADD COLUMN videoId VARCHAR(255) DEFAULT NULL"
+      "ALTER TABLE ad_edits ADD COLUMN videoId VARCHAR(255) DEFAULT NULL",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_count INT DEFAULT 0",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_ups INT DEFAULT 0"
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -123,7 +125,7 @@ bot.use(conversations());
 
 const mainMenu = new Keyboard()
   .text("📝 Эълон Ясаш").text("🔍 Мошина қидириш").row()
-  .text("📂 Менинг эълонларим").resized();
+  .text("📂 Менинг эълонларим").text("🎁 Бепул VIP (UP)").resized();
 
 /**
  * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
@@ -1249,19 +1251,22 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
  * ✅ АСОСИЙ КНОПКАЛАР (ВА ФОЙДАЛАНУВЧИНИ БАЗАГА ҚЎШИШ)
  */
 bot.command("start", async (ctx) => {
+  let isNewUser = false;
   // Фойдаланувчини автоматик тарзда users базасига қўшиш ёки янгилаш
   try {
     const id = ctx.from.id;
     const first_name = ctx.from.first_name || "";
     const username = ctx.from.username ? `@${ctx.from.username}` : "";
-    await db.execute(
+    const [result] = await db.execute(
       "INSERT IGNORE INTO users (id, first_name, username) VALUES (?, ?, ?)", 
       [id, first_name, username]
     );
+    if (result.affectedRows === 1) isNewUser = true;
   } catch (error) {
     console.error("Узерни сақлашда хатолик:", error);
   }
   const payload = ctx.match;
+  // 1. ЭЪЛОННИ САҚЛАШ (Fav) логикаси
   if (payload && payload.startsWith("fav_")) {
       const favAdId = parseInt(payload.split("_")[1]);
       if (favAdId) {
@@ -1271,6 +1276,30 @@ bot.command("start", async (ctx) => {
           } catch(e) {}
       }
   }
+  // 2. РЕФЕРАЛ (Taklif) логикаси
+  if (isNewUser && payload && payload.startsWith("ref_")) {
+      const referrerId = parseInt(payload.split("_")[1]);
+      if (referrerId && referrerId !== ctx.from.id) {
+          try {
+              // Таклиф қилган одамнинг ҳисобини 1 тага оширамиз
+              await db.execute("UPDATE users SET referral_count = referral_count + 1 WHERE id = ?", [referrerId]);
+              const [refRows] = await db.execute("SELECT referral_count FROM users WHERE id = ?", [referrerId]);
+              
+              if (refRows[0]) {
+                  const count = refRows[0].referral_count;
+                  if (count % 5 === 0) {
+                      // 5 та одам йиғди, бонус берамиз!
+                      await db.execute("UPDATE users SET free_ups = free_ups + 1 WHERE id = ?", [referrerId]);
+                      await bot.api.sendMessage(referrerId, `🎉 <b>ТАБРИКЛАЙМИЗ!</b>\n\nСиз 5 та дўстингизни таклиф қилдингиз ва <b>1 та БЕПУЛ ЭЪЛОН КЎТАРИШ (UP)</b> бонусини қўлга киритдингиз! 🚀\n\nБонусни ишлатиш учун <b>"📂 Менинг эълонларим"</b> бўлимига киринг.`, { parse_mode: "HTML" });
+                  } else {
+                      const qoldi = 5 - (count % 5);
+                      await bot.api.sendMessage(referrerId, `👤 <b>Сизнинг таклиф ҳаволангиз орқали янги дўстингиз ботга қўшилди!</b>\nЖами таклифларингиз: <b>${count} та.</b>\n\nЯна <b>${qoldi} та</b> дўстингизни таклиф қилсангиз Бепул VIP (UP) оласиз!`, { parse_mode: "HTML" });
+                  }
+              }
+          } catch(e) { console.error(e); }
+      }
+  }
+
   const welcomeText = 
     `🚗 <b>Авто-бозоримизга хуш келибсиз!</b>\n\n` +
     `Бу бот орқали сиз мошинангизни тез ва осон сотишингиз ёки ўзингизга мос автомобиль топишингиз мумкин.\n\n` +
@@ -1327,18 +1356,50 @@ bot.hears("📂 Менинг эълонларим", async (ctx) => {
   const [ads] = await db.execute("SELECT * FROM ads WHERE userId = ? AND status = 'active'", [ctx.from.id]);
   if (ads.length === 0) return ctx.reply("📭 <b>Сизда ҳозирда фаол эълонлар йўқ.</b>", { parse_mode: "HTML" });
 
+  const [[u]] = await db.execute("SELECT free_ups FROM users WHERE id = ?", [ctx.from.id]);
+  const freeUps = u ? u.free_ups : 0;
+
   for (const ad of ads) {
     const kb = new InlineKeyboard()
       .text("💰 Сотилди", `sold_req:${ad.id}`)
       .text("📉 Нархни тушириш", `edit_price:${ad.id}`).row()
       .text("✏️ Тўлиқ таҳрирлаш", `full_edit_req:${ad.id}`); // <--- ЯНГИ ТУГМА ҚЎШИЛДИ
 
+      if (freeUps > 0) {
+        kb.row().text(`🚀 БЕПУЛ UP (VIP) (${freeUps} та бор)`, `free_up_req:${ad.id}`);
+    }
+
     await ctx.reply(`🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Мошина: ${ad.carDetails}</b>\n💰 <b>Нархи: ${ad.price}$</b>`, {
       reply_markup: kb, parse_mode: "HTML",
     });
   }
 });
+bot.hears("🎁 Бепул VIP (UP)", async (ctx) => {
+  if (!(await isSubscribed(ctx))) return askForSub(ctx);
 
+  const [rows] = await db.execute("SELECT referral_count, free_ups FROM users WHERE id = ?", [ctx.from.id]);
+  const user = rows[0];
+  if (!user) return;
+
+  const botInfo = await bot.api.getMe();
+  const refLink = `https://t.me/${botInfo.username}?start=ref_${ctx.from.id}`;
+  const qoldi = 5 - (user.referral_count % 5);
+
+  const text = 
+    `🎁 <b>БЕПУЛ ЭЪЛОН КЎТАРИШ (VIP)</b>\n\n` +
+    `Дўстларингизни ботимизга таклиф қилинг ва ҳар 5 та дўстингиз учун эълонингизни каналда текинга <b>ЭНГ ТЕПАГА (UP)</b> кўтариш имкониятини қўлга киритинг!\n\n` +
+    `📊 <b>СИЗНИНГ СТАТИСТИКАНГИЗ:</b>\n` +
+    `👥 Таклиф қилган дўстларингиз: <b>${user.referral_count} та</b>\n` +
+    `🚀 Ишлатилмаган VIP бонусларингиз: <b>${user.free_ups} та</b>\n` +
+    `⏳ Кейинги бонусгача: <b>${qoldi} та одам қолди</b>\n\n` +
+    `👇 <b>Сизнинг шахсий таклиф ҳаволангиз:</b>\n` +
+    `<code>${refLink}</code>\n\n` +
+    `<i>Шу ҳаволани дўстларингизга ва группаларга тарқатинг!</i>`;
+
+  const kb = new InlineKeyboard().url("📤 Дўстларга юбориш", `https://t.me/share/url?url=${refLink}&text=Энг зўр авто-бозор боти. Текинга мошина сотинг ёки ўзингизга мос мошина топинг!`);
+  
+  await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+});
 // "Тўлиқ таҳрирлаш" тугмаси босилганда
 bot.callbackQuery(/^full_edit_req:(\d+)/, async (ctx) => {
   await ctx.answerCallbackQuery("⏳ Маълумотлар юкланмоқда...");
@@ -1428,7 +1489,7 @@ async function editPriceConversation(conversation, ctx) {
         }
       }
     } catch (error) { console.error("Хабарнома юборишда хатолик:", error); }
-    
+
     await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
     await ctx.reply(`✅ <b>Нарх муваффақиятли туширилди!</b>\nКаналда мошинангиз нархи <b>${newPrice}$</b> бўлиб ўзгарди.`, { parse_mode: "HTML", reply_markup: mainMenu }); 
 
@@ -1444,6 +1505,55 @@ bot.use(createConversation(editPriceConversation));
 bot.callbackQuery(/^edit_price:(\d+)/, async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.conversation.enter("editPriceConversation");
+});
+
+bot.callbackQuery(/^free_up_req:(\d+)/, async (ctx) => {
+  await ctx.answerCallbackQuery("⏳ Эълон каналга қайта кўтарилмоқда...");
+  const adId = parseInt(ctx.match[1]);
+
+  // 1. Бонус ҳали борлигини текширамиз
+  const [[user]] = await db.execute("SELECT free_ups FROM users WHERE id = ?", [ctx.from.id]);
+  if (!user || user.free_ups <= 0) {
+      return ctx.editMessageText("❌ Сизда бепул UP бонуси тугаган. Дўстларингизни таклиф қилиб янгисини олинг!", { parse_mode: "HTML" });
+  }
+
+  // 2. Эълонни топамиз
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ? AND status = 'active'", [adId, ctx.from.id]);
+  const ad = rows[0];
+  if (!ad) return ctx.reply("❌ Бу эълон фаол эмас ёки топилмади.");
+
+  try {
+    const channelMarkup = new InlineKeyboard()
+      .url("👤 ЭЪЛОН АДМИНИ", "https://t.me/uzdev75").row()
+      .url("❤️ Сақлаш (Нарх тушса билиш)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
+      .url("🤖 БЕПУЛ ЭЪЛОН", "https://t.me/arzonida_bot").url("📢 КАНАЛИМИЗ", "https://t.me/engarzonidamoshina");
+
+    let newMsgId;
+
+    try {
+      // Каналдаги эски хабарни ўчириб, энг пастга янги нусхасини жойлаймиз
+      const newMsg = await bot.api.copyMessage(CHANNEL_ID, CHANNEL_ID, ad.channelMsgId, { reply_markup: channelMarkup });
+      newMsgId = newMsg.message_id;
+      if (ad.videoId) {
+        try { await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: newMsgId }); } catch(e){}
+      }
+      await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(() => {});
+    } catch (copyErr) {
+      // Агар каналдан хабар ўчирилган бўлса (ёки топилмаса) хатолик берамиз
+      return ctx.reply("❌ Каналдаги эълон топилмади. Бепул UP амалга ошмади.");
+    }
+
+    // 3. Базада эълоннинг ID сини янгилаймиз ва бонусдан 1 та айириб ташлаймиз
+    await db.execute("UPDATE ads SET channelMsgId = ? WHERE id = ?", [newMsgId, adId]);
+    await db.execute("UPDATE users SET free_ups = free_ups - 1 WHERE id = ?", [ctx.from.id]);
+
+    await ctx.deleteMessage().catch(()=>{});
+    await ctx.reply(`✅ <b>Эълонингиз муваффақиятли кўтарилди!</b>\n\nМошинангиз каналда энг сўнгги хабарлар қаторига чиқди.`, { parse_mode: "HTML" });
+
+  } catch (err) {
+    console.error(err);
+    await ctx.reply("❌ Хатолик юз берди: Эълонни кўтариб бўлмади.");
+  }
 });
 /**
  * ✅ АҚЛЛИ ХАБАРНОМАГА ОБУНА БЎЛИШ
