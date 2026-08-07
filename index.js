@@ -1396,7 +1396,8 @@ bot.hears("🎁 Бепул VIP (UP)", async (ctx) => {
     `<code>${refLink}</code>\n\n` +
     `<i>Шу ҳаволани дўстларингизга ва группаларга тарқатинг!</i>`;
 
-  const kb = new InlineKeyboard().url("📤 Дўстларга юбориш", `https://t.me/share/url?url=${refLink}&text=Энг зўр авто-бозор боти. Текинга мошина сотинг ёки ўзингизга мос мошина топинг!`);
+  const shareText = encodeURIComponent("Энг зўр авто-бозор боти. Текинга мошина сотинг ёки ўзингизга мос мошина топинг!");
+  const kb = new InlineKeyboard().url("📤 Дўстларга юбориш", `https://t.me/share/url?url=${refLink}&text=${shareText}`);
   
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
 });
