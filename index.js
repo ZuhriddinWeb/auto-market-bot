@@ -79,8 +79,8 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE ad_edits ADD COLUMN history TEXT DEFAULT NULL",
       "ALTER TABLE ad_edits ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
       "ALTER TABLE ad_edits ADD COLUMN videoId VARCHAR(255) DEFAULT NULL",
-      "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_count INT DEFAULT 0",
-      "ALTER TABLE users ADD COLUMN IF NOT EXISTS free_ups INT DEFAULT 0"
+      "ALTER TABLE users ADD COLUMN referral_count INT DEFAULT 0",
+      "ALTER TABLE users ADD COLUMN free_ups INT DEFAULT 0"
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
