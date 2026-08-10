@@ -1408,7 +1408,23 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
         await db.execute("UPDATE ads SET status='sold' WHERE id=?", [adId]);
         await ctx.editMessageText("✅ <b>Каналда сотилди деб белгиланди!</b>", { parse_mode: "HTML" });
         await bot.api.sendMessage(ad.userId, `🎉 <b>Табриклаймиз!</b>\n\nСизнинг <b>${ad.carDetails}</b> эълонингиз каналда "СОТИЛДИ" деб белгиланди.`, { parse_mode: "HTML" });
+
+        // ================= ЯНГИ: АВТОМАТИК ТАБРИКНОМА (РЕКЛАМА) =================
+        const congratsText = 
+          `🎉 <b>ТАБРИКЛАЙМИЗ!</b>\n\n` +
+          `Навбатдаги автомобил ҳам каналимиз ва ботимиз орқали жуда тез ўз харидорини топди! Сотувчи ва олувчига баракасини берсин. 🤝\n\n` +
+          `🚘 <i>Сиз ҳам мошинангизни қисқа фурсатда, маклерларсиз ва мутлақо БЕПУЛ сотмоқчимисиз?</i>\n\n` +
+          `👇 <b>Унда ҳозироқ ботимиз орқали эълон жойланг:</b>\n` +
+          `🤖 @arzonida_bot`;
+
+        await bot.api.sendMessage(CHANNEL_ID, congratsText, {
+            parse_mode: "HTML",
+            reply_to_message_id: ad.channelMsgId // <--- Каналдаги мошина эълонига "Reply" қилади
+        });
+        // =========================================================================
+
       } catch (e) {
+        console.error("Сотилди қилишда хатолик:", e);
         await ctx.reply("Хатолик: Каналдаги хабарни таҳрирлаб бўлмади.");
       }
   } else {
