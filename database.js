@@ -2,7 +2,14 @@ const mysql = require("mysql2/promise");
 require("dotenv").config();
 
 // MySQL bazasiga ulanish (Railway yoki VPS dagi MYSQL_URL ni .env dan oladi)
-const pool = mysql.createPool(process.env.MYSQL_URL);
+const pool = mysql.createPool({
+  uri: process.env.MYSQL_URL,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  enableKeepAlive: true,        // <--- База узилиб қолмаслиги учун (ECONNRESET нинг давоси)
+  keepAliveInitialDelay: 0      // <--- База узилиб қолмаслиги учун
+});
 
 async function initDB() {
   try {

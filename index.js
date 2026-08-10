@@ -451,7 +451,9 @@ bot.callbackQuery("admin_stats", async (ctx) => {
     `💰 Сотилган мошиналар: <b>${soldAds.count}</b> та\n` +
     `⏳ Тасдиқ кутаётганлар: <b>${pendingAds.count}</b> та\n`;
 
-  await ctx.editMessageText(text, { reply_markup: adminMenu, parse_mode: "HTML" });
+try {
+      await ctx.editMessageText(text, { reply_markup: adminMenu, parse_mode: "HTML" });
+  } catch(e) {}
 });
 
 bot.callbackQuery("admin_broadcast", async (ctx) => {
@@ -505,7 +507,8 @@ bot.callbackQuery("admin_pending", async (ctx) => {
       return;
   }
 
-  await ctx.editMessageText("✅ <b>Тасдиқ кутаётган эълонлар йўқ!</b> База тоза.", { parse_mode: "HTML", reply_markup: adminMenu });
+await ctx.deleteMessage().catch(()=>{});
+  await ctx.reply("✅ <b>Тасдиқ кутаётган эълонлар йўқ!</b> База тоза.", { parse_mode: "HTML", reply_markup: adminMenu });
 });
 
 /**
