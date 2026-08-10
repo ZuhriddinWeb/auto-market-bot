@@ -5,10 +5,11 @@ require("dotenv").config();
 const pool = mysql.createPool({
   uri: process.env.MYSQL_URL,
   waitForConnections: true,
-  connectionLimit: 10,
+  connectionLimit: 20,
   queueLimit: 0,
-  enableKeepAlive: true,        // <--- База узилиб қолмаслиги учун (ECONNRESET нинг давоси)
-  keepAliveInitialDelay: 0      // <--- База узилиб қолмаслиги учун
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+  idleTimeout: 60000 // <--- ЭНГ МУҲИМ ҚЎШИМЧА: 60 сониядан кейин бўш алоқани тозалайди
 });
 
 async function initDB() {
