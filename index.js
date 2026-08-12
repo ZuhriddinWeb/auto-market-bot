@@ -128,9 +128,9 @@ bot.use(async (ctx, next) => {
 bot.use(conversations());
 
 const mainMenu = new Keyboard()
-  .text("📝 E'lon Yasash").text("🔍 Moshina qidirish").row()
+  .text("📝 E'lon berish").text("🔍 Mashina qidirish").row()
   .text("📂 Mening e'lonlarim").text("🎁 Bepul VIP (UP)").row()
-  .text("🧮 Moshina narxlash").resized();
+  .text("🧮 Mashina narxini aniqlash").resized();
 
 /**
  * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
@@ -517,7 +517,7 @@ bot.callbackQuery("admin_pending", async (ctx) => {
  * ✅ МОШИНА ҚИДИРИШ ЖАРАЁНИ (Тўғирланган)
  */
 async function searchCarConversation(conversation, ctx) {
-  const cancelTexts = ["/start", "/cancel", "📝 E'lon Yasash", "🔍 Moshina qidirish", "📂 Mening e'lonlarim"];
+  const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim"];
   
   await ctx.reply("🔍 <b>Qaysi moshinani qidiryapsiz?</b>\n<i>(Masalan: Cobalt yoki Gentra)</i>\n\nBekor qilish uchun pastdagi menyudan foydalaning.", { reply_markup: mainMenu, parse_mode: "HTML" });
   const qRes = await conversation.waitFor("message:text");
@@ -570,7 +570,7 @@ bot.use(createConversation(searchCarConversation));
  * ✅ ЭЪЛОН ЯРАТИШ ЖАРАЁНИ
  */
 async function createAdConversation(conversation, ctx) {
-  const cancelTexts = ["/start", "/cancel", "📝 E'lon Yasash", "🔍 Moshina qidirish", "📂 Mening e'lonlarim"];
+  const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim"];
   const ad = { photos: [] };
   let isFullUpdate = false; 
   let updateAdId = null;
@@ -1103,7 +1103,7 @@ async function createAdConversation(conversation, ctx) {
       // Uzr so'rab, bosh menyuga qaytaramiz (return qo'yilgani uchun boshqa xabar chiqmaydi)
       return ctx.reply(
         "😔 <b>Kechirasiz, tizimda kutilmagan xatolik yuz berdi.</b>\n\n" +
-        "E'lon yaratish jarayoni to'xtatildi. Iltimos, pastdagi <b>«📝 E'lon Yasash»</b> tugmasini yoki /start buyrug'ini bosib, jarayonni boshqatdan boshlang.", 
+        "E'lon yaratish jarayoni to'xtatildi. Iltimos, pastdagi <b>«📝 E'lon berish</b> tugmasini yoki /start buyrug'ini bosib, jarayonni boshqatdan boshlang.", 
         { parse_mode: "HTML", reply_markup: mainMenu }
       );
     }
@@ -1119,7 +1119,7 @@ bot.use(createConversation(createAdConversation));
  * ✅ АВТО-БАҲОЛАШ КАЛЬКУЛЯТОРИ ЖАРАЁНИ
  */
 async function evaluateCarConversation(conversation, ctx) {
-  const cancelTexts = ["/start", "/cancel", "📝 E'lon Yasash", "🔍 Moshina qidirish", "📂 Mening e'lonlarim", "🎁 Bepul VIP (UP)", "🧮 Moshina narxlash"];
+  const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim", "🎁 Bepul VIP (UP)", "🧮 Mashina narxini aniqlash"];
   let ad = {};
   let step = "BRAND";
   const chatToClean = [];
@@ -1255,7 +1255,7 @@ async function evaluateCarConversation(conversation, ctx) {
                   `📅 <b>Yili:</b> ${ad.year}\n\n` +
                   `Bizning bazadagi e'lonlar va sotilgan moshinalar tahliliga ko'ra, hozirda bozorda bunday moshinalarning o'rtacha narxi:\n\n` +
                   `💰 <b>${minPrice}$ - ${maxPrice}$</b> atrofida bo'lmoqda.\n\n` +
-                  `<i>⚠️ Eslatma: Aniq narx moshinaning kraskasi, probegi va umumiy holatiga qarab o'zgarishi mumkin!\n\nMoshinangizni hoziroq sotuvga qo'yish uchun «📝 E'lon Yasash» tugmasini bosing.</i>`;
+                  `<i>⚠️ Eslatma: Aniq narx moshinaning kraskasi, probegi va umumiy holatiga qarab o'zgarishi mumkin!\n\nMoshinangizni hoziroq sotuvga qo'yish uchun «📝 E'lon berish tugmasini bosing.</i>`;
 
                 await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenu });
             }
@@ -1511,7 +1511,7 @@ bot.command("start", async (ctx) => {
   });
 });
 
-bot.hears("📝 E'lon Yasash", async (ctx) => {
+bot.hears("📝 E'lon berish", async (ctx) => {
   // 1. Obunani tekshirish
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
 
@@ -1541,7 +1541,7 @@ if (ctx.session) ctx.session.editAdData = null;
 await ctx.conversation.enter("createAdConversation");
 });
 
-bot.hears("🔍 Moshina qidirish", async (ctx) => {
+bot.hears("🔍 Mashina qidirish", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
   await ctx.conversation.enter("searchCarConversation");
 });
@@ -1604,7 +1604,7 @@ bot.hears("🎁 Bepul VIP (UP)", async (ctx) => {
   
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
 });
-bot.hears("🧮 Moshina narxlash", async (ctx) => {
+bot.hears("🧮 Mashina narxini aniqlash", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
   await ctx.conversation.enter("evaluateCarConversation");
 });
@@ -1629,7 +1629,7 @@ bot.callbackQuery(/^full_edit_req:(\d+)/, async (ctx) => {
  * ✅ НАРХНИ ПАСАЙТИРИШ ЖАРАЁНИ (ЯНГИЛАНГАН ВА ТЎҒИРЛАНГАН)
  */
 async function editPriceConversation(conversation, ctx) {
-  const cancelTexts = ["/start", "/cancel", "📝 E'lon Yasash", "🔍 Moshina qidirish", "📂 Mening e'lonlarim"];
+  const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim"];
   const cbData = ctx.callbackQuery?.data;
   if (!cbData) return;
   const adId = cbData.split(":")[1]; 
@@ -1952,7 +1952,7 @@ async function sendWeeklyAnalytics() {
       `👉 O'zingizga mos moshinani izlash yoki tekin e'lon berish uchun botimizga kiring: @arzonida_bot`;
 
     const kb = new InlineKeyboard()
-      .url("🔍 Moshina qidirish", "https://t.me/arzonida_bot")
+      .url("🔍 Mashina qidirish", "https://t.me/arzonida_bot")
       .url("📢 Kanalga qo'shilish", "https://t.me/engarzonidamoshina");
 
     // Kanalga avtomatik yuborish
