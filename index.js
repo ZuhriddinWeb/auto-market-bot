@@ -1068,7 +1068,7 @@ async function createAdConversation(conversation, ctx) {
 
         if (action === "cancel_ad") break;
         
-        if (action === "submit_ad") {
+if (action === "submit_ad") {
           const [[pAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'pending'");
           const [[pEdits]] = await db.execute("SELECT COUNT(*) as count FROM ad_edits");
           const totalPending = pAds.count + pEdits.count + 1; 
@@ -1100,7 +1100,16 @@ async function createAdConversation(conversation, ctx) {
             return; 
           }
 
-          // ================= YANGI: ADMIN UCHUN SHOSHILINCH BILDIRISHNOMA VA KLAVIATURA =================
+          // ================= TO'G'RILANGAN QISM =================
+
+          // 1. Avval bazaga saqlaymiz va adId ni aniqlaymiz
+          const [result] = await db.execute(
+            `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.videoId || null]
+          );
+          const adId = result.insertId; 
+
+          // 2. Endi adId malum bo'ldi, klaviaturani yasaymiz
           let urgentTextNew = ad.urgent ? "\n\n🚨 <b>DIQQAT: Ushbu e'lon foydalanuvchi tomonidan SHOSHILINCH (Qaynoq narx) deb belgilangan!</b>" : "";
           
           let adminKb = new InlineKeyboard();
@@ -1111,18 +1120,12 @@ async function createAdConversation(conversation, ctx) {
               adminKb.text("✅ Qabul qilish", `approve:${adId}`).text("❌ Rad etish", `reject:${adId}`).row()
                      .text("🔥 Qaynoq narxda qabul qilish", `approve_hot:${adId}`);
           }
-          // ==============================================================================================
-
-          const [result] = await db.execute(
-            `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.videoId || null]
-          );
-          const adId = result.insertId; 
           
+          // 3. Adminga yuboramiz
           const adminCollage = await createCollage(photoUrls);
           const adminMsg = await ctx.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
             caption: `🆔 <b>ID: ${adId}</b>\n\n${caption}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>${countText}${urgentTextNew}`,
-            reply_markup: adminKb, // <-- Admin klaviaturasi ulandi
+            reply_markup: adminKb, 
             parse_mode: "HTML",
           });
           if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
