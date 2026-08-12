@@ -1444,7 +1444,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
 
     const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
     .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-      .url("🤖 BEPUL E'LON", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
     try {
       const msg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
@@ -1788,7 +1788,7 @@ async function editPriceConversation(conversation, ctx) {
 
     const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
     .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-      .url("🤖 BEPUL E'LON", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
     await ctx.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, {
       caption: newCaption,
