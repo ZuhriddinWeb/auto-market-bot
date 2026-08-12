@@ -1460,8 +1460,14 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
       
       await ctx.editMessageCaption({ caption: "✅ Qaynoq narx sifatida kanalga joylandi!", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
       
-      try {
-          await bot.api.sendMessage(ad.userId, `🎉 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz kanalga <b>"🔥 QAYNOQ NARX"</b> maqomida joylandi!\n\nKanalni ko'rish: https://t.me/engarzonidamoshina`, { parse_mode: "HTML", reply_markup: mainMenu });
+     try {
+          await bot.api.sendMessage(ad.userId, 
+            `🎉 <b>Tabriklaymiz!</b>\n\n` +
+            `Sizning <b>${ad.carDetails}</b> e'loningiz kanalga <b>"🔥 QAYNOQ NARX"</b> maqomida joylandi!\n\n` +
+            `Kanalni ko'rish: https://t.me/engarzonidamoshina\n\n` +
+            `📌 <b>Eslatma:</b> Agar moshinangiz sotilsa, pastdagi «📂 Mening e'lonlarim» bo'limiga kirib «Sotildi» deb belgilab qo'yishni unutmang. Shuningdek, o'sha yerdan e'lon narxini pasaytirishingiz ham mumkin!`, 
+            { parse_mode: "HTML", reply_markup: mainMenu }
+          );
       } catch (e) {}
       
       // Alert xabarnomalari...
