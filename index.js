@@ -478,8 +478,10 @@ bot.callbackQuery("admin_pending", async (ctx) => {
       if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 Barter: ${ad.barter}\n`;
       caption += `💰 Narxi: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ad.userId}">Profil</a>`;
 
-      const adminKb = new InlineKeyboard().text("✅ Qabul qilish", `approve:${ad.id}`).text("❌ Rad etish", `reject:${ad.id}`);
-      
+      const adminKb = new InlineKeyboard()
+      .text("✅ Qabul qilish", `approve:${ad.id}`)
+      .text("❌ Rad etish", `reject:${ad.id}`).row()
+      .text("🔥 Qaynoq narxda qabul qilish", `approve_hot:${ad.id}`);
       await ctx.deleteMessage().catch(()=>{});
       const adminMsg = await ctx.replyWithPhoto(new InputFile(collagePath), { caption, reply_markup: adminKb, parse_mode: "HTML" });
       if (ad.videoId) { try { await ctx.replyWithVideo(ad.videoId, { reply_to_message_id: adminMsg.message_id }); } catch(e){} }
@@ -1362,7 +1364,84 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
      await ctx.answerCallbackQuery("Bu e'lon allaqachon ko'rib chiqilgan.");
   }
 });
+bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
+  const adId = ctx.match[1];
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  const ad = rows[0];
 
+  if (ad && ad.status === "pending") {
+    const photos = ad.photoId.split(",");
+    const photoUrls = await Promise.all(
+      photos.map(async (id) => {
+        const file = await bot.api.getFile(id);
+        return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+      })
+    );
+    const collagePath = await createCollage(photoUrls);
+
+    // ================= YANGI: MATN TEPASIGA QAYNOQ NARX QO'SHILDI =================
+    let caption =
+      `🔥 <b>QAYNOQ NARX!</b>\n\n` +
+      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${ad.probeg}\n` +
+      `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
+      `⛽ Yoqilg'i: ${ad.fuel}\n`;
+
+    if (ad.history && ad.history !== "Ko'rsatilmagan") {
+      caption += `🛠 Tarixi: ${ad.history}\n`;
+    }
+    if (ad.barter && ad.barter !== "Yo'q") {
+      caption += `🔄 Barter: ${ad.barter}\n`;
+    }
+
+    caption += `💰 Narxi: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
+      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/engarzonidamoshina`;
+    // ==============================================================================
+
+    const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
+    .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
+      .url("🤖 BEPUL E'LON", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+
+    try {
+      const msg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
+        caption: caption, reply_markup: channelMarkup, parse_mode: "HTML",
+      });
+      
+      if (ad.videoId) {
+        try { await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: msg.message_id }); } catch (e) {}
+      }
+
+      await db.execute("UPDATE ads SET status='active', channelMsgId=? WHERE id=?", [msg.message_id, adId]);
+      if (require('fs').existsSync(collagePath)) require('fs').unlinkSync(collagePath);
+      
+      await ctx.editMessageCaption({ caption: "✅ Qaynoq narx sifatida kanalga joylandi!", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
+      
+      try {
+          await bot.api.sendMessage(ad.userId, `🎉 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz kanalga <b>"🔥 QAYNOQ NARX"</b> maqomida joylandi!\n\nKanalni ko'rish: https://t.me/engarzonidamoshina`, { parse_mode: "HTML", reply_markup: mainMenu });
+      } catch (e) {}
+      
+      // Alert xabarnomalari...
+      try {
+        const [alerts] = await db.execute("SELECT * FROM alerts");
+        const adPrice = parseInt(ad.price.replace(/\D/g, "")) || 0;
+        const adDetails = ad.carDetails.toLowerCase();
+
+        for (const alert of alerts) {
+            if (adDetails.includes(alert.query) && adPrice <= alert.maxPrice) {
+                try {
+                    await bot.api.sendMessage(alert.userId, `🔔 <b>SIZ Qidirayotgan moshina chiqdi!</b>`, { parse_mode: "HTML" });
+                    await bot.api.copyMessage(alert.userId, CHANNEL_ID, msg.message_id);
+                } catch(e) {}
+            }
+        }
+      } catch(e) {}
+      
+    } catch (e) {
+      await ctx.reply("Xatolik: Kanalga yuborib bo'lmadi.");
+    }
+  } else {
+     await ctx.answerCallbackQuery("Bu e'lon allaqachon ko'rib chiqilgan.");
+  }
+});
 //Shu yergacha lotinga o'zgardi
 
 
@@ -1664,7 +1743,7 @@ async function editPriceConversation(conversation, ctx) {
 
     const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
     .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+      .url("🤖 BEPUL E'LON", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
     await ctx.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, {
       caption: newCaption,
@@ -1679,7 +1758,27 @@ async function editPriceConversation(conversation, ctx) {
       const newPriceNum = parseInt(newPrice) || 0;
       const diff = oldPriceNum - newPriceNum;
 
-      if (diff > 0) { // Faqat narx tushganda ishlaydi
+      if (diff > 0) { // FAQAT NARX TUSHGANDA ISHLAYDI
+        
+        // ================= YANGI: KANALGA "QAYNOQ NARX" TASHALANADI =================
+        try {
+            const hotPriceText = 
+                `🔥 <b>QAYNOQ NARX! Moshina arzonlashdi!</b>\n\n` +
+                `🚗 <b>${ad.carDetails}</b>\n` +
+                `❌ Eski narxi: <s>${oldPriceNum}$</s>\n` +
+                `✅ Yangi narxi: <b>${newPriceNum}$ 📉</b>\n\n` +
+                `👇 <i>E'lonni ko'rish uchun pastdagi xabarga bosing</i>`;
+                
+            await bot.api.sendMessage(CHANNEL_ID, hotPriceText, {
+                parse_mode: "HTML",
+                reply_to_message_id: ad.channelMsgId // Kanaldagi o'sha moshinaga reply qiladi
+            });
+        } catch (err) {
+            console.error("Kanalga qaynoq narx xabarini yuborishda xato:", err);
+        }
+        // ============================================================================
+
+        // Saqlab olganlarga (Favorites) xabar yuborish
         const [favs] = await db.execute("SELECT userId FROM favorites WHERE adId = ?", [adId]);
         for (const fav of favs) {
            try {
@@ -1691,9 +1790,7 @@ async function editPriceConversation(conversation, ctx) {
                `Kanalda ko'rish: https://t.me/engarzonidamoshina/${ad.channelMsgId}`, 
                { parse_mode: "HTML" }
              );
-           } catch(e) {
-             // Uzer botni bloklagan bo'lsa inkor qiladi
-           }
+           } catch(e) { }
         }
       }
     } catch (error) { console.error("Xabarnoma yuborishda xatolik:", error); }
