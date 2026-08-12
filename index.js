@@ -573,7 +573,7 @@ bot.use(createConversation(searchCarConversation));
  */
 async function createAdConversation(conversation, ctx) {
   const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim"];
-  const ad = { photos: [] };
+  const ad = { photos: [], urgent: false }; // urgent (shoshilinch) holati qo'shildi
   let isFullUpdate = false; 
   let updateAdId = null;
   let step = "BRAND"; 
@@ -608,6 +608,7 @@ async function createAdConversation(conversation, ctx) {
       ad.history = existingAd.history;
       ad.barter = existingAd.barter;
       ad.videoId = existingAd.videoId;
+      ad.urgent = false; // Tahrirlashda avvaliga false bo'ladi
       
       step = "PREVIEW"; 
     }
@@ -616,7 +617,6 @@ async function createAdConversation(conversation, ctx) {
   let isEditing = false; 
   const chatToClean = []; 
 
-  // O'ZGARISH: remove_keyboard olib tashlandi, o'rniga mainMenu berildi (Pastdagi knopkalar yo'qolmasligi uchun)
   await ctx.reply(isFullUpdate ? "📝 <b>E'lonni tahrirlash boshlandi.</b>" : "📝 <b>E'lon berish boshlandi.</b>", { reply_markup: mainMenu, parse_mode: "HTML" });
 
   const carCatalog = {
@@ -658,7 +658,6 @@ async function createAdConversation(conversation, ctx) {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        // O'ZGARISH: Global bekor qilish
         if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
         
         if (res.callbackQuery?.data === "cancel_ad") break;
@@ -904,11 +903,38 @@ async function createAdConversation(conversation, ctx) {
         ad.barter = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
-        step = isEditing ? "PREVIEW" : "MEDIA";
+        
+        // ================= O'ZGARISH: URGENT qadamiga o'tamiz =================
+        step = isEditing ? "PREVIEW" : "URGENT"; 
       }
 
+      // ================= YANGI QADAM: URGENT (SHOSHILINCH) =================
+      else if (step === "URGENT") {
+        const kb = new InlineKeyboard()
+          .text("🚨 Ha, shoshilinch", "urg:yes")
+          .text("Oddiy sotuv", "urg:no").row()
+          .text("🔙 Orqaga", "back_BARTER").text("❌ Bekor", "cancel_ad");
+          
+        msgPrompt = await ctx.reply("⚡️ <b>Sotuv shoshilinchmi?</b>\n\n<i>Agar moshinani bozor narxidan arzonroq va tezroq sotmoqchi bo'lsangiz «Ha, shoshilinch» ni tanlang. E'loningiz kanalga maxsus maqomda joylanadi!</i>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+        
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+        
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_BARTER") { step = "BARTER"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.urgent = res.callbackQuery?.data === "urg:yes";
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "MEDIA";
+      }
+      // =========================================================================
+
       else if (step === "MEDIA") {
-        const kb = new InlineKeyboard().text("✅ Bo'ldi (Yuborish)", "done_media").row().text("🔙 Orqaga", "back_BARTER").text("❌ Bekor", "cancel_ad");
+        const kb = new InlineKeyboard().text("✅ Bo'ldi (Yuborish)", "done_media").row().text("🔙 Orqaga", "back_URGENT").text("❌ Bekor", "cancel_ad");
         msgPrompt = await ctx.reply("📸🎥 <b>Rasm va qisqa Video yuboring (Maks 6 ta rasm, 1 ta video):</b>\n\n<i>Video yuborish majburiy emas, lekin moshinani 30 soniyalik videoga olib yuborsangiz, tezroq sotiladi!</i>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         
@@ -916,7 +942,6 @@ async function createAdConversation(conversation, ctx) {
         ad.videoId = ad.videoId || null;
 
         while (ad.photos.length < 6 || !ad.videoId) {
-          // O'ZGARISH: "message:text" ham qo'shildi, menyu knopkalarini tutib olish uchun
           const res = await conversation.waitFor(["message:photo", "message:video", "callback_query:data", "message:text"]);
           if (res.message) chatToClean.push(res.message.message_id);
           
@@ -925,12 +950,12 @@ async function createAdConversation(conversation, ctx) {
                   await deleteMsgs(ctx, chatToClean);
                   return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" });
               }
-              // Begona oddiy yozuv yozilsa unga e'tibor bermay davom etadi
               continue;
           }
 
           if (res.callbackQuery?.data === "cancel_ad") { step = "CANCEL"; break; }
-          if (res.callbackQuery?.data === "back_BARTER") { step = "BARTER"; await safeAnswerCbq(res); break; }
+          // O'ZGARISH: back_BARTER ni back_URGENT ga o'zgartirdik
+          if (res.callbackQuery?.data === "back_URGENT") { step = "URGENT"; await safeAnswerCbq(res); break; } 
           
           if (res.callbackQuery?.data === "done_media") {
             await safeAnswerCbq(res);
@@ -958,7 +983,7 @@ async function createAdConversation(conversation, ctx) {
           }
         }
         if (step === "CANCEL") break;
-        if (step === "BARTER") { await deleteMsgs(ctx, chatToClean); continue; }
+        if (step === "URGENT") { await deleteMsgs(ctx, chatToClean); continue; }
         await deleteMsgs(ctx, chatToClean);
       }
 
@@ -988,7 +1013,12 @@ async function createAdConversation(conversation, ctx) {
         }));
         const collagePath = await createCollage(photoUrls);
         
-        let caption = 
+        // ================= YANGI: Agar shoshilinch bo'lsa PREVIEW da ko'rsatiladi =================
+        let caption = "";
+        if (ad.urgent) {
+            caption += `🚨 <b>SHOSHILINCH SOTILADI!</b>\n\n`;
+        }
+        caption += 
           `🚗 <b>Moshina:</b> ${ad.brand} ${ad.model}\n` +
           `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${ad.probeg}\n` +
           `💎 <b>Kraska:</b> ${ad.paint}\n🎨 <b>Rangi:</b> ${ad.color}\n` +
@@ -1000,13 +1030,14 @@ async function createAdConversation(conversation, ctx) {
         caption += `💰 <b>Narxi:</b> ${ad.price}$${priceBadge}\n☎️ <b>Tel:</b> +${ad.phone}\n🚩 <b>Viloyat:</b> ${ad.region}`;
         if (ad.videoId) caption += `\n🎥 <i>(Ushbu e'londa video-obzor mavjud!)</i>`;
 
+        // ================= O'ZGARISH: edit_URGENT tugmasi qo'shildi =================
         const kb = new InlineKeyboard()
           .text("✅ ADMINGA YUBORISH", "submit_ad").row()
           .text("✏️ Marka", "edit_BRAND").text("✏️ Model", "edit_MODEL").text("✏️ Yili", "edit_YEAR").row()
           .text("✏️ Probeg", "edit_PROBEG").text("✏️ Kraska", "edit_PAINT").text("✏️ Rang", "edit_COLOR").row()
           .text("✏️ Korobka", "edit_TRANS").text("✏️ Yoqilg'i", "edit_FUEL").text("✏️ Narx", "edit_PRICE").row()
-          .text("✏️ Raqam", "edit_PHONE").text("✏️ Viloyat", "edit_REGION")
-          .text("📸🎥 Rasm/Video", "edit_MEDIA").row()
+          .text("✏️ Raqam", "edit_PHONE").text("✏️ Viloyat", "edit_REGION").row()
+          .text("⚡️ Shoshilinch", "edit_URGENT").text("📸🎥 Rasm/Video", "edit_MEDIA").row()
           .text("❌ Bekor qilish", "cancel_ad");
 
         await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
@@ -1017,7 +1048,6 @@ async function createAdConversation(conversation, ctx) {
         
         if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath); 
 
-        // O'ZGARISH: "message:text" ni ham kutamiz, menyu tugmalari bosib yuborilsa ushlab olish uchun
         let res, action;
         while(true) {
             res = await conversation.waitFor(["callback_query:data", "message:text"]);
@@ -1027,7 +1057,7 @@ async function createAdConversation(conversation, ctx) {
                     return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" });
                 }
                 await ctx.api.deleteMessage(ctx.chat.id, res.message.message_id).catch(()=>{});
-                continue; // Tugma bosishni kutishda davom etadi
+                continue; 
             }
             action = res.callbackQuery.data;
             break;
@@ -1041,9 +1071,12 @@ async function createAdConversation(conversation, ctx) {
         if (action === "submit_ad") {
           const [[pAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'pending'");
           const [[pEdits]] = await db.execute("SELECT COUNT(*) as count FROM ad_edits");
-          const totalPending = pAds.count + pEdits.count + 1; // O'zi bilan birga
+          const totalPending = pAds.count + pEdits.count + 1; 
           const countText = `\n\n📦 <b>Tasdiq kutayotganlar soni: ${totalPending} ta</b>`;
+          
           if (isFullUpdate) {
+            let urgentTextEdit = ad.urgent ? "\n\n🚨 <b>Diqqat: Foydalanuvchi buni SHOSHILINCH sotmoqchi!</b>" : "";
+            
             const [result] = await db.execute(
               `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
               [updateAdId, ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.videoId || null]
@@ -1052,7 +1085,7 @@ async function createAdConversation(conversation, ctx) {
             
             const adminCollage = await createCollage(photoUrls);
             const adminMsg = await ctx.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
-              caption: `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 <b>Eski ID: ${updateAdId}</b>\n\n${caption}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>${countText}`,
+              caption: `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 <b>Eski ID: ${updateAdId}</b>\n\n${caption}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>${countText}${urgentTextEdit}`,
               reply_markup: new InlineKeyboard().text("✅ O'zgarishni tasdiqlash", `approve_edit:${editId}`).text("❌ Rad etish", `reject_edit:${editId}`),
               parse_mode: "HTML",
             });
@@ -1067,6 +1100,19 @@ async function createAdConversation(conversation, ctx) {
             return; 
           }
 
+          // ================= YANGI: ADMIN UCHUN SHOSHILINCH BILDIRISHNOMA VA KLAVIATURA =================
+          let urgentTextNew = ad.urgent ? "\n\n🚨 <b>DIQQAT: Ushbu e'lon foydalanuvchi tomonidan SHOSHILINCH (Qaynoq narx) deb belgilangan!</b>" : "";
+          
+          let adminKb = new InlineKeyboard();
+          if (ad.urgent) {
+              adminKb.text("🔥 Qabul (Shoshilinch)", `approve_hot:${adId}`).text("❌ Rad etish", `reject:${adId}`).row()
+                     .text("✅ Oddiy qabul qilish", `approve:${adId}`);
+          } else {
+              adminKb.text("✅ Qabul qilish", `approve:${adId}`).text("❌ Rad etish", `reject:${adId}`).row()
+                     .text("🔥 Qaynoq narxda qabul qilish", `approve_hot:${adId}`);
+          }
+          // ==============================================================================================
+
           const [result] = await db.execute(
             `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             [ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.videoId || null]
@@ -1075,8 +1121,8 @@ async function createAdConversation(conversation, ctx) {
           
           const adminCollage = await createCollage(photoUrls);
           const adminMsg = await ctx.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
-            caption: `🆔 <b>ID: ${adId}</b>\n\n${caption}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>${countText}`,
-            reply_markup: new InlineKeyboard().text("✅ Qabul qilish", `approve:${adId}`).text("❌ Rad etish", `reject:${adId}`),
+            caption: `🆔 <b>ID: ${adId}</b>\n\n${caption}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>${countText}${urgentTextNew}`,
+            reply_markup: adminKb, // <-- Admin klaviaturasi ulandi
             parse_mode: "HTML",
           });
           if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
@@ -1097,12 +1143,8 @@ async function createAdConversation(conversation, ctx) {
       }
     } catch (err) {
       console.error("E'lon yaratishda xatolik:", err);
-      
-      // Xatolik bo'lganda darhol xotirani va ortiqcha xabarlarni tozalaymiz
       if (ctx.session) ctx.session.editAdData = null;
       await deleteMsgs(ctx, chatToClean);
-      
-      // Uzr so'rab, bosh menyuga qaytaramiz (return qo'yilgani uchun boshqa xabar chiqmaydi)
       return ctx.reply(
         "😔 <b>Kechirasiz, tizimda kutilmagan xatolik yuz berdi.</b>\n\n" +
         "E'lon yaratish jarayoni to'xtatildi. Iltimos, pastdagi <b>«📝 E'lon berish</b> tugmasini yoki /start buyrug'ini bosib, jarayonni boshqatdan boshlang.", 
@@ -1111,7 +1153,7 @@ async function createAdConversation(conversation, ctx) {
     }
   }
   
-if (ctx.session) ctx.session.editAdData = null; // TOZALASH
+if (ctx.session) ctx.session.editAdData = null; 
 await ctx.reply("❌ <b>E'lon berish bekor qilindi.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
 await deleteMsgs(ctx, chatToClean);
 }
@@ -1763,11 +1805,11 @@ async function editPriceConversation(conversation, ctx) {
         // ================= YANGI: KANALGA "QAYNOQ NARX" TASHALANADI =================
         try {
             const hotPriceText = 
-                `🔥 <b>QAYNOQ NARX! Moshina arzonlashdi!</b>\n\n` +
-                `🚗 <b>${ad.carDetails}</b>\n` +
-                `❌ Eski narxi: <s>${oldPriceNum}$</s>\n` +
-                `✅ Yangi narxi: <b>${newPriceNum}$ 📉</b>\n\n` +
-                `👇 <i>E'lonni ko'rish uchun pastdagi xabarga bosing</i>`;
+            `🔥 <b>QAYNOQ NARX! Mashina arzonlashdi!</b>\n\n` +
+            `🚗 <b>${ad.carDetails}</b>\n` +
+            `❌ Eski narxi: <s>${oldPriceNum}$</s>\n` +
+            `✅ Yangi narxi: <b>${newPriceNum}$ 📉</b>\n\n` +
+            `👆 <i>E'lonni to'liq ko'rish uchun tepadagi xabarga bosing</i>`;
                 
             await bot.api.sendMessage(CHANNEL_ID, hotPriceText, {
                 parse_mode: "HTML",
