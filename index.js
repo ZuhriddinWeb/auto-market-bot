@@ -45,6 +45,14 @@ if (!fs.existsSync(collagesDir)) {
       )
     `);
     await db.execute(`
+      CREATE TABLE IF NOT EXISTS channel_stats (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        date DATE UNIQUE,
+        main_count INT DEFAULT 0,
+        second_count INT DEFAULT 0
+      )
+    `);
+    await db.execute(`
       CREATE TABLE IF NOT EXISTS ad_edits (
         editId BIGINT AUTO_INCREMENT PRIMARY KEY,
         oldAdId BIGINT,
@@ -85,6 +93,7 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE ads ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP", // <--- ШУ ҚАТОР ҚЎШИЛДИ
       "ALTER TABLE ads ADD COLUMN history TEXT DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN secondChannelMsgId VARCHAR(50) DEFAULT NULL"
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -438,22 +447,120 @@ bot.callbackQuery("admin_close", async (ctx) => {
 
 bot.callbackQuery("admin_stats", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
-  await ctx.answerCallbackQuery("⏳ Statistika yuklanmoqda...");
+  await ctx.answerCallbackQuery("⏳ Mukammal statistika yuklanmoqda...");
   
-  const [[userCount]] = await db.execute("SELECT COUNT(*) as count FROM users");
-  const [[activeAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'active'");
-  const [[soldAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'sold'");
-  const [[pendingAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'pending'");
+  try {
+      // 1. UMUMIY BAZA STATISTIKASI
+      const [[userCount]] = await db.execute("SELECT COUNT(*) as count FROM users");
+      const [[activeAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'active'");
+      const [[soldAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'sold'");
+      const [[pendingAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'pending'");
+      
+      // 2. BUGUNGI (KUNDALIK) STATISTIKA
+      const [[todayUsers]] = await db.execute("SELECT COUNT(*) as count FROM users WHERE DATE(joined_at) = CURDATE()");
+      const [[todayAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE DATE(created_at) = CURDATE()");
 
-  const text = `📊 <b>BOT STATISTIKASI</b>\n\n` +
-    `👥 Umumiy foydalanuvchilar: <b>${userCount.count}</b> ta\n` +
-    `🟢 Faol e'lonlar (Kanalda): <b>${activeAds.count}</b> ta\n` +
-    `💰 Sotilgan moshinalar: <b>${soldAds.count}</b> ta\n` +
-    `⏳ Tasdiq kutayotganlar: <b>${pendingAds.count}</b> ta\n`;
+      // 3. KUTAYOTGAN XARIDORLAR VA QOIDABUZARLAR
+      const [[alertCount]] = await db.execute("SELECT COUNT(*) as count FROM alerts");
+      const [[bannedCount]] = await db.execute("SELECT COUNT(*) as count FROM banned_users");
 
-try {
+      // 4. MOLIYAVIY AYLANMA
+      const [[soldSumRow]] = await db.execute("SELECT SUM(CAST(price AS UNSIGNED)) as totalSum FROM ads WHERE status = 'sold'");
+      const totalMoney = soldSumRow.totalSum ? soldSumRow.totalSum.toLocaleString("en-US") + " $" : "0 $";
+
+      // 5. KONVERSIYA (Sotuv samaradorligi)
+      let conversionRate = 0;
+      let totalProcessedAds = activeAds.count + soldAds.count;
+      if (totalProcessedAds > 0) {
+          conversionRate = Math.round((soldAds.count / totalProcessedAds) * 100);
+      }
+
+      // 6. KANALLAR STATISTIKASI VA DINAMIKASI
+      let mainChannelCount = 0;
+      let mainAdminsCount = 0;
+      let secondChannelCount = 0;
+
+      try {
+          mainChannelCount = await bot.api.getChatMemberCount(CHANNEL_ID);
+          const admins = await bot.api.getChatAdministrators(CHANNEL_ID);
+          mainAdminsCount = admins.length; 
+      } catch (e) {
+          console.error("Asosiy kanal ma'lumotini olishda xato");
+      }
+
+      try {
+          const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
+          if (SECOND_CHANNEL_ID) {
+              secondChannelCount = await bot.api.getChatMemberCount(SECOND_CHANNEL_ID);
+          }
+      } catch (e) {}
+
+      // === KANAL O'SISH DINAMIKASINI HISOBLASH ===
+      let mainDiffText = "";
+      let secDiffText = "";
+
+      try {
+          // Eng oxirgi saqlangan kunni olamiz (bugundan oldingi)
+          const [lastStats] = await db.execute("SELECT * FROM channel_stats WHERE date < CURDATE() ORDER BY date DESC LIMIT 1");
+          
+          if (lastStats.length > 0) {
+              const prevMain = lastStats[0].main_count;
+              const prevSec = lastStats[0].second_count;
+
+              // Asosiy kanal dinamikasi
+              if (prevMain > 0) {
+                  const mDiff = mainChannelCount - prevMain;
+                  if (mDiff > 0) mainDiffText = ` <i>(🟢 +${mDiff})</i>`;
+                  else if (mDiff < 0) mainDiffText = ` <i>(🔴 ${mDiff})</i>`;
+              }
+              // 2-kanal dinamikasi
+              if (prevSec > 0) {
+                  const sDiff = secondChannelCount - prevSec;
+                  if (sDiff > 0) secDiffText = ` <i>(🟢 +${sDiff})</i>`;
+                  else if (sDiff < 0) secDiffText = ` <i>(🔴 ${sDiff})</i>`;
+              }
+          }
+
+          // Bugungi holatni bazaga yozamiz yoki yangilaymiz
+          await db.execute(
+              "INSERT INTO channel_stats (date, main_count, second_count) VALUES (CURDATE(), ?, ?) ON DUPLICATE KEY UPDATE main_count=?, second_count=?",
+              [mainChannelCount, secondChannelCount, mainChannelCount, secondChannelCount]
+          );
+      } catch (e) {
+          console.error("Kanal statistikasini saqlashda xato:", e);
+      }
+      // ===========================================
+
+      // XABARNI SHAKLLANTIRISH
+      const text = 
+        `📊 <b>MUKAMMAL BIZNES STATISTIKA</b>\n\n` +
+        
+        `🔥 <b>BUGUNGI FAOLLIK:</b>\n` +
+        `➕ Yangi a'zolar: <b>+${todayUsers.count} ta</b>\n` +
+        `📝 Yangi e'lonlar: <b>+${todayAds.count} ta</b>\n\n` +
+        
+        `💸 <b>MOLIYAVIY KO'RSATKICHLAR:</b>\n` +
+        `✅ Jami sotilganlar: <b>${soldAds.count} ta</b>\n` +
+        `💵 Umumiy aylanma: <b>${totalMoney}</b>\n` +
+        `🎯 Sotuv samaradorligi: <b>${conversionRate}%</b>\n\n` +
+        
+        `📈 <b>UMUMIY KO'RSATKICHLAR:</b>\n` +
+        `👥 Barcha foydalanuvchilar: <b>${userCount.count} ta</b>\n` +
+        `🟢 Faol (Sotuvdagi) e'lonlar: <b>${activeAds.count} ta</b>\n` +
+        `⏳ Tasdiq kutayotganlar: <b>${pendingAds.count} ta</b>\n` +
+        `🔔 Tayyor xaridorlar (Qidiruvda): <b>${alertCount.count} ta</b>\n` +
+        `🚫 Bloklanganlar: <b>${bannedCount.count} ta</b>\n\n` +
+        
+        `📢 <b>KANALLAR HOLATI:</b>\n` +
+        `1️⃣ <b>Asosiy:</b> ${mainChannelCount} ta${mainDiffText} <i>(${mainAdminsCount} admin)</i>\n` +
+        `2️⃣ <b>2-kanal:</b> ${secondChannelCount} ta${secDiffText}`;
+
       await ctx.editMessageText(text, { reply_markup: adminMenu, parse_mode: "HTML" });
-  } catch(e) {}
+
+  } catch (error) {
+      console.error("Statistika xatosi:", error);
+      await ctx.answerCallbackQuery({text: "Statistika olishda xatolik yuz berdi.", show_alert: true});
+  }
 });
 
 bot.callbackQuery("admin_broadcast", async (ctx) => {
@@ -1363,19 +1470,19 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
         caption: caption, reply_markup: channelMarkup, parse_mode: "HTML",
       });
       
-      // YANGI: Terminalda e'lon qaysi kanalga ketganini aniq ko'rsatadi
       console.log(`✅ YANGI E'LON KANALGA TUSHDI! Kanal: ${CHANNEL_ID}, Xabar ID: ${msg.message_id}`);
 
+      let vidMsg = null; // Video uchun maxsus o'zgaruvchi
       if (ad.videoId) {
         try {
-          await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: msg.message_id });
+          vidMsg = await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: msg.message_id });
         } catch (vidErr) {
           console.error("Videoni kanalga yuborishda xatolik:", vidErr);
         }
       }
 
-      await db.execute("UPDATE ads SET status='active', channelMsgId=? WHERE id=?", [msg.message_id, adId]);
       // ================= YANGI: 2-KANALGA HAM NUSXALASH =================
+      let secondMsgId = null; // 2-kanal ID sini saqlash uchun
       try {
         const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID; 
         
@@ -1383,10 +1490,11 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
           const secondMsg = await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, msg.message_id, {
             reply_markup: channelMarkup
           });
+          secondMsgId = secondMsg.message_id; // <-- ID ni ushlab oldik!
           
           if (vidMsg) {
             await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, vidMsg.message_id, {
-              reply_to_message_id: secondMsg.message_id
+              reply_to_message_id: secondMsgId
             });
           }
         }
@@ -1394,6 +1502,10 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
         console.error("2-kanalga nusxalashda xato yuz berdi:", err);
       }
       // ==================================================================
+
+      // MUHIM: Endi ikkala kanal ID si ham bazaga saqlanadi
+      await db.execute("UPDATE ads SET status='active', channelMsgId=?, secondChannelMsgId=? WHERE id=?", [msg.message_id, secondMsgId, adId]);
+      
       if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
       
       await ctx.editMessageCaption({ caption: "✅ Kanalga joylandi!", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
@@ -1428,6 +1540,8 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
      await ctx.answerCallbackQuery("Bu e'lon allaqachon ko'rib chiqilgan.");
   }
 });
+
+
 bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
   const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
@@ -1443,7 +1557,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
     );
     const collagePath = await createCollage(photoUrls);
 
-    // ================= YANGI: MATN TEPASIGA QAYNOQ NARX QO'SHILDI =================
+    // ================= MATN TEPASIGA QAYNOQ NARX QO'SHILDI =================
     let caption =
       `🔥 <b>QAYNOQ NARX!</b>\n\n` +
       `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${ad.probeg}\n` +
@@ -1466,15 +1580,23 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
       .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
     try {
+      // 1. Asosiy kanalga rasm yuborish
       const msg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
         caption: caption, reply_markup: channelMarkup, parse_mode: "HTML",
       });
       
+      // 2. Asosiy kanalga video yuborish (vidMsg o'zgaruvchisi ochildi)
+      let vidMsg = null;
       if (ad.videoId) {
-        try { await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: msg.message_id }); } catch (e) {}
+        try { 
+            vidMsg = await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: msg.message_id }); 
+        } catch (e) {
+            console.error("Videoni kanalga yuborishda xatolik:", e);
+        }
       }
 
-      await db.execute("UPDATE ads SET status='active', channelMsgId=? WHERE id=?", [msg.message_id, adId]);
+      // ================= YANGI: 2-KANALGA HAM NUSXALASH =================
+      let secondMsgId = null; // 2-kanal xabarining ID si uchun
       try {
         const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID; 
         
@@ -1482,21 +1604,27 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
           const secondMsg = await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, msg.message_id, {
             reply_markup: channelMarkup
           });
+          secondMsgId = secondMsg.message_id; // <-- 2-kanal ID si olindi
           
           if (vidMsg) {
             await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, vidMsg.message_id, {
-              reply_to_message_id: secondMsg.message_id
+              reply_to_message_id: secondMsgId
             });
           }
         }
       } catch (err) {
         console.error("2-kanalga nusxalashda xato yuz berdi:", err);
       }
+      // ==================================================================
+
+      // 3. IKKALA kanal ID sini ham bazaga bitta qilib saqlash
+      await db.execute("UPDATE ads SET status='active', channelMsgId=?, secondChannelMsgId=? WHERE id=?", [msg.message_id, secondMsgId, adId]);
+
       if (require('fs').existsSync(collagePath)) require('fs').unlinkSync(collagePath);
       
       await ctx.editMessageCaption({ caption: "✅ Qaynoq narx sifatida kanalga joylandi!", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
       
-     try {
+      try {
           await bot.api.sendMessage(ad.userId, 
             `🎉 <b>Tabriklaymiz!</b>\n\n` +
             `Sizning <b>${ad.carDetails}</b> e'loningiz kanalga <b>"🔥 QAYNOQ NARX"</b> maqomida joylandi!\n\n` +
@@ -1506,7 +1634,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
           );
       } catch (e) {}
       
-      // Alert xabarnomalari...
+      // Alert xabarnomalari
       try {
         const [alerts] = await db.execute("SELECT * FROM alerts");
         const adPrice = parseInt(ad.price.replace(/\D/g, "")) || 0;
@@ -1523,6 +1651,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
       } catch(e) {}
       
     } catch (e) {
+      console.error("Kanalga yuborishda xatolik:", e);
       await ctx.reply("Xatolik: Kanalga yuborib bo'lmadi.");
     }
   } else {
@@ -1577,12 +1706,29 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
   if (ad && ad.status === 'active') {
       try {
         const newCaption = `💰 <b>SOTILDI!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Narxi: ${ad.price}$</b>\n\n❌ <b>E'lon yopildi.</b>`;
+        
+        // 1. Asosiy kanalni yangilash
         await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, parse_mode: "HTML" });
+        
+        // ================= YANGI: 2-KANALDAGI E'LONNI HAM YANGILASH =================
+        try {
+            const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
+            if (SECOND_CHANNEL_ID && ad.secondChannelMsgId) {
+                await bot.api.editMessageCaption(SECOND_CHANNEL_ID, ad.secondChannelMsgId, {
+                    caption: newCaption, // <--- newCaption ishlatiladi
+                    parse_mode: "HTML"
+                });
+            }
+        } catch (err) {
+            console.error("2-kanaldagi xabarni yangilashda xato (Sotildi):", err);
+        }
+        // ============================================================================
+        
         await db.execute("UPDATE ads SET status='sold' WHERE id=?", [adId]);
         await ctx.editMessageText("✅ <b>Kanalda sotildi deb belgilandi!</b>", { parse_mode: "HTML" });
         await bot.api.sendMessage(ad.userId, `🎉 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz kanalda "SOTILDI" deb belgilandi.`, { parse_mode: "HTML" });
 
-        // ================= YANGI: AVTOMATIK TABRIKNOMA (REKLAMA) =================
+        // Avtomatik tabriknoma (Reklama) asosiy kanalga
         const congratsText = 
           `🎉 <b>TABRIKLAYMIZ!</b>\n\n` +
           `Navbatdagi avtomobil ham kanalimiz va botimiz orqali juda tez o'z xaridorini topdi! Sotuvchi va oluvchiga barakasini bersin. 🤝\n\n` +
@@ -1592,9 +1738,8 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
 
         await bot.api.sendMessage(CHANNEL_ID, congratsText, {
             parse_mode: "HTML",
-            reply_to_message_id: ad.channelMsgId // <--- Kanaldagi moshina e'loniga "Reply" qiladi
+            reply_to_message_id: ad.channelMsgId 
         });
-        // =========================================================================
 
       } catch (e) {
         console.error("Sotildi qilishda xatolik:", e);
@@ -1832,11 +1977,27 @@ async function editPriceConversation(conversation, ctx) {
     .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
       .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
+    // 1. Asosiy kanalni yangilash
     await ctx.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, {
       caption: newCaption,
       reply_markup: channelMarkup,
       parse_mode: "HTML"
     });
+
+    // ================= YANGI: 2-KANALDAGI E'LONNI HAM YANGILASH =================
+    try {
+        const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
+        if (SECOND_CHANNEL_ID && ad.secondChannelMsgId) {
+            await ctx.api.editMessageCaption(SECOND_CHANNEL_ID, ad.secondChannelMsgId, {
+                caption: newCaption,
+                reply_markup: channelMarkup,
+                parse_mode: "HTML"
+            });
+        }
+    } catch (err) {
+        console.error("2-kanaldagi xabarni yangilashda xato (Narx):", err);
+    }
+    // ============================================================================
 
     await db.execute("UPDATE ads SET price = ? WHERE id = ?", [newPrice, adId]);
 
@@ -1845,27 +2006,35 @@ async function editPriceConversation(conversation, ctx) {
       const newPriceNum = parseInt(newPrice) || 0;
       const diff = oldPriceNum - newPriceNum;
 
-      if (diff > 0) { // FAQAT NARX TUSHGANDA ISHLAYDI
+      if (diff > 0) { 
         
-        // ================= YANGI: KANALGA "QAYNOQ NARX" TASHALANADI =================
+        const hotPriceText = 
+        `🔥 <b>QAYNOQ NARX! Mashina arzonlashdi!</b>\n\n` +
+        `🚗 <b>${ad.carDetails}</b>\n` +
+        `❌ Eski narxi: <s>${oldPriceNum}$</s>\n` +
+        `✅ Yangi narxi: <b>${newPriceNum}$ 📉</b>\n\n` +
+        `👆 <i>E'lonni to'liq ko'rish uchun tepadagi xabarga bosing</i>`;
+            
         try {
-            const hotPriceText = 
-            `🔥 <b>QAYNOQ NARX! Mashina arzonlashdi!</b>\n\n` +
-            `🚗 <b>${ad.carDetails}</b>\n` +
-            `❌ Eski narxi: <s>${oldPriceNum}$</s>\n` +
-            `✅ Yangi narxi: <b>${newPriceNum}$ 📉</b>\n\n` +
-            `👆 <i>E'lonni to'liq ko'rish uchun tepadagi xabarga bosing</i>`;
-                
+            // Asosiy kanalga "Qaynoq narx" tashlash
             await bot.api.sendMessage(CHANNEL_ID, hotPriceText, {
                 parse_mode: "HTML",
-                reply_to_message_id: ad.channelMsgId // Kanaldagi o'sha moshinaga reply qiladi
+                reply_to_message_id: ad.channelMsgId 
             });
+            
+            // ================= 2-KANALGA HAM "QAYNOQ NARX" TASHALANADI =================
+            const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
+            if (SECOND_CHANNEL_ID && ad.secondChannelMsgId) {
+                await bot.api.sendMessage(SECOND_CHANNEL_ID, hotPriceText, {
+                    parse_mode: "HTML",
+                    reply_to_message_id: ad.secondChannelMsgId 
+                });
+            }
+            // ============================================================================
         } catch (err) {
             console.error("Kanalga qaynoq narx xabarini yuborishda xato:", err);
         }
-        // ============================================================================
 
-        // Saqlab olganlarga (Favorites) xabar yuborish
         const [favs] = await db.execute("SELECT userId FROM favorites WHERE adId = ?", [adId]);
         for (const fav of favs) {
            try {
@@ -1985,37 +2154,34 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
   );
   const collagePath = await createCollage(photoUrls);
 
-  // ================= O'ZGARGAN QISM: Kapsion dinamik yasaladi =================
   let newCaption =
     `🆔 ID: ${oldAd.id}\n🚗 Moshina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${editData.probeg}\n` +
     `💎 Kraskasi: ${editData.paint}\n🎨 Rangi: ${editData.color}\n✅ Karobka: ${editData.transmission}\n` +
     `⛽ Yoqilg'i: ${editData.fuel}\n`;
 
-  if (editData.history && editData.history !== "Кўрсатилмаган") {
+  if (editData.history && editData.history !== "Кўрсатилмаган" && editData.history !== "Ko'rsatilmagan") {
     newCaption += `🛠 Tarixi: ${editData.history}\n`;
   }
-  if (editData.barter && editData.barter !== "Йўқ") {
+  if (editData.barter && editData.barter !== "Йўқ" && editData.barter !== "Yo'q") {
     newCaption += `🔄 Barter: ${editData.barter}\n`;
   }
 
   newCaption += `💰 Narxi: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n` +
     `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/engarzonidamoshina`;
-  // =========================================================================
 
   const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
   .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${oldAd.id}`).row()
     .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
   try {
-    // Kanaldagi XABARNI va RASMNI (Kollajni) almashtirish
+    // 1. Asosiy kanaldagi rasm va matnni yangilash
     await bot.api.editMessageMedia(CHANNEL_ID, oldAd.channelMsgId, {
         type: "photo",
         media: new InputFile(collagePath),
         caption: newCaption,
         parse_mode: "HTML"
     }, { reply_markup: channelMarkup });
-
-    // ================= O'ZGARGAN QISM: Video bo'lsa kanalga jo'natiladi =================
+    
     if (editData.videoId) {
       try {
         await bot.api.sendVideo(CHANNEL_ID, editData.videoId, { reply_to_message_id: oldAd.channelMsgId });
@@ -2023,16 +2189,34 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
         console.error("Yangi videoni kanalga yuborishda xatolik:", vidErr);
       }
     }
-    // =========================================================================
 
-    // ================= O'ZGARGAN QISM: UPDATE so'roviga history, barter, videoId qo'shildi =================
+    // ================= YANGI: 2-KANALDAGI E'LONNI HAM YANGILASH =================
+    try {
+        const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
+        if (SECOND_CHANNEL_ID && oldAd.secondChannelMsgId) {
+            // Rasmni va matnni yangilash
+            await bot.api.editMessageMedia(SECOND_CHANNEL_ID, oldAd.secondChannelMsgId, {
+                type: "photo",
+                media: new InputFile(collagePath),
+                caption: newCaption,
+                parse_mode: "HTML"
+            }, { reply_markup: channelMarkup });
+            
+            // Video bo'lsa uni ham 2-kanalga yuborish
+            if (editData.videoId) {
+                await bot.api.sendVideo(SECOND_CHANNEL_ID, editData.videoId, { reply_to_message_id: oldAd.secondChannelMsgId });
+            }
+        }
+    } catch (err) {
+        console.error("2-kanaldagi xabarni yangilashda xato (Tahrirlash):", err);
+    }
+    // ============================================================================
+
     await db.execute(
         `UPDATE ads SET carDetails=?, year=?, probeg=?, paint=?, color=?, transmission=?, fuel=?, price=?, phone=?, region=?, photoId=?, history=?, barter=?, videoId=? WHERE id=?`,
-        [editData.carDetails, editData.year, editData.probeg, editData.paint, editData.color, editData.transmission, editData.fuel, editData.price, editData.phone, editData.region, editData.photoId, editData.history || "Кўрсатилмаган", editData.barter || "Йўқ", editData.videoId || null, oldAd.id]
+        [editData.carDetails, editData.year, editData.probeg, editData.paint, editData.color, editData.transmission, editData.fuel, editData.price, editData.phone, editData.region, editData.photoId, editData.history || "Ko'rsatilmagan", editData.barter || "Yo'q", editData.videoId || null, oldAd.id]
     );
-    // =========================================================================
 
-    // Vaqtinchalik jadvaldan o'chirib tashlash
     await db.execute("DELETE FROM ad_edits WHERE editId = ?", [editId]);
     if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
 
