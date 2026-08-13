@@ -1375,6 +1375,25 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
       }
 
       await db.execute("UPDATE ads SET status='active', channelMsgId=? WHERE id=?", [msg.message_id, adId]);
+      // ================= YANGI: 2-KANALGA HAM NUSXALASH =================
+      try {
+        const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID; 
+        
+        if (SECOND_CHANNEL_ID) { 
+          const secondMsg = await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, msg.message_id, {
+            reply_markup: channelMarkup
+          });
+          
+          if (vidMsg) {
+            await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, vidMsg.message_id, {
+              reply_to_message_id: secondMsg.message_id
+            });
+          }
+        }
+      } catch (err) {
+        console.error("2-kanalga nusxalashda xato yuz berdi:", err);
+      }
+      // ==================================================================
       if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
       
       await ctx.editMessageCaption({ caption: "✅ Kanalga joylandi!", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
@@ -1456,6 +1475,23 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
       }
 
       await db.execute("UPDATE ads SET status='active', channelMsgId=? WHERE id=?", [msg.message_id, adId]);
+      try {
+        const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID; 
+        
+        if (SECOND_CHANNEL_ID) { 
+          const secondMsg = await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, msg.message_id, {
+            reply_markup: channelMarkup
+          });
+          
+          if (vidMsg) {
+            await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, vidMsg.message_id, {
+              reply_to_message_id: secondMsg.message_id
+            });
+          }
+        }
+      } catch (err) {
+        console.error("2-kanalga nusxalashda xato yuz berdi:", err);
+      }
       if (require('fs').existsSync(collagePath)) require('fs').unlinkSync(collagePath);
       
       await ctx.editMessageCaption({ caption: "✅ Qaynoq narx sifatida kanalga joylandi!", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
