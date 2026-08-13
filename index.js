@@ -468,6 +468,27 @@ bot.callbackQuery("admin_stats", async (ctx) => {
       const [[soldSumRow]] = await db.execute("SELECT SUM(CAST(price AS UNSIGNED)) as totalSum FROM ads WHERE status = 'sold'");
       const totalMoney = soldSumRow.totalSum ? soldSumRow.totalSum.toLocaleString("en-US") + " $" : "0 $";
 
+      // ================= YANGI: FAOLLIK VA QIZIQISHLAR (FAVORITES) =================
+      const [[favCount]] = await db.execute("SELECT COUNT(*) as count FROM favorites");
+      
+      let topFavCarText = "Hali yo'q";
+      try {
+          const [topFavs] = await db.execute(`
+              SELECT a.carDetails, COUNT(f.adId) as saves 
+              FROM favorites f 
+              JOIN ads a ON f.adId = a.id 
+              GROUP BY f.adId 
+              ORDER BY saves DESC 
+              LIMIT 1
+          `);
+          if (topFavs.length > 0) {
+              topFavCarText = `${topFavs[0].carDetails} <i>(${topFavs[0].saves} kishi saqlagan)</i>`;
+          }
+      } catch (e) {
+          console.error("Top saqlanganlarni olishda xato");
+      }
+      // ==============================================================================
+
       // 5. KONVERSIYA (Sotuv samaradorligi)
       let conversionRate = 0;
       let totalProcessedAds = activeAds.count + soldAds.count;
@@ -484,9 +505,7 @@ bot.callbackQuery("admin_stats", async (ctx) => {
           mainChannelCount = await bot.api.getChatMemberCount(CHANNEL_ID);
           const admins = await bot.api.getChatAdministrators(CHANNEL_ID);
           mainAdminsCount = admins.length; 
-      } catch (e) {
-          console.error("Asosiy kanal ma'lumotini olishda xato");
-      }
+      } catch (e) { }
 
       try {
           const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
@@ -495,41 +514,32 @@ bot.callbackQuery("admin_stats", async (ctx) => {
           }
       } catch (e) {}
 
-      // === KANAL O'SISH DINAMIKASINI HISOBLASH ===
+      // === KANAL O'SISH DINAMIKASI ===
       let mainDiffText = "";
       let secDiffText = "";
 
       try {
-          // Eng oxirgi saqlangan kunni olamiz (bugundan oldingi)
           const [lastStats] = await db.execute("SELECT * FROM channel_stats WHERE date < CURDATE() ORDER BY date DESC LIMIT 1");
-          
           if (lastStats.length > 0) {
               const prevMain = lastStats[0].main_count;
               const prevSec = lastStats[0].second_count;
 
-              // Asosiy kanal dinamikasi
               if (prevMain > 0) {
                   const mDiff = mainChannelCount - prevMain;
                   if (mDiff > 0) mainDiffText = ` <i>(🟢 +${mDiff})</i>`;
                   else if (mDiff < 0) mainDiffText = ` <i>(🔴 ${mDiff})</i>`;
               }
-              // 2-kanal dinamikasi
               if (prevSec > 0) {
                   const sDiff = secondChannelCount - prevSec;
                   if (sDiff > 0) secDiffText = ` <i>(🟢 +${sDiff})</i>`;
                   else if (sDiff < 0) secDiffText = ` <i>(🔴 ${sDiff})</i>`;
               }
           }
-
-          // Bugungi holatni bazaga yozamiz yoki yangilaymiz
           await db.execute(
               "INSERT INTO channel_stats (date, main_count, second_count) VALUES (CURDATE(), ?, ?) ON DUPLICATE KEY UPDATE main_count=?, second_count=?",
               [mainChannelCount, secondChannelCount, mainChannelCount, secondChannelCount]
           );
-      } catch (e) {
-          console.error("Kanal statistikasini saqlashda xato:", e);
-      }
-      // ===========================================
+      } catch (e) {}
 
       // XABARNI SHAKLLANTIRISH
       const text = 
@@ -543,12 +553,16 @@ bot.callbackQuery("admin_stats", async (ctx) => {
         `✅ Jami sotilganlar: <b>${soldAds.count} ta</b>\n` +
         `💵 Umumiy aylanma: <b>${totalMoney}</b>\n` +
         `🎯 Sotuv samaradorligi: <b>${conversionRate}%</b>\n\n` +
+
+        `❤️ <b>XARIDORLAR QIZIQISHI:</b>\n` +
+        `💾 Jami e'lon saqlashlar: <b>${favCount.count} marta</b>\n` +
+        `🏆 Eng xaridorgir moshina: <b>${topFavCarText}</b>\n\n` +
         
         `📈 <b>UMUMIY KO'RSATKICHLAR:</b>\n` +
         `👥 Barcha foydalanuvchilar: <b>${userCount.count} ta</b>\n` +
-        `🟢 Faol (Sotuvdagi) e'lonlar: <b>${activeAds.count} ta</b>\n` +
+        `🟢 Faol e'lonlar: <b>${activeAds.count} ta</b>\n` +
         `⏳ Tasdiq kutayotganlar: <b>${pendingAds.count} ta</b>\n` +
-        `🔔 Tayyor xaridorlar (Qidiruvda): <b>${alertCount.count} ta</b>\n` +
+        `🔔 Tayyor xaridorlar (Obuna): <b>${alertCount.count} ta</b>\n` +
         `🚫 Bloklanganlar: <b>${bannedCount.count} ta</b>\n\n` +
         
         `📢 <b>KANALLAR HOLATI:</b>\n` +
