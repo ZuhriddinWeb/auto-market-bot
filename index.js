@@ -1469,7 +1469,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
     const collagePath = await createCollage(photoUrls);
 
     let caption =
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${ad.probeg}\n` +
+      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)}\n` +
       `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
       `⛽ Yoqilg'i: ${ad.fuel}\n`;
 
@@ -1480,7 +1480,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
       caption += `🔄 Barter: ${ad.barter}\n`;
     }
 
-    caption += `💰 Narxi: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
+    caption += `💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/engarzonidamoshina`;
 
     const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
@@ -1582,7 +1582,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
     // ================= MATN TEPASIGA QAYNOQ NARX QO'SHILDI =================
     let caption =
       `🔥 <b>QAYNOQ NARX!</b>\n\n` +
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${ad.probeg}\n` +
+      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)}\n` +
       `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
       `⛽ Yoqilg'i: ${ad.fuel}\n`;
 
@@ -1593,7 +1593,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
       caption += `🔄 Barter: ${ad.barter}\n`;
     }
 
-    caption += `💰 Narxi: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
+    caption += `💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/engarzonidamoshina`;
     // ==============================================================================
 
