@@ -2350,7 +2350,7 @@ let lastAnalyticsDate = null;
 setInterval(() => {
     const now = new Date();
     // 0 = Якшанба, 10 = Соат 10:xx 
-    if (now.getDay() === 0 && now.getHours() === 10) {
+    if (now.getDay() === 0 && now.getHours() === 5) {
         const dateStr = now.toISOString().split('T')[0]; // "2026-08-09" шаклида
         // Бугун учун ҳали жўнатилмаган бўлсагина жўнатади
         if (lastAnalyticsDate !== dateStr) {
