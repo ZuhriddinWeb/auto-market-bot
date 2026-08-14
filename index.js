@@ -139,7 +139,7 @@ bot.use(conversations());
 const mainMenu = new Keyboard()
   .text("📝 E'lon berish").text("🔍 Mashina qidirish").row()
   .text("📂 Mening e'lonlarim").text("🎁 Bepul VIP (UP)").row()
-  .text("🧮 Mashina narxini aniqlash").text("🔔 Obunalarim").resized();
+  .text("🧮 Mashina narxini aniqlash").row().text("🔔 Obunalarim").resized();
 
 /**
  * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
