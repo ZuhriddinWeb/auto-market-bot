@@ -602,7 +602,7 @@ bot.callbackQuery("admin_pending", async (ctx) => {
       const photoUrls = await Promise.all(ad.photoId.split(",").map(async (id) => `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${(await bot.api.getFile(id)).file_path}`));
       const collagePath = await createCollage(photoUrls);
 
-      let caption = `🆔 <b>ID: ${ad.id}</b>\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)}\n💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n`;
+      let caption = `🆔 <b>ID: ${ad.id}</b>\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n`;
       if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 Tarixi: ${ad.history}\n`;
       if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 Barter: ${ad.barter}\n`;
       caption += `💰 Narxi:${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ad.userId}">Profil</a>`;
@@ -625,7 +625,7 @@ bot.callbackQuery("admin_pending", async (ctx) => {
       const photoUrls = await Promise.all(editData.photoId.split(",").map(async (id) => `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${(await bot.api.getFile(id)).file_path}`));
       const collagePath = await createCollage(photoUrls);
 
-      let caption = `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 Eski ID: ${editData.oldAdId}\n🚗 Moshina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${editData.probeg}\n💎 Kraskasi: ${editData.paint}\n🎨 Rangi: ${editData.color}\n✅ Karobka: ${editData.transmission}\n⛽ Yoqilg'i: ${editData.fuel}\n`;
+      let caption = `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 Eski ID: ${editData.oldAdId}\n🚗 Moshina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${editData.probeg} km\n💎 Kraskasi: ${editData.paint}\n🎨 Rangi: ${editData.color}\n✅ Karobka: ${editData.transmission}\n⛽ Yoqilg'i: ${editData.fuel}\n`;
       if (editData.history && editData.history !== "Ko'rsatilmagan") caption += `🛠 Tarixi: ${editData.history}\n`;
       if (editData.barter && editData.barter !== "Yo'q") caption += `🔄 Barter: ${editData.barter}\n`;
       caption += `💰 Narxi: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${editData.userId}">Profil</a>`;
@@ -1149,7 +1149,7 @@ async function createAdConversation(conversation, ctx) {
         }
         caption += 
           `🚗 <b>Moshina:</b> ${ad.brand} ${ad.model}\n` +
-          `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${formatNum(ad.probeg)}\n` +
+          `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${formatNum(ad.probeg)} km\n` +
           `💎 <b>Kraska:</b> ${ad.paint}\n🎨 <b>Rangi:</b> ${ad.color}\n` +
           `⚙️ <b>Korobka:</b> ${ad.trans}\n⛽ <b>Yoqilg'i:</b> ${ad.fuel}\n`;
 
@@ -1469,7 +1469,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
     const collagePath = await createCollage(photoUrls);
 
     let caption =
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)}\n` +
+      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
       `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
       `⛽ Yoqilg'i: ${ad.fuel}\n`;
 
@@ -1582,7 +1582,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
     // ================= MATN TEPASIGA QAYNOQ NARX QO'SHILDI =================
     let caption =
       `🔥 <b>QAYNOQ NARX!</b>\n\n` +
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)}\n` +
+      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
       `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
       `⛽ Yoqilg'i: ${ad.fuel}\n`;
 
@@ -2014,7 +2014,7 @@ async function editPriceConversation(conversation, ctx) {
 
   try {
     const newCaption = 
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)}\n` +
+      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
       `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
       `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: <s>${formatNum(ad.price)} $</s> <b>${formatNum(newPrice)}$ 📉</b>\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/engarzonidamoshina`;
