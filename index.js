@@ -139,7 +139,7 @@ bot.use(conversations());
 const mainMenu = new Keyboard()
   .text("📝 E'lon berish").text("🔍 Mashina qidirish").row()
   .text("📂 Mening e'lonlarim").text("🎁 Bepul VIP (UP)").row()
-  .text("🧮 Mashina narxini aniqlash").resized();
+  .text("🧮 Mashina narxini aniqlash").text("🔔 Obunalarim").resized();
 
 /**
  * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
@@ -1894,6 +1894,30 @@ bot.hears("📂 Mening e'lonlarim", async (ctx) => {
     });
   }
 });
+bot.hears("🔔 Obunalarim", async (ctx) => {
+  if (!(await isSubscribed(ctx))) return askForSub(ctx);
+
+  // Foydalanuvchining bazadagi barcha obunalarini qidiramiz
+  const [alerts] = await db.execute("SELECT * FROM alerts WHERE userId = ?", [ctx.from.id]);
+
+  if (alerts.length === 0) {
+    return ctx.reply("📭 <b>Sizda mashina qidiruvi bo'yicha faol obunalar yo'q.</b>\n\n🔍 <i>Yangi mashina poylash uchun «🔍 Mashina qidirish» bo'limidan foydalaning.</i>", { parse_mode: "HTML", reply_markup: mainMenu });
+  }
+
+  await ctx.reply("🔔 <b>Sizning faol obunalaringiz:</b>\n<i>Kutayotgan mashinalaringiz sotuvga chiqsa, bot sizga darhol xabar beradi.</i>", { parse_mode: "HTML" });
+
+  // Har bir obuna uchun alohida xabar va "O'chirish" tugmasini chiqaramiz
+  for (const alert of alerts) {
+    const kb = new InlineKeyboard().text("❌ Obunani bekor qilish", `del_alert:${alert.id}`);
+    
+    // So'zni bosh harf bilan yozish uchun kichik funksiya
+    const carName = alert.query.charAt(0).toUpperCase() + alert.query.slice(1);
+    
+    const text = `🚗 <b>Mashina:</b> ${carName}\n💰 <b>Maksimal narx:</b> ${alert.maxPrice}$ gacha`;
+    
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+  }
+});
 bot.hears("🎁 Bepul VIP (UP)", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
 
@@ -2256,6 +2280,24 @@ bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
     } catch (e) {}
   } else {
       await ctx.answerCallbackQuery("Bu so'rov allaqachon ko'rib chiqilgan.", {show_alert:true});
+  }
+});
+bot.callbackQuery(/^del_alert:(\d+)/, async (ctx) => {
+  const alertId = ctx.match[1];
+  
+  try {
+    // Bazadan foydalanuvchining ID si va Obuna ID si orqali o'chiramiz (xavfsizlik uchun)
+    const [res] = await db.execute("DELETE FROM alerts WHERE id = ? AND userId = ?", [alertId, ctx.from.id]);
+    
+    if (res.affectedRows > 0) {
+      // O'chirilgach, xabarni o'zgartirib qo'yamiz
+      await ctx.editMessageText("❌ <b>Obuna bekor qilindi.</b>\nEndi bu mashina haqida sizga bezovta qilinmaydi.", { parse_mode: "HTML" });
+    } else {
+      await ctx.answerCallbackQuery({ text: "Bu obuna allaqachon o'chirilgan yoki topilmadi.", show_alert: true });
+    }
+  } catch (error) {
+    console.error("Obunani o'chirishda xatolik:", error);
+    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi. Qaytadan urinib ko'ring.", show_alert: true });
   }
 });
 // =====================================================================
