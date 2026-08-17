@@ -558,8 +558,13 @@ bot.callbackQuery("admin_stats", async (ctx) => {
       await ctx.editMessageText(text, { reply_markup: adminMenu, parse_mode: "HTML" });
 
   } catch (error) {
-      console.error("Statistika xatosi:", error);
-      await ctx.answerCallbackQuery({text: "Statistika olishda xatolik yuz berdi.", show_alert: true});
+      // Agar xato "matn o'zgarmadi" bo'lsa, uni inkor qilamiz (chunki ekranda shundoq ham eng yangisi turibdi)
+      if (error.description && error.description.includes("message is not modified")) {
+          // Hech narsa qilmaydi
+      } else {
+          console.error("Statistika xatosi:", error);
+          await ctx.answerCallbackQuery({text: "Statistika olishda xatolik yuz berdi.", show_alert: true});
+      }
   }
 });
 
