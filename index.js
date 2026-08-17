@@ -1481,7 +1481,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
     }
 
     caption += `💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
-      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/engarzonidamoshina`;
+      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
 
     const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
     .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
