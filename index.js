@@ -53,6 +53,15 @@ if (!fs.existsSync(collagesDir)) {
       )
     `);
     await db.execute(`
+      CREATE TABLE IF NOT EXISTS channel_events (
+        channel_id VARCHAR(50),
+        date DATE,
+        joined INT DEFAULT 0,
+        left_count INT DEFAULT 0,
+        PRIMARY KEY (channel_id, date)
+      )
+    `);
+    await db.execute(`
       CREATE TABLE IF NOT EXISTS ad_edits (
         editId BIGINT AUTO_INCREMENT PRIMARY KEY,
         oldAdId BIGINT,
@@ -464,47 +473,28 @@ bot.callbackQuery("admin_stats", async (ctx) => {
       const [[soldAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'sold'");
       const [[pendingAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'pending'");
       
-      // 2. BUGUNGI (KUNDALIK) STATISTIKA
       const [[todayUsers]] = await db.execute("SELECT COUNT(*) as count FROM users WHERE DATE(joined_at) = CURDATE()");
       const [[todayAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE DATE(created_at) = CURDATE()");
 
-      // 3. KUTAYOTGAN XARIDORLAR VA QOIDABUZARLAR
       const [[alertCount]] = await db.execute("SELECT COUNT(*) as count FROM alerts");
       const [[bannedCount]] = await db.execute("SELECT COUNT(*) as count FROM banned_users");
 
-      // 4. MOLIYAVIY AYLANMA
       const [[soldSumRow]] = await db.execute("SELECT SUM(CAST(price AS UNSIGNED)) as totalSum FROM ads WHERE status = 'sold'");
       const totalMoney = soldSumRow.totalSum ? soldSumRow.totalSum.toLocaleString("en-US") + " $" : "0 $";
 
-      // ================= YANGI: FAOLLIK VA QIZIQISHLAR (FAVORITES) =================
       const [[favCount]] = await db.execute("SELECT COUNT(*) as count FROM favorites");
       
       let topFavCarText = "Hali yo'q";
       try {
-          const [topFavs] = await db.execute(`
-              SELECT a.carDetails, COUNT(f.adId) as saves 
-              FROM favorites f 
-              JOIN ads a ON f.adId = a.id 
-              GROUP BY f.adId 
-              ORDER BY saves DESC 
-              LIMIT 1
-          `);
-          if (topFavs.length > 0) {
-              topFavCarText = `${topFavs[0].carDetails} <i>(${topFavs[0].saves} kishi saqlagan)</i>`;
-          }
-      } catch (e) {
-          console.error("Top saqlanganlarni olishda xato");
-      }
-      // ==============================================================================
+          const [topFavs] = await db.execute(`SELECT a.carDetails, COUNT(f.adId) as saves FROM favorites f JOIN ads a ON f.adId = a.id GROUP BY f.adId ORDER BY saves DESC LIMIT 1`);
+          if (topFavs.length > 0) topFavCarText = `${topFavs[0].carDetails} <i>(${topFavs[0].saves} kishi saqlagan)</i>`;
+      } catch (e) {}
 
-      // 5. KONVERSIYA (Sotuv samaradorligi)
       let conversionRate = 0;
       let totalProcessedAds = activeAds.count + soldAds.count;
-      if (totalProcessedAds > 0) {
-          conversionRate = Math.round((soldAds.count / totalProcessedAds) * 100);
-      }
+      if (totalProcessedAds > 0) conversionRate = Math.round((soldAds.count / totalProcessedAds) * 100);
 
-      // 6. KANALLAR STATISTIKASI VA DINAMIKASI
+      // 2. KANALLAR STATISTIKASI
       let mainChannelCount = 0;
       let mainAdminsCount = 0;
       let secondChannelCount = 0;
@@ -517,37 +507,25 @@ bot.callbackQuery("admin_stats", async (ctx) => {
 
       try {
           const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
-          if (SECOND_CHANNEL_ID) {
-              secondChannelCount = await bot.api.getChatMemberCount(SECOND_CHANNEL_ID);
-          }
+          if (SECOND_CHANNEL_ID) secondChannelCount = await bot.api.getChatMemberCount(SECOND_CHANNEL_ID);
       } catch (e) {}
 
-      // === KANAL O'SISH DINAMIKASI ===
-      let mainDiffText = "";
-      let secDiffText = "";
+      // === YANGI: KANALGA BUGUN QO'SHILGANLAR VA CHIQIB KETGANLAR ===
+      let mainDiffText = " <i>(🟢 +0 | 🔴 -0)</i>";
+      let secDiffText = " <i>(🟢 +0 | 🔴 -0)</i>";
 
       try {
-          const [lastStats] = await db.execute("SELECT * FROM channel_stats WHERE date < CURDATE() ORDER BY date DESC LIMIT 1");
-          if (lastStats.length > 0) {
-              const prevMain = lastStats[0].main_count;
-              const prevSec = lastStats[0].second_count;
-
-              if (prevMain > 0) {
-                  const mDiff = mainChannelCount - prevMain;
-                  if (mDiff > 0) mainDiffText = ` <i>(🟢 +${mDiff})</i>`;
-                  else if (mDiff < 0) mainDiffText = ` <i>(🔴 ${mDiff})</i>`;
-              }
-              if (prevSec > 0) {
-                  const sDiff = secondChannelCount - prevSec;
-                  if (sDiff > 0) secDiffText = ` <i>(🟢 +${sDiff})</i>`;
-                  else if (sDiff < 0) secDiffText = ` <i>(🔴 ${sDiff})</i>`;
-              }
+          const [mainEvents] = await db.execute("SELECT joined, left_count FROM channel_events WHERE channel_id = 'main' AND date = CURDATE()");
+          if (mainEvents.length > 0) {
+              mainDiffText = ` <i>(🟢 +${mainEvents[0].joined} | 🔴 -${mainEvents[0].left_count})</i>`;
           }
-          await db.execute(
-              "INSERT INTO channel_stats (date, main_count, second_count) VALUES (CURDATE(), ?, ?) ON DUPLICATE KEY UPDATE main_count=?, second_count=?",
-              [mainChannelCount, secondChannelCount, mainChannelCount, secondChannelCount]
-          );
-      } catch (e) {}
+
+          const [secEvents] = await db.execute("SELECT joined, left_count FROM channel_events WHERE channel_id = 'second' AND date = CURDATE()");
+          if (secEvents.length > 0) {
+              secDiffText = ` <i>(🟢 +${secEvents[0].joined} | 🔴 -${secEvents[0].left_count})</i>`;
+          }
+      } catch (e) { }
+      // ==============================================================
 
       // XABARNI SHAKLLANTIRISH
       const text = 
@@ -1778,6 +1756,51 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
 /**
  * ✅ АСОСИЙ КНОПКАЛАР (ВА ФОЙДАЛАНУВЧИНИ БАЗАГА ҚЎШИШ)
  */
+// KANALGA KELGAN VA KETGANLARNI JONLI HISOBGA OLISH
+bot.on("chat_member", async (ctx) => {
+  const chat = ctx.chat;
+  if (!chat || (chat.type !== "channel" && chat.type !== "supergroup")) return;
+
+  const MAIN_CH = CHANNEL_ID;
+  const SEC_CH = process.env.SECOND_CHANNEL_ID;
+
+  let dbChannelId = null;
+  // Qaysi kanaldan kelayotganini aniqlaymiz
+  if (chat.id.toString() === MAIN_CH || (chat.username && `@${chat.username}` === MAIN_CH)) {
+      dbChannelId = "main";
+  } else if (SEC_CH && (chat.id.toString() === SEC_CH || (chat.username && `@${chat.username}` === SEC_CH))) {
+      dbChannelId = "second";
+  }
+
+  if (!dbChannelId) return;
+
+  const oldStatus = ctx.chatMember.old_chat_member.status;
+  const newStatus = ctx.chatMember.new_chat_member.status;
+
+  let joined = 0;
+  let left = 0;
+
+  // Foydalanuvchi qo'shildi
+  if (["left", "kicked"].includes(oldStatus) && ["member", "administrator", "creator"].includes(newStatus)) {
+      joined = 1;
+  } 
+  // Foydalanuvchi chiqib ketdi
+  else if (["member", "administrator", "creator"].includes(oldStatus) && ["left", "kicked"].includes(newStatus)) {
+      left = 1;
+  }
+
+  // Bazaga qo'shish yoki ayirish
+  if (joined || left) {
+      try {
+          await db.execute(
+              "INSERT INTO channel_events (channel_id, date, joined, left_count) VALUES (?, CURDATE(), ?, ?) ON DUPLICATE KEY UPDATE joined = joined + ?, left_count = left_count + ?",
+              [dbChannelId, joined, left, joined, left]
+          );
+      } catch (e) {
+          console.error("Kanal obunachilarini hisoblashda xato:", e);
+      }
+  }
+});
 bot.command("start", async (ctx) => {
   let isNewUser = false;
   // Foydalanuvchini avtomatik tarzda users bazasiga qo'shish yoki yangilash
@@ -2411,5 +2434,7 @@ setInterval(() => {
     }
 }, 60 * 1000 * 30); // Ҳар 30 минутда айланади
 // =====================================================================
-bot.start();
+bot.start({
+  allowed_updates: ["message", "edited_message", "callback_query", "chat_member", "my_chat_member", "channel_post", "edited_channel_post"]
+});
 console.log("Бот муваффақиятли ишга тушди...");
