@@ -102,7 +102,10 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE ads ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP", // <--- ШУ ҚАТОР ҚЎШИЛДИ
       "ALTER TABLE ads ADD COLUMN history TEXT DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
-      "ALTER TABLE ads ADD COLUMN secondChannelMsgId VARCHAR(50) DEFAULT NULL"
+      "ALTER TABLE ads ADD COLUMN secondChannelMsgId VARCHAR(50) DEFAULT NULL",
+      "ALTER TABLE users ADD COLUMN contest_score INT DEFAULT 0",
+      "ALTER TABLE users ADD COLUMN referred_by VARCHAR(50) DEFAULT NULL",
+      "ALTER TABLE users ADD COLUMN is_referral_counted INT DEFAULT 0",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -148,8 +151,8 @@ bot.use(conversations());
 const mainMenu = new Keyboard()
   .text("📝 E'lon berish").text("🔍 Mashina qidirish").row()
   .text("📂 Mening e'lonlarim").text("🎁 Bepul VIP (UP)").row()
-  .text("🧮 Mashina narxini aniqlash").row().text("🔔 Obunalarim").resized();
-
+  .text("🧮 Mashina narxini aniqlash").row().text("🔔 Obunalarim").row()
+  .text("🏆 150.000 so'm Yutib oling!").resized();
 /**
  * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
  */
@@ -1786,9 +1789,41 @@ bot.on("chat_member", async (ctx) => {
   let left = 0;
 
   // Foydalanuvchi qo'shildi
+// Foydalanuvchi qo'shildi
   if (["left", "kicked"].includes(oldStatus) && ["member", "administrator", "creator"].includes(newStatus)) {
       joined = 1;
-  } 
+
+      // ==============================================================
+      // 🏆 REFERAL UCHUN BALL BERISH (FAQAT KANALGA QO'SHILGANDA)
+      // ==============================================================
+      try {
+          const joinedUserId = ctx.chatMember.new_chat_member.user.id;
+          // Bu foydalanuvchini kimdir taklif qilganmi yoki o'zi kirdimi tekshiramiz
+          const [userRows] = await db.execute("SELECT referred_by, is_referral_counted FROM users WHERE id = ?", [joinedUserId]);
+          
+          if (userRows.length > 0) {
+              const u = userRows[0];
+              // Agar kimdir taklif qilgan bo'lsa va hali ball berilmagan bo'lsa
+              if (u.referred_by && u.is_referral_counted === 0) {
+                  // Taklif qilgan odamga ballarini qo'shamiz
+                  await db.execute("UPDATE users SET referral_count = referral_count + 1, contest_score = contest_score + 1 WHERE id = ?", [u.referred_by]);
+                  
+                  // Ball berilganini belgilab qo'yamiz (qayta-qayta chiqaversa ball berilmasligi uchun)
+                  await db.execute("UPDATE users SET is_referral_counted = 1 WHERE id = ?", [joinedUserId]);
+                  
+                  // Taklif qilgan odamni tabriklaymiz
+                  await bot.api.sendMessage(
+                      u.referred_by, 
+                      "🎉 <b>Tabriklaymiz!</b> Sizning havolangiz orqali do'stingiz kanalimizga obuna bo'ldi va sizga <b>+1 ball</b> qo'shildi!", 
+                      { parse_mode: "HTML" }
+                  ).catch(() => {}); // Bloklagan bo'lsa xato bermasligi uchun
+              }
+          }
+      } catch (e) {
+          console.error("Referal ball berishda xatolik:", e);
+      }
+      // ==============================================================
+  }
   // Foydalanuvchi chiqib ketdi
   else if (["member", "administrator", "creator"].includes(oldStatus) && ["left", "kicked"].includes(newStatus)) {
       left = 1;
@@ -1838,7 +1873,10 @@ bot.command("start", async (ctx) => {
       if (referrerId && referrerId !== ctx.from.id) {
           try {
               // Taklif qilgan odamning hisobini 1 taga oshiramiz
-              await db.execute("UPDATE users SET referral_count = referral_count + 1 WHERE id = ?", [referrerId]);
+              // Odamga darhol ball bermaymiz, shunchaki kim taklif qilganini bazaga yozib qo'yamiz
+            if (referrerId != ctx.from.id) {
+                await db.execute("UPDATE users SET referred_by = ? WHERE id = ? AND is_referral_counted = 0", [referrerId, ctx.from.id]);
+            }
               const [refRows] = await db.execute("SELECT referral_count FROM users WHERE id = ?", [referrerId]);
               
               if (refRows[0]) {
@@ -1993,6 +2031,99 @@ bot.hears("🧮 Mashina narxini aniqlash", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
   await ctx.conversation.enter("evaluateCarConversation");
 });
+// =========================================================================
+// 🏆 150,000 SO'MLIK KONKURS TIZIMI
+// =========================================================================
+
+// Foydalanuvchi "Konkurs" tugmasini bosganda
+bot.hears("🏆 100.000 so'm Yutib oling!", async (ctx) => {
+  if (!(await isSubscribed(ctx))) return askForSub(ctx);
+
+  const [rows] = await db.execute("SELECT contest_score FROM users WHERE id = ?", [ctx.from.id]);
+  const user = rows[0];
+  if (!user) return;
+
+  const botInfo = await bot.api.getMe();
+  const refLink = `https://t.me/${botInfo.username}?start=ref_${ctx.from.id}`;
+
+  const text = 
+    `🏆 <b>150,000 SO'MLIK KONKURS!</b>\n\n` +
+    `Botimiz orqali o'z shaxsiy havolangizni do'stlaringizga tarqating va eng ko'p odam taklif qilgan g'olibga aylanib, <b>150,000 so'm</b> naqd pul (Uzcard/Humo) yutib oling!\n\n` +
+    `📊 <b>SIZNING NATIJANGIZ:</b>\n` +
+    `👥 Siz qo'shgan odamlar (Konkurs uchun): <b>${user.contest_score} ta</b>\n\n` +
+    `👇 <b>Sizning shaxsiy taklif havolangiz:</b>\n` +
+    `<code>${refLink}</code>\n\n` +
+    `<i>⚠️ Qoidalar: Soxta (feyk) akkauntlar yoki botlar orqali nakrutka qilish qat'iyan man etiladi. Tekshiruvda feyk obunachilar aniqlansa, ishtirokchi g'oliblikdan chetlatiladi.</i>`;
+
+  const shareMessage = 
+    "🚗 O'zbekistondagi eng zo'r va qulay onlayn Avto-Bozor bot!\n\n" +
+    "Moshinangizni tekinga soting yoki o'zingiz izlagan moshinani juda oson toping.\n\n" +
+    "👇 Hoziroq kirib ko'ring:\n" + 
+    refLink;
+
+  const shareText = encodeURIComponent(shareMessage);
+  const kb = new InlineKeyboard().url("📤 Do'stlarga yuborish", `https://t.me/share/url?text=${shareText}`);
+  
+  await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+});
+
+// Admin uchun TOP-10 likni ko'rish
+// Admin uchun TOP-10 likni ko'rish
+bot.command("top", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const [topUsers] = await db.execute("SELECT id, first_name, username, contest_score FROM users WHERE contest_score > 0 ORDER BY contest_score DESC LIMIT 10");
+  
+  if (topUsers.length === 0) {
+      return ctx.reply("📭 Hali hech kim konkursda ball yig'madi.");
+  }
+
+  let text = "🏆 <b>KONKURS LIDERLARI (TOP-10):</b>\n\n";
+  topUsers.forEach((u, i) => {
+      const name = u.first_name || "Ismsiz";
+      const userLink = u.username ? `(@${u.username})` : "";
+      
+      // Ismi, Username va aniq ID raqami chiqib turadi
+      text += `${i + 1}. <a href="tg://user?id=${u.id}">${name}</a> ${userLink} — <b>${u.contest_score} ta</b>\n(ID: <code>${u.id}</code>)\n\n`;
+  });
+  
+  text += `💡 <i>G'olib bilan bog'lanish uchun quyidagi buyruqdan foydalaning:</i>\n/xabar [ID] [Xabar matni]\n\n`;
+  text += `<i>Yutuq to'langach, yangi hafta konkursini boshlash uchun: /reset_contest</i>`;
+
+  await ctx.reply(text, { parse_mode: "HTML" });
+});
+
+// =========================================================================
+// ✉️ ADMIN TOMONIDAN G'OLIBGA XABAR YUBORISH
+// =========================================================================
+bot.command("xabar", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  
+  const match = ctx.message.text.split(" ");
+  // Agar ID yoki matn yozishni unutgan bo'lsa
+  if (match.length < 3) {
+      return ctx.reply("❗️ <b>Qo'llash tartibi:</b>\n/xabar [ID raqam] [Sizning matningiz]\n\n<i>Masalan: /xabar 12345678 Tabriklaymiz, siz yutdingiz! Pulingizni olish uchun menga yozing: @uzdev75</i>", { parse_mode: "HTML" });
+  }
+  
+  const targetId = parseInt(match[1]);
+  // Xabar matnini yig'ib olamiz
+  const textMsg = match.slice(2).join(" ");
+  
+  try {
+      // G'olibga bot nomidan xabar boradi
+      await bot.api.sendMessage(targetId, `🎁 <b>ADMINISTRATORDAN XABAR:</b>\n\n${textMsg}`, { parse_mode: "HTML" });
+      await ctx.reply(`✅ <b>Xabar ${targetId} ID egasiga muvaffaqiyatli yuborildi!</b>`, { parse_mode: "HTML" });
+  } catch (error) {
+      await ctx.reply("❌ <b>Xatolik:</b> Xabar yuborib bo'lmadi. Foydalanuvchi botni bloklagan yoki bunday ID mavjud emas.", { parse_mode: "HTML" });
+  }
+});
+
+// Admin uchun Konkursni noldan boshlash
+bot.command("reset_contest", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await db.execute("UPDATE users SET contest_score = 0");
+  await ctx.reply("✅ <b>Barcha konkurs ballari 0 ga tushirildi!</b>\n\nYangi hafta konkursi rasman boshlandi.", { parse_mode: "HTML" });
+});
+// =========================================================================
 // "Тўлиқ таҳрирлаш" тугмаси босилганда
 bot.callbackQuery(/^full_edit_req:(\d+)/, async (ctx) => {
   await ctx.answerCallbackQuery("⏳ Ma'lumotlar yuklanmoqda...");
