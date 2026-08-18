@@ -2036,7 +2036,7 @@ bot.hears("🧮 Mashina narxini aniqlash", async (ctx) => {
 // =========================================================================
 
 // Foydalanuvchi "Konkurs" tugmasini bosganda
-bot.hears("🏆 100.000 so'm Yutib oling!", async (ctx) => {
+bot.hears("🏆 150.000 so'm Yutib oling!", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
 
   const [rows] = await db.execute("SELECT contest_score FROM users WHERE id = ?", [ctx.from.id]);
