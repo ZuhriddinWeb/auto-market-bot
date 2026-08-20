@@ -152,7 +152,8 @@ const mainMenu = new Keyboard()
   .text("📝 E'lon berish").text("🔍 Mashina qidirish").row()
   .text("📂 Mening e'lonlarim").text("🎁 Bepul VIP (UP)").row()
   .text("🧮 Mashina narxini aniqlash").row().text("🔔 Obunalarim").row()
-  .text("🏆 150.000 so'm Yutib oling!").resized();
+  .text("🏆 150.000 so'm Yutib oling!").resized()
+  .placeholder("Tugmalarni ochish uchun shu yerni bosing 🎛👇");
 /**
  * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
  */
@@ -1902,7 +1903,10 @@ bot.command("start", async (ctx) => {
     `➖ <b>Aqlli qidiruv:</b> O'zingiz izlayotgan marka va narxni kiriting, bot kanaldagi eng yaxshi variantlarni topib beradi.\n` +
     `➖ <b>Bildirishnoma (Obuna):</b> Siz izlayotgan moshina sotuvga chiqqan zahoti bot sizga darhol xabar beradi.\n` +
     `➖ <b>E'lonlarni boshqarish:</b> Moshinangiz sotilsa yoki narxini tushirmoqchi bo'lsangiz, eski xabarni o'chirmasdan osongina yangilashingiz mumkin.\n\n` +
-    `👇 <i>Quyidagi menyu orqali o'zingizga kerakli bo'limni tanlang!</i>`;
+    `👇 <i>Quyidagi menyu orqali o'zingizga kerakli bo'limni tanlang!</i>\n\n`+
+    `(💡 Agar menyu tugmalari ko'rinmasa, xabar yozish joyidagi 🎛 belgisini bosing)`
+    ;
+    
 
   await ctx.reply(welcomeText, {
     reply_markup: mainMenu, 
