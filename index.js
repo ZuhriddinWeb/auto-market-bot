@@ -154,6 +154,7 @@ const mainMenu = new Keyboard()
   .text("🧮 Mashina narxini aniqlash").row().text("🔔 Obunalarim").row()
   .text("🏆 150.000 so'm Yutib oling!").resized()
   .placeholder("Tugmalarni ochish uchun shu yerni bosing 🎛🎛👉");
+  const cancelMenu = new Keyboard().text("❌ Bekor qilish").resized();
 /**
  * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
  */
