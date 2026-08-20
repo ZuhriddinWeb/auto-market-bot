@@ -154,7 +154,6 @@ const mainMenu = new Keyboard()
   .text("🧮 Mashina narxini aniqlash").row().text("🔔 Obunalarim").row()
   .text("🏆 150.000 so'm Yutib oling!").resized()
   .placeholder("Tugmalarni ochish uchun shu yerni bosing 🎛🎛👉");
-  const cancelMenu = new Keyboard().text("❌ Bekor qilish").resized();
 /**
  * ✅ МАЖБУРИЙ ОБУНАНИ ТЕКШИРУВЧИ ФУНКЦИЯЛАР
  */
@@ -178,32 +177,15 @@ async function askForSub(ctx) {
   });
 }
 
-// bot.callbackQuery("check_sub_ad", async (ctx) => {
-//   if (await isSubscribed(ctx)) {
-//     await ctx.deleteMessage();
-//     await ctx.reply("✅ <b>Obuna tasdiqlandi!</b> Endi menyudan foydalanishingiz mumkin.", { parse_mode: "HTML", reply_markup: mainMenu });
-    
-//   } else {
-//     await ctx.answerCallbackQuery({ text: "❌ Hali obuna bo'lmagansiz!", show_alert: true });
-//   }
-// });
 bot.callbackQuery("check_sub_ad", async (ctx) => {
   if (await isSubscribed(ctx)) {
     await ctx.deleteMessage();
-    
-    // Mijozga shunchaki "A'zo bo'ldingiz" demasdan, darhol ishni boshlaymiz
-    await ctx.reply("✅ <b>Obuna tasdiqlandi!</b>\n\nQani, e'lon berishni boshlaymiz. Iltimos, mashina rasmini yuboring (yoki bekor qilishni bosing):", { 
-        parse_mode: "HTML", 
-        reply_markup: cancelMenu // Agar bekor qilish menyusingiz bo'lsa, shuni qo'ying, yo'qsa mainMenu
-    });
-    
-    // Foydalanuvchini to'g'ridan-to'g'ri e'lon berish jarayoniga (conversation) kiritib yuboramiz
-    await ctx.conversation.enter("add_ad_conversation"); // O'zingizdagi e'lon berish funksiyasi nomini yozasiz
-    
+    await ctx.reply("✅ <b>Obuna tasdiqlandi!</b> Endi menyudan foydalanishingiz mumkin.", { parse_mode: "HTML", reply_markup: mainMenu });
   } else {
     await ctx.answerCallbackQuery({ text: "❌ Hali obuna bo'lmagansiz!", show_alert: true });
   }
 });
+
 async function safeAnswerCbq(ctx) {
   try {
     const id = ctx?.callbackQuery?.id || ctx?.update?.callback_query?.id;
