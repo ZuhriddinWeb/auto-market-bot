@@ -5,6 +5,7 @@ const db = require("./database"); // MySQL pool
 const sharp = require("sharp");
 const axios = require("axios");
 const fs = require("fs");
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const path = require("path");
 
 const bot = new Bot(process.env.BOT_TOKEN);
@@ -1536,7 +1537,13 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
                 try {
                     await bot.api.sendMessage(alert.userId, `🔔 <b>SIZ Qidirayotgan moshina chiqdi!</b>\n\nBizning kanalga sizning talabingizga mos moshina joylandi:`, { parse_mode: "HTML" });
                     await bot.api.copyMessage(alert.userId, CHANNEL_ID, msg.message_id);
-                } catch(e) {}
+                    
+                    await delay(50); // <--- MANA SHU PAUZA QO'SHILDI
+                } catch(e) {
+                    if (e.error_code === 429) {
+                       await delay((e.parameters?.retry_after || 1) * 1000);
+                    }
+                }
             }
         }
       } catch(e) { console.error("Xabarnoma yuborishda xato:", e); }
@@ -1644,6 +1651,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
       } catch (e) {}
       
       // Alert xabarnomalari
+     // Alert xabarnomalari
       try {
         const [alerts] = await db.execute("SELECT * FROM alerts");
         const adPrice = parseInt(ad.price.replace(/\D/g, "")) || 0;
@@ -1654,7 +1662,13 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
                 try {
                     await bot.api.sendMessage(alert.userId, `🔔 <b>SIZ Qidirayotgan moshina chiqdi!</b>`, { parse_mode: "HTML" });
                     await bot.api.copyMessage(alert.userId, CHANNEL_ID, msg.message_id);
-                } catch(e) {}
+                    
+                    await delay(50); // <--- MANA SHU PAUZA QO'SHILDI
+                } catch(e) {
+                    if (e.error_code === 429) {
+                       await delay((e.parameters?.retry_after || 1) * 1000);
+                    }
+                }
             }
         }
       } catch(e) {}
@@ -2255,7 +2269,13 @@ async function editPriceConversation(conversation, ctx) {
                `Kanalda ko'rish: https://t.me/engarzonidamoshina/${ad.channelMsgId}`, 
                { parse_mode: "HTML" }
              );
-           } catch(e) { }
+             
+             await delay(50); // <--- MANA SHU PAUZA QO'SHILDI
+           } catch(e) { 
+               if (e.error_code === 429) {
+                   await delay((e.parameters?.retry_after || 1) * 1000);
+               }
+           }
         }
       }
     } catch (error) { console.error("Xabarnoma yuborishda xatolik:", error); }
