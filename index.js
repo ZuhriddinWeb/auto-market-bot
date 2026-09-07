@@ -2578,21 +2578,74 @@ async function sendWeeklyAnalytics() {
   }
 }
 
-// ⏰ Таймер: Ҳар 30 минутда вақтни текшириб туради
+// =====================================================================
+// 🏆 HAR KUNLIK "TOP-5" AVTO-POST TIZIMI
+// =====================================================================
+async function sendDailyTop5() {
+  try {
+    // Bazadan eng ko'p "Saqlangan (❤️)" 5 ta faol e'lonni olamiz
+    const [topAds] = await db.execute(`
+      SELECT a.id, a.carDetails, a.price, a.channelMsgId, COUNT(f.id) as saves
+      FROM ads a
+      JOIN favorites f ON a.id = f.adId
+      WHERE a.status = 'active'
+      GROUP BY a.id, a.carDetails, a.price, a.channelMsgId
+      ORDER BY saves DESC
+      LIMIT 3
+    `);
+
+    // Agar saqlangan e'lonlar umuman yo'q bo'lsa, xabar tashlamaymiz
+    if (topAds.length === 0) return; 
+
+    let text = `🏆 <b>BUGUNNING TOP 3 MASHINALARI</b>\n<i>Xaridorlar tomonidan eng ko'p saqlangan qaynoq e'lonlar:</i>\n\n`;
+    const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
+    const channelUsername = process.env.CHANNEL_ID.replace("@", "");
+
+    topAds.forEach((ad, index) => {
+      const postLink = `https://t.me/${channelUsername}/${ad.channelMsgId}`;
+      text += `${emojis[index]} <a href="${postLink}">${ad.carDetails}</a> — ${formatNum(ad.price)}$ \n\n`;
+    });
+
+    text += `👉 <i>Moshinalarning rasmi va to'liq ma'lumotlarini ko'rish uchun ko'k yozuv ustiga bosing!</i>\n\n🤖 @arzonida_bot`;
+
+    // Asosiy kanalga yuborish
+    await bot.api.sendMessage(CHANNEL_ID, text, {
+      parse_mode: "HTML",
+      disable_web_page_preview: true // Xabar xunuk bo'lib ketmasligi uchun link preview o'chiriladi
+    });
+  } catch (err) {
+    console.error("Top-5 yuborishda xatolik:", err);
+  }
+}
+
+// =====================================================================
+// ⏰ UMUMIY TAYMER: HAR 30 MINUTDA VAQTNI TEKSHIRIB TURADI
+// =====================================================================
 let lastAnalyticsDate = null;
+let lastTop5Date = null;
+
 setInterval(() => {
     const now = new Date();
-    // 0 = Якшанба, 10 = Соат 10:xx 
+    const dateStr = now.toISOString().split('T')[0]; // "2026-08-09" shaklida
+
+    // 1. HAFTALIK ANALITIKA (Yakshanba kuni soat 05:xx da)
     if (now.getDay() === 0 && now.getHours() === 5) {
-        const dateStr = now.toISOString().split('T')[0]; // "2026-08-09" шаклида
-        // Бугун учун ҳали жўнатилмаган бўлсагина жўнатади
         if (lastAnalyticsDate !== dateStr) {
             lastAnalyticsDate = dateStr;
             sendWeeklyAnalytics();
-            console.log("✅ Ҳафталик аналитика каналга юборилди!");
+            console.log("✅ Haftalik analitika kanalga yuborildi!");
         }
     }
-}, 60 * 1000 * 30); // Ҳар 30 минутда айланади
+
+    // 2. KUNLIK TOP-5 POST (Har kuni kechqurun soat 20:xx atrofida)
+    if (now.getHours() === 20) { 
+        if (lastTop5Date !== dateStr) {
+            lastTop5Date = dateStr;
+            sendDailyTop5();
+            console.log("✅ Kunlik TOP-5 kanalga yuborildi!");
+        }
+    }
+}, 60 * 1000 * 30); // Har 30 minutda aylanadi
 // =====================================================================
 bot.start({
   allowed_updates: ["message", "edited_message", "callback_query", "chat_member", "my_chat_member", "channel_post", "edited_channel_post"]
