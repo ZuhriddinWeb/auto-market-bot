@@ -1975,7 +1975,8 @@ bot.hears("📂 Mening e'lonlarim", async (ctx) => {
     const kb = new InlineKeyboard()
       .text("💰 Sotildi", `sold_req:${ad.id}`)
       .text("📉 Narxni tushirish", `edit_price:${ad.id}`).row()
-      .text("✏️ To'liq tahrirlash", `full_edit_req:${ad.id}`); // <--- YANGI TUGMA QO'SHILDI
+      .text("✏️ To'liq tahrirlash", `full_edit_req:${ad.id}`).row()
+      .text("🌟 VIP QILISH (50 ⭐️)", `buy_vip:${ad.id}`); // <--- YANGI TUGMA QO'SHILDI
 
       if (freeUps > 0) {
         kb.row().text(`🚀 BEPUL UP (VIP) (${freeUps} ta bor)`, `free_up_req:${ad.id}`);
@@ -2490,6 +2491,71 @@ bot.callbackQuery(/^del_alert:(\d+)/, async (ctx) => {
     console.error("Obunani o'chirishda xatolik:", error);
     await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi. Qaytadan urinib ko'ring.", show_alert: true });
   }
+});
+// ==============================================================
+// 🌟 VIP MONETIZATSIYA (TELEGRAM STARS TO'LOV TIZIMI)
+// ==============================================================
+bot.callbackQuery(/^buy_vip:(\d+)/, async (ctx) => {
+    const adId = ctx.match[1];
+    await ctx.answerCallbackQuery();
+    
+    // Telegram Stars orqali to'lov (Invoys) yuborish
+    await ctx.api.sendInvoice(
+        ctx.from.id,
+        "🌟 VIP E'LON",
+        "E'loningizni OLTIN maqomda kanalga joylaymiz va kanalning eng tepasiga qadab (Pin qilib) qo'yamiz!",
+        `vip_${adId}`,
+        "", // Telegram Stars uchun provayder token bo'sh qoladi
+        "XTR", // Yulduzcha valyutasi
+        [{ label: "VIP Xizmat", amount: 50 }] // 50 ta yulduzcha
+    );
+});
+
+// To'lovni tasdiqlash
+bot.on("pre_checkout_query", (ctx) => ctx.answerPreCheckoutQuery(true));
+
+// To'lov muvaffaqiyatli bo'lganda ishlovchi mantiq
+bot.on("message:successful_payment", async (ctx) => {
+    const payload = ctx.message.successful_payment.invoice_payload;
+    if (payload.startsWith("vip_")) {
+        const adId = payload.split("_")[1];
+        const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND status = 'active'", [adId]);
+        const ad = rows[0];
+        
+        if (!ad) return ctx.reply("❌ E'lon topilmadi yoki u allaqachon sotilgan.");
+
+        const channelMarkup = new InlineKeyboard()
+            .url("📞 SOTUVCHI BILAN BOG'LANISH", `https://t.me/arzonida_bot?start=seller_${adId}`)
+            .url("📸 BARCHA RASMLAR", `https://t.me/arzonida_bot?start=photos_${adId}`).row()
+            .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot");
+
+        let newMsgId;
+        try {
+            // Eskisini o'chirib yangidan kanalga VIP formatda tashlaymiz
+            const newMsg = await bot.api.copyMessage(CHANNEL_ID, CHANNEL_ID, ad.channelMsgId, { reply_markup: channelMarkup });
+            newMsgId = newMsg.message_id;
+            await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(()=>{});
+        } catch(e) { console.error("VIP yuborishda xato:", e); }
+
+        const vipCaption = `🌟 <b>VIP E'LON!</b> 🌟\n\n🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n👉 Moshina rasmlari uchun tugmani bosing!`;
+        
+        if (newMsgId) {
+            // Matnni VIP qilib o'zgartirish va PIN qilish
+            await bot.api.editMessageCaption(CHANNEL_ID, newMsgId, { caption: vipCaption, parse_mode: "HTML", reply_markup: channelMarkup }).catch(()=>{});
+            await bot.api.pinChatMessage(CHANNEL_ID, newMsgId).catch(()=>{});
+            await db.execute("UPDATE ads SET channelMsgId = ? WHERE id = ?", [newMsgId, adId]);
+        }
+
+        await ctx.reply("🎉 <b>To'lov qabul qilindi!</b>\n\nE'loningiz VIP maqomida kanalga joylandi va tepaga qadab qo'yildi!", { parse_mode: "HTML" });
+    }
+});
+
+// Muddatni uzaytirish (15 kunlik eslatmada bosiladi)
+bot.callbackQuery(/^keep_ad:(\d+)/, async (ctx) => {
+    const adId = ctx.match[1];
+    // Vaqtni bugungi kunga yangilab qo'yamiz (yana 15 kunga uzayadi)
+    await db.execute("UPDATE ads SET created_at = CURRENT_TIMESTAMP WHERE id = ?", [adId]);
+    await ctx.editMessageText("✅ <b>E'loningiz muddati yana 15 kunga uzaytirildi!</b> Moshina sotilguncha bazamizda turadi.", { parse_mode: "HTML" });
 });
 // =====================================================================
 // 📊 ҲАФТАЛИК БОЗОР АНАЛИТИКАСИ (ЯКШАНБА КУНЛАРИ УЧУН)
