@@ -240,18 +240,29 @@ async function createCollage(photoUrls, adData = {}) {
   });
 
   // 📸 RASMLARNI DINAMIK TAXLASH
+// 📸 RASMLARNI DINAMIK TAXLASH
   if (buffers.length === 1) {
-    // Agar faqat 1 ta rasm (yoki tayyor kollaj) yuborilsa -> To'liq joyni egallaydi
-    const mainImg = await sharp(buffers[0]).resize(960, 520, { fit: "cover" }).toBuffer();
+    // 1 ta rasm bo'lsa, qirqilmasligi uchun "contain" ishlatamiz
+    const mainImg = await sharp(buffers[0]).resize(960, 520, { 
+        fit: "contain", 
+        background: { r: 244, g: 247, b: 246, alpha: 1 } 
+    }).toBuffer();
     composites.push({ input: mainImg, top: 80, left: 20 });
   } else if (buffers.length === 2) {
-    // Agar 2 ta rasm yuborilsa -> Ikkiga bo'lib joylaydi
-    const img1 = await sharp(buffers[0]).resize(470, 520, { fit: "cover" }).toBuffer();
+    // 2 ta rasm bo'lsa ham qirqmasdan markazga joylaymiz
+    const img1 = await sharp(buffers[0]).resize(470, 520, { 
+        fit: "contain", 
+        background: { r: 244, g: 247, b: 246, alpha: 1 } 
+    }).toBuffer();
     composites.push({ input: img1, top: 80, left: 20 });
-    const img2 = await sharp(buffers[1]).resize(470, 520, { fit: "cover" }).toBuffer();
+    
+    const img2 = await sharp(buffers[1]).resize(470, 520, { 
+        fit: "contain", 
+        background: { r: 244, g: 247, b: 246, alpha: 1 } 
+    }).toBuffer();
     composites.push({ input: img2, top: 80, left: 510 });
   } else {
-    // Agar 3 yoki undan ko'p rasm yuborilsa -> Standart (1 katta, 2 kichik)
+    // 3 va undan ko'p bo'lsa chiroyli Grid bo'lishi uchun "cover" qoladi
     const mainImg = await sharp(buffers[0]).resize(640, 520, { fit: "cover" }).toBuffer();
     composites.push({ input: mainImg, top: 80, left: 20 });
     const img2 = await sharp(buffers[1]).resize(300, 250, { fit: "cover" }).toBuffer();
