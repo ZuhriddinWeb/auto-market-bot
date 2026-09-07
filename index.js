@@ -227,6 +227,9 @@ function formatNum(value) {
 // ==============================================================
 // 🎨 YANGILANGAN SVG INFOGRAFIKA (Kafolatlangan shriftlar bilan)
 // ==============================================================
+// ==============================================================
+// 🎨 YANGILANGAN SVG INFOGRAFIKA (XML xatoliklari tuzatildi)
+// ==============================================================
 async function createCollage(photoUrls, adData = {}) {
   const buffers = await Promise.all(
     photoUrls.slice(0, 3).map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
@@ -244,7 +247,6 @@ async function createCollage(photoUrls, adData = {}) {
 
   // 📸 RASMLARNI DINAMIK TAXLASH
   if (buffers.length === 1) {
-    // 1 ta rasm qirqilmasligi uchun "contain" va orqa fon bilan
     const mainImg = await sharp(buffers[0]).resize(960, 520, { 
         fit: "contain",
         background: { r: 244, g: 247, b: 246, alpha: 1 }
@@ -264,9 +266,13 @@ async function createCollage(photoUrls, adData = {}) {
     composites.push({ input: img3, top: 350, left: 680 });
   }
 
-  // Ma'lumotlarni xavfsiz ajratib olish
-  let brand = "AVTO";
-  let model = "MOSHINA";
+  // 🛡 Xavfsiz XML tozalagich funksiyasi (Qulashni 100% oldini oladi)
+  const escapeXml = (unsafe) => (unsafe || "").toString().replace(/[<>&'"]/g, c => {
+      switch (c) { case '<': return '&lt;'; case '>': return '&gt;'; case '&': return '&amp;'; case '\'': return '&apos;'; case '"': return '&quot;'; }
+  });
+
+  // Ma'lumotlarni ajratish va tozalash
+  let brand = "AVTO", model = "MOSHINA";
   if (adData.carDetails) {
       const parts = adData.carDetails.split(" ");
       brand = parts[0] || "AVTO";
@@ -275,27 +281,26 @@ async function createCollage(photoUrls, adData = {}) {
       brand = adData.brand || "AVTO";
       model = adData.model || "MOSHINA";
   }
-  brand = brand.toUpperCase();
-  model = model.toUpperCase();
-
-  const price = adData.price ? formatNum(adData.price) : "Kelishuv";
-  const year = adData.year || "-";
-  const probeg = adData.probeg ? (adData.probeg.toLowerCase() === 'salon' ? 'Salon' : `${formatNum(adData.probeg)} km`) : "Salon";
-  const paint = adData.paint || "-";
-  const color = adData.color || "-";
-  const trans = adData.transmission || adData.trans || "-";
-  const fuel = adData.fuel || "-";
-  const region = adData.region || "-";
-  const phone = adData.phone || "-";
+  
+  brand = escapeXml(brand.toUpperCase());
+  model = escapeXml(model.toUpperCase());
+  const price = adData.price ? escapeXml(formatNum(adData.price)) : "Kelishuv";
+  const year = escapeXml(adData.year || "-");
+  const probeg = adData.probeg ? escapeXml(adData.probeg.toLowerCase() === 'salon' ? 'Salon' : `${formatNum(adData.probeg)} km`) : "Salon";
+  const paint = escapeXml(adData.paint || "-");
+  const color = escapeXml(adData.color || "-");
+  const trans = escapeXml(adData.transmission || adData.trans || "-");
+  const fuel = escapeXml(adData.fuel || "-");
+  const region = escapeXml(adData.region || "-");
+  const phone = escapeXml(adData.phone || "-");
   const adId = adData.id || adData.editId || Math.floor(Math.random() * 900) + 100;
 
-  // Linux tizimi uchun eng ishonchli shriftlar ro'yxati
-  const fonts = `"DejaVu Sans", "Liberation Sans", Arial, sans-serif`;
+  // ✅ XATO TUZATILDI: Qo'shtirnoqlar (") yakkalik (') harflarga o'zgartirildi
+  const fonts = `'DejaVu Sans', 'Liberation Sans', Arial, sans-serif`;
 
   // ✏️ SVG Overlay kod
   const svgOverlay = `
     <svg width="${canvasWidth}" height="${canvasHeight}">
-      <!-- TEPA QISM -->
       <rect x="0" y="0" width="${canvasWidth}" height="80" fill="#003366" />
       <text x="500" y="52" font-size="32" font-family="${fonts}" font-weight="bold" fill="white" text-anchor="middle">ENG ARZON MASHINALAR | ISHONCHLI • TEZ • QULAY</text>
 
@@ -305,19 +310,16 @@ async function createCollage(photoUrls, adData = {}) {
       <text x="30" y="470" font-size="40" font-family="${fonts}" font-weight="900" fill="white" stroke="black" stroke-width="1">${brand}</text>
       <text x="30" y="540" font-size="75" font-family="${fonts}" font-weight="900" fill="#3399ff" stroke="black" stroke-width="2">${model}</text>
 
-      <!-- Narx ko'k qutisi -->
       <rect x="580" y="480" width="380" height="110" rx="20" fill="#0055ff" />
       <text x="770" y="520" font-size="22" font-family="${fonts}" font-weight="bold" fill="#aaddff" text-anchor="middle">NARXI</text>
       <text x="770" y="570" font-size="55" font-family="${fonts}" font-weight="900" fill="white" text-anchor="middle">${price} $</text>
 
-      <!-- 1-GRID (Oq fon va chiziqlar) -->
       <rect x="20" y="620" width="960" height="200" rx="20" fill="white" stroke="#e0e0e0" stroke-width="2"/>
       <line x1="20" y1="720" x2="980" y2="720" stroke="#f0f0f0" stroke-width="2" />
       <line x1="260" y1="620" x2="260" y2="820" stroke="#f0f0f0" stroke-width="2" />
       <line x1="500" y1="620" x2="500" y2="820" stroke="#f0f0f0" stroke-width="2" />
       <line x1="740" y1="620" x2="740" y2="820" stroke="#f0f0f0" stroke-width="2" />
 
-      <!-- Grid ma'lumotlari -->
       <text x="110" y="665" font-size="18" font-family="${fonts}" fill="#666">📅 YILI</text>
       <text x="110" y="695" font-size="26" font-family="${fonts}" font-weight="bold" fill="#222">${year}</text>
 
@@ -342,7 +344,6 @@ async function createCollage(photoUrls, adData = {}) {
       <text x="830" y="765" font-size="18" font-family="${fonts}" fill="#666">💰 NARXI</text>
       <text x="830" y="795" font-size="26" font-family="${fonts}" font-weight="bold" fill="#222">${price} $</text>
 
-      <!-- AFZALLIKLAR BLOKI -->
       <rect x="20" y="850" width="460" height="250" rx="20" fill="#e8f5e9" />
       <rect x="40" y="870" width="40" height="40" rx="20" fill="#4caf50" />
       <text x="100" y="898" font-size="22" font-family="${fonts}" font-weight="bold" fill="#2e7d32">AFZALLIKLARI</text>
@@ -359,7 +360,6 @@ async function createCollage(photoUrls, adData = {}) {
       <text x="540" y="1025" font-size="22" font-family="${fonts}" fill="#333">✔️ Shahar ichida va uzoq yo'lga mos</text>
       <text x="540" y="1065" font-size="22" font-family="${fonts}" fill="#333">✔️ Ishonchli sotuvchi</text>
 
-      <!-- KONTAKTLAR VA ID BLOKI -->
       <rect x="20" y="1130" width="440" height="60" rx="15" fill="#f0f2f5" />
       <text x="240" y="1170" font-size="26" font-family="${fonts}" font-weight="bold" fill="#222" text-anchor="middle">📞 +${phone}</text>
 
@@ -371,7 +371,6 @@ async function createCollage(photoUrls, adData = {}) {
       <text x="812" y="1167" font-size="16" font-family="${fonts}" font-weight="bold" fill="white" text-anchor="middle">ID</text>
       <text x="910" y="1170" font-size="24" font-family="${fonts}" font-weight="bold" fill="#6a1b9a" text-anchor="middle">ID: ${adId}</text>
 
-      <!-- OGOHLANTIRISH VA FOOOTER -->
       <text x="20" y="1235" font-size="20" font-family="${fonts}" fill="#444">⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗️</text>
       <text x="20" y="1275" font-size="20" font-family="${fonts}" font-weight="bold" fill="#1976d2">👉 https://t.me/+einfd7upTxxlZDYy</text>
       
@@ -383,7 +382,7 @@ async function createCollage(photoUrls, adData = {}) {
 
   composites.push({ input: Buffer.from(svgOverlay), top: 0, left: 0 });
 
-  const collagePath = path.join(__dirname, `collage_${Date.now()}.jpg`);
+  const collagePath = require("path").join(__dirname, `collage_${Date.now()}.jpg`);
   
   await sharp({
     create: { width: canvasWidth, height: canvasHeight, channels: 3, background: { r: 255, g: 255, b: 255 } },
