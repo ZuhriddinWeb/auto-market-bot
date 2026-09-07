@@ -239,30 +239,16 @@ async function createCollage(photoUrls, adData = {}) {
     top: 0, left: 0
   });
 
-  // 📸 RASMLARNI DINAMIK TAXLASH
-// 📸 RASMLARNI DINAMIK TAXLASH
+  // 📸 RASMLARNI DINAMIK TAXLASH (Joy ochiq qolmasligi uchun "cover" qoldirildi)
   if (buffers.length === 1) {
-    // 1 ta rasm bo'lsa, qirqilmasligi uchun "contain" ishlatamiz
-    const mainImg = await sharp(buffers[0]).resize(960, 520, { 
-        fit: "contain", 
-        background: { r: 244, g: 247, b: 246, alpha: 1 } 
-    }).toBuffer();
+    const mainImg = await sharp(buffers[0]).resize(960, 520, { fit: "cover" }).toBuffer();
     composites.push({ input: mainImg, top: 80, left: 20 });
   } else if (buffers.length === 2) {
-    // 2 ta rasm bo'lsa ham qirqmasdan markazga joylaymiz
-    const img1 = await sharp(buffers[0]).resize(470, 520, { 
-        fit: "contain", 
-        background: { r: 244, g: 247, b: 246, alpha: 1 } 
-    }).toBuffer();
+    const img1 = await sharp(buffers[0]).resize(470, 520, { fit: "cover" }).toBuffer();
     composites.push({ input: img1, top: 80, left: 20 });
-    
-    const img2 = await sharp(buffers[1]).resize(470, 520, { 
-        fit: "contain", 
-        background: { r: 244, g: 247, b: 246, alpha: 1 } 
-    }).toBuffer();
+    const img2 = await sharp(buffers[1]).resize(470, 520, { fit: "cover" }).toBuffer();
     composites.push({ input: img2, top: 80, left: 510 });
   } else {
-    // 3 va undan ko'p bo'lsa chiroyli Grid bo'lishi uchun "cover" qoladi
     const mainImg = await sharp(buffers[0]).resize(640, 520, { fit: "cover" }).toBuffer();
     composites.push({ input: mainImg, top: 80, left: 20 });
     const img2 = await sharp(buffers[1]).resize(300, 250, { fit: "cover" }).toBuffer();
@@ -296,23 +282,23 @@ async function createCollage(photoUrls, adData = {}) {
   const phone = adData.phone || "-";
   const adId = adData.id || adData.editId || Math.floor(Math.random() * 900) + 100;
 
-  // ✏️ SVG Overlay kod (Barcha shriftlar Arial qilib o'zgartirildi)
+  // ✏️ SVG Overlay kod (Linux uchun faqat sans-serif ishlatildi)
   const svgOverlay = `
     <svg width="${canvasWidth}" height="${canvasHeight}">
       <!-- TEPA QISM -->
       <rect x="0" y="0" width="${canvasWidth}" height="80" fill="#003366" />
-      <text x="500" y="52" font-size="32" font-family="Arial, sans-serif" font-weight="bold" fill="white" text-anchor="middle">ENG ARZON MASHINALAR | ISHONCHLI • TEZ • QULAY</text>
+      <text x="500" y="52" font-size="32" font-family="sans-serif" font-weight="bold" fill="white" text-anchor="middle">ENG ARZON MASHINALAR | ISHONCHLI • TEZ • QULAY</text>
 
       <rect x="20" y="100" width="180" height="40" rx="8" fill="#e53935" />
-      <text x="110" y="127" font-size="18" font-family="Arial, sans-serif" font-weight="bold" fill="white" text-anchor="middle">🔥 YANGI E'LON</text>
+      <text x="110" y="127" font-size="18" font-family="sans-serif" font-weight="bold" fill="white" text-anchor="middle">🔥 YANGI E'LON</text>
 
-      <text x="30" y="470" font-size="40" font-family="Arial, sans-serif" font-weight="900" fill="white" stroke="black" stroke-width="1">${brand}</text>
-      <text x="30" y="540" font-size="75" font-family="Arial, sans-serif" font-weight="900" fill="#3399ff" stroke="black" stroke-width="2">${model}</text>
+      <text x="30" y="470" font-size="40" font-family="sans-serif" font-weight="900" fill="white" stroke="black" stroke-width="1">${brand}</text>
+      <text x="30" y="540" font-size="75" font-family="sans-serif" font-weight="900" fill="#3399ff" stroke="black" stroke-width="2">${model}</text>
 
       <!-- Narx ko'k qutisi -->
       <rect x="580" y="480" width="380" height="110" rx="20" fill="#0055ff" />
-      <text x="770" y="520" font-size="22" font-family="Arial, sans-serif" font-weight="bold" fill="#aaddff" text-anchor="middle">NARXI</text>
-      <text x="770" y="570" font-size="55" font-family="Arial, sans-serif" font-weight="900" fill="white" text-anchor="middle">${price} $</text>
+      <text x="770" y="520" font-size="22" font-family="sans-serif" font-weight="bold" fill="#aaddff" text-anchor="middle">NARXI</text>
+      <text x="770" y="570" font-size="55" font-family="sans-serif" font-weight="900" fill="white" text-anchor="middle">${price} $</text>
 
       <!-- 1-GRID (Oq fon va chiziqlar) -->
       <rect x="20" y="620" width="960" height="200" rx="20" fill="white" stroke="#e0e0e0" stroke-width="2"/>
@@ -322,66 +308,66 @@ async function createCollage(photoUrls, adData = {}) {
       <line x1="740" y1="620" x2="740" y2="820" stroke="#f0f0f0" stroke-width="2" />
 
       <!-- Grid ma'lumotlari -->
-      <text x="110" y="665" font-size="18" font-family="Arial, sans-serif" fill="#666">📅 YILI</text>
-      <text x="110" y="695" font-size="26" font-family="Arial, sans-serif" font-weight="bold" fill="#222">${year}</text>
+      <text x="110" y="665" font-size="18" font-family="sans-serif" fill="#666">📅 YILI</text>
+      <text x="110" y="695" font-size="26" font-family="sans-serif" font-weight="bold" fill="#222">${year}</text>
 
-      <text x="350" y="665" font-size="18" font-family="Arial, sans-serif" fill="#666">⏱ PROBEG</text>
-      <text x="350" y="695" font-size="26" font-family="Arial, sans-serif" font-weight="bold" fill="#222">${probeg}</text>
+      <text x="350" y="665" font-size="18" font-family="sans-serif" fill="#666">⏱ PROBEG</text>
+      <text x="350" y="695" font-size="26" font-family="sans-serif" font-weight="bold" fill="#222">${probeg}</text>
 
-      <text x="590" y="665" font-size="18" font-family="Arial, sans-serif" fill="#666">🖌 KRASKASI</text>
-      <text x="590" y="695" font-size="26" font-family="Arial, sans-serif" font-weight="bold" fill="#222">${paint}</text>
+      <text x="590" y="665" font-size="18" font-family="sans-serif" fill="#666">🖌 KRASKASI</text>
+      <text x="590" y="695" font-size="26" font-family="sans-serif" font-weight="bold" fill="#222">${paint}</text>
 
-      <text x="830" y="665" font-size="18" font-family="Arial, sans-serif" fill="#666">🎨 RANGI</text>
-      <text x="830" y="695" font-size="26" font-family="Arial, sans-serif" font-weight="bold" fill="#222">${color}</text>
+      <text x="830" y="665" font-size="18" font-family="sans-serif" fill="#666">🎨 RANGI</text>
+      <text x="830" y="695" font-size="26" font-family="sans-serif" font-weight="bold" fill="#222">${color}</text>
 
-      <text x="110" y="765" font-size="18" font-family="Arial, sans-serif" fill="#666">⚙️ KAROBKA</text>
-      <text x="110" y="795" font-size="26" font-family="Arial, sans-serif" font-weight="bold" fill="#222">${trans}</text>
+      <text x="110" y="765" font-size="18" font-family="sans-serif" fill="#666">⚙️ KAROBKA</text>
+      <text x="110" y="795" font-size="26" font-family="sans-serif" font-weight="bold" fill="#222">${trans}</text>
 
-      <text x="350" y="765" font-size="18" font-family="Arial, sans-serif" fill="#666">⛽ YOQILG'I</text>
-      <text x="350" y="795" font-size="26" font-family="Arial, sans-serif" font-weight="bold" fill="#222">${fuel}</text>
+      <text x="350" y="765" font-size="18" font-family="sans-serif" fill="#666">⛽ YOQILG'I</text>
+      <text x="350" y="795" font-size="26" font-family="sans-serif" font-weight="bold" fill="#222">${fuel}</text>
 
-      <text x="590" y="765" font-size="18" font-family="Arial, sans-serif" fill="#666">📍 VILOYAT</text>
-      <text x="590" y="795" font-size="26" font-family="Arial, sans-serif" font-weight="bold" fill="#222">${region}</text>
+      <text x="590" y="765" font-size="18" font-family="sans-serif" fill="#666">📍 VILOYAT</text>
+      <text x="590" y="795" font-size="26" font-family="sans-serif" font-weight="bold" fill="#222">${region}</text>
 
-      <text x="830" y="765" font-size="18" font-family="Arial, sans-serif" fill="#666">💰 NARXI</text>
-      <text x="830" y="795" font-size="26" font-family="Arial, sans-serif" font-weight="bold" fill="#222">${price} $</text>
+      <text x="830" y="765" font-size="18" font-family="sans-serif" fill="#666">💰 NARXI</text>
+      <text x="830" y="795" font-size="26" font-family="sans-serif" font-weight="bold" fill="#222">${price} $</text>
 
       <!-- AFZALLIKLAR BLOKI -->
       <rect x="20" y="850" width="460" height="250" rx="20" fill="#e8f5e9" />
       <rect x="40" y="870" width="40" height="40" rx="20" fill="#4caf50" />
-      <text x="100" y="898" font-size="22" font-family="Arial, sans-serif" font-weight="bold" fill="#2e7d32">AFZALLIKLARI</text>
-      <text x="40" y="945" font-size="22" font-family="Arial, sans-serif" fill="#333">✅ Toza va ozoda holat</text>
-      <text x="40" y="985" font-size="22" font-family="Arial, sans-serif" fill="#333">✅ Karobkasi: ${trans}</text>
-      <text x="40" y="1025" font-size="22" font-family="Arial, sans-serif" fill="#333">✅ Yoqilg'i: ${fuel}</text>
-      <text x="40" y="1065" font-size="22" font-family="Arial, sans-serif" fill="#333">✅ Real rasmlar va ishonchli variant</text>
+      <text x="100" y="898" font-size="22" font-family="sans-serif" font-weight="bold" fill="#2e7d32">AFZALLIKLARI</text>
+      <text x="40" y="945" font-size="22" font-family="sans-serif" fill="#333">✅ Toza va ozoda holat</text>
+      <text x="40" y="985" font-size="22" font-family="sans-serif" fill="#333">✅ Karobkasi: ${trans}</text>
+      <text x="40" y="1025" font-size="22" font-family="sans-serif" fill="#333">✅ Yoqilg'i: ${fuel}</text>
+      <text x="40" y="1065" font-size="22" font-family="sans-serif" fill="#333">✅ Real rasmlar va ishonchli variant</text>
 
       <rect x="520" y="850" width="460" height="250" rx="20" fill="#e3f2fd" />
       <rect x="540" y="870" width="40" height="40" rx="10" fill="#2196f3" />
-      <text x="600" y="898" font-size="22" font-family="Arial, sans-serif" font-weight="bold" fill="#1565c0">NIMA UCHUN USHBU E'LON?</text>
-      <text x="540" y="945" font-size="22" font-family="Arial, sans-serif" fill="#333">✔️ Qulay narx va sifatli holat</text>
-      <text x="540" y="985" font-size="22" font-family="Arial, sans-serif" fill="#333">✔️ O'z vaqtida xizmat qilingan</text>
-      <text x="540" y="1025" font-size="22" font-family="Arial, sans-serif" fill="#333">✔️ Shahar ichida va uzoq yo'lga mos</text>
-      <text x="540" y="1065" font-size="22" font-family="Arial, sans-serif" fill="#333">✔️ Ishonchli sotuvchi</text>
+      <text x="600" y="898" font-size="22" font-family="sans-serif" font-weight="bold" fill="#1565c0">NIMA UCHUN USHBU E'LON?</text>
+      <text x="540" y="945" font-size="22" font-family="sans-serif" fill="#333">✔️ Qulay narx va sifatli holat</text>
+      <text x="540" y="985" font-size="22" font-family="sans-serif" fill="#333">✔️ O'z vaqtida xizmat qilingan</text>
+      <text x="540" y="1025" font-size="22" font-family="sans-serif" fill="#333">✔️ Shahar ichida va uzoq yo'lga mos</text>
+      <text x="540" y="1065" font-size="22" font-family="sans-serif" fill="#333">✔️ Ishonchli sotuvchi</text>
 
       <!-- KONTAKTLAR VA ID BLOKI -->
       <rect x="20" y="1130" width="440" height="60" rx="15" fill="#f0f2f5" />
-      <text x="240" y="1170" font-size="26" font-family="Arial, sans-serif" font-weight="bold" fill="#222" text-anchor="middle">📞 +${phone}</text>
+      <text x="240" y="1170" font-size="26" font-family="sans-serif" font-weight="bold" fill="#222" text-anchor="middle">📞 +${phone}</text>
 
       <rect x="480" y="1130" width="280" height="60" rx="15" fill="#e3f2fd" />
-      <text x="620" y="1170" font-size="24" font-family="Arial, sans-serif" font-weight="bold" fill="#1565c0" text-anchor="middle">✈️ #${region.replace(/\s+/g, "_")}</text>
+      <text x="620" y="1170" font-size="24" font-family="sans-serif" font-weight="bold" fill="#1565c0" text-anchor="middle">✈️ #${region.replace(/\s+/g, "_")}</text>
 
       <rect x="780" y="1130" width="200" height="60" rx="15" fill="#f3e5f5" />
       <rect x="790" y="1145" width="45" height="30" rx="8" fill="#ce93d8" />
-      <text x="812" y="1167" font-size="16" font-family="Arial, sans-serif" font-weight="bold" fill="white" text-anchor="middle">ID</text>
-      <text x="910" y="1170" font-size="24" font-family="Arial, sans-serif" font-weight="bold" fill="#6a1b9a" text-anchor="middle">ID: ${adId}</text>
+      <text x="812" y="1167" font-size="16" font-family="sans-serif" font-weight="bold" fill="white" text-anchor="middle">ID</text>
+      <text x="910" y="1170" font-size="24" font-family="sans-serif" font-weight="bold" fill="#6a1b9a" text-anchor="middle">ID: ${adId}</text>
 
       <!-- OGOHLANTIRISH VA FOOOTER -->
-      <text x="20" y="1235" font-size="20" font-family="Arial, sans-serif" fill="#444">⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗️</text>
-      <text x="20" y="1275" font-size="20" font-family="Arial, sans-serif" font-weight="bold" fill="#1976d2">👉 https://t.me/+einfd7upTxxlZDYy</text>
+      <text x="20" y="1235" font-size="20" font-family="sans-serif" fill="#444">⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗️</text>
+      <text x="20" y="1275" font-size="20" font-family="sans-serif" font-weight="bold" fill="#1976d2">👉 https://t.me/+einfd7upTxxlZDYy</text>
       
       <rect x="0" y="1320" width="${canvasWidth}" height="100" fill="#f8f9fa" />
-      <text x="250" y="1375" font-size="22" font-family="Arial, sans-serif" font-weight="bold" fill="#1565c0" text-anchor="middle">🚘 ENG ARZON MASHINALAR</text>
-      <text x="750" y="1375" font-size="22" font-family="Arial, sans-serif" font-weight="bold" fill="#1565c0" text-anchor="middle">✅ SIZNING ISHONCHLI BOZORINGIZ!</text>
+      <text x="250" y="1375" font-size="22" font-family="sans-serif" font-weight="bold" fill="#1565c0" text-anchor="middle">🚘 ENG ARZON MASHINALAR</text>
+      <text x="750" y="1375" font-size="22" font-family="sans-serif" font-weight="bold" fill="#1565c0" text-anchor="middle">✅ SIZNING ISHONCHLI BOZORINGIZ!</text>
     </svg>
   `;
 
