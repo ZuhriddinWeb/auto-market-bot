@@ -2778,7 +2778,53 @@ bot.command("test_top3", async (ctx) => {
   await sendDailyTop3();
   await ctx.reply("✅ <b>TOP-3 test muvaffaqiyatli yakunlandi! Kanalni tekshiring.</b>", { parse_mode: "HTML" });
 });
+// ==============================================================
+// 🤖 AVTO-TOZALASH VA AQLLI MASLAHATCHI TIZIMI (ADMIN ishtirok etmaydi)
+// ==============================================================
+async function runAutomations() {
+  try {
+      // 1. AQLLI MASLAHATCHI (5 KUNLIK) - Admindan tashqari barcha uchun
+      const [ads5] = await db.execute(
+          "SELECT id, userId, carDetails FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) = 5",
+          [ADMIN_ID]
+      );
+      for (let ad of ads5) {
+          const text = `💡 <b>Aqlli maslahatchi:</b>\n\n🚗 Sizning <b>${ad.carDetails}</b> mashinangiz e'loniga 5 kun bo'ldi. \n\nKuzatuvlarimizga ko'ra, moshina 5 kunda sotilmasa, uning narxini biroz tushirish va "Qaynoq narx" xabarini jo'natish xaridor topishni 3 barobar tezlashtiradi!\n\n👇 <i>Narxni tushirish uchun pastdagi tugmani bosing:</i>`;
+          await bot.api.sendMessage(ad.userId, text, {
+              parse_mode: "HTML",
+              reply_markup: new InlineKeyboard().text("📉 Narxni tushirish", `edit_price:${ad.id}`)
+          }).catch(()=>{});
+          await delay(200); // Spam blokiga tushmaslik uchun
+      }
 
+      // 2. AVTO-TOZALASH ESLATMASI (15 KUNLIK) - Admindan tashqari barcha uchun
+      const [ads15] = await db.execute(
+          "SELECT id, userId, carDetails FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) = 15",
+          [ADMIN_ID]
+      );
+      for (let ad of ads15) {
+          const text = `⚠️ <b>E'lon muddati tugamoqda:</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 15 kun bo'ldi. Moshina sotildimi?\n\n<i>(Agar "Hali sotilmadi" tugmasi bosilmasa, e'loningiz 3 kundan so'ng bazamizdan va kanaldan o'chiriladi)</i>`;
+          await bot.api.sendMessage(ad.userId, text, {
+              parse_mode: "HTML",
+              reply_markup: new InlineKeyboard().text("✅ Sotildi", `confirm_sold:${ad.id}`).row().text("🔄 Hali sotilmadi (Uzaytirish)", `keep_ad:${ad.id}`)
+          }).catch(()=>{});
+          await delay(200);
+      }
+
+      // 3. O'LIK E'LONLARNI TOZALASH (18 KUN) - Admindan tashqari barcha uchun
+      const [ads18] = await db.execute(
+          "SELECT id, channelMsgId, secondChannelMsgId FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) >= 18",
+          [ADMIN_ID]
+      );
+      for (let ad of ads18) {
+          await db.execute("UPDATE ads SET status = 'deleted' WHERE id = ?", [ad.id]);
+          await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(()=>{});
+          if(process.env.SECOND_CHANNEL_ID && ad.secondChannelMsgId) {
+              await bot.api.deleteMessage(process.env.SECOND_CHANNEL_ID, ad.secondChannelMsgId).catch(()=>{});
+          }
+      }
+  } catch(e) { console.error("Avtomatizatsiya xatosi:", e); }
+}
 // =====================================================================
 // ⏰ UMUMIY TAYMER: HAR 30 MINUTDA VAQTNI TEKSHIRIB TURADI
 // =====================================================================
@@ -2787,6 +2833,7 @@ bot.command("test_top3", async (ctx) => {
 // =====================================================================
 let lastAnalyticsDate = null;
 let lastTop5Date = null;
+let lastAutoCleanDate = null;
 
 setInterval(() => {
     const now = new Date();
@@ -2808,6 +2855,13 @@ setInterval(() => {
         if (lastTop5Date !== dateStr) {
             lastTop5Date = dateStr;
             sendDailyTop3();
+        }
+    }
+    if (uzbTime.getHours() === 12) {
+        if (lastAutoCleanDate !== dateStr) {
+            lastAutoCleanDate = dateStr;
+            runAutomations(); 
+            console.log("✅ Avto-tozalash va maslahatchi xabarlari yuborildi!");
         }
     }
 }, 60 * 1000 * 30);
