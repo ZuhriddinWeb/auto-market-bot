@@ -2579,11 +2579,11 @@ async function sendWeeklyAnalytics() {
 }
 
 // =====================================================================
-// 🏆 HAR KUNLIK "TOP-5" AVTO-POST TIZIMI
+// 🏆 HAR KUNLIK "TOP-3" AVTO-POST TIZIMI
 // =====================================================================
-async function sendDailyTop5() {
+async function sendDailyTop3() {
   try {
-    // Bazadan eng ko'p "Saqlangan (❤️)" 5 ta faol e'lonni olamiz
+    // Bazadan eng ko'p "Saqlangan (❤️)" 3 ta faol e'lonni olamiz
     const [topAds] = await db.execute(`
       SELECT a.id, a.carDetails, a.price, a.channelMsgId, COUNT(f.id) as saves
       FROM ads a
@@ -2594,11 +2594,11 @@ async function sendDailyTop5() {
       LIMIT 3
     `);
 
-    // Agar saqlangan e'lonlar umuman yo'q bo'lsa, xabar tashlamaymiz
+    // Agar saqlangan e'lonlar umuman yo'q bo'lsa, jarayonni to'xtatamiz
     if (topAds.length === 0) return; 
 
     let text = `🏆 <b>BUGUNNING TOP 3 MASHINALARI</b>\n<i>Xaridorlar tomonidan eng ko'p saqlangan qaynoq e'lonlar:</i>\n\n`;
-    const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
+    const emojis = ["1️⃣", "2️⃣", "3️⃣"];
     const channelUsername = process.env.CHANNEL_ID.replace("@", "");
 
     topAds.forEach((ad, index) => {
@@ -2614,9 +2614,20 @@ async function sendDailyTop5() {
       disable_web_page_preview: true // Xabar xunuk bo'lib ketmasligi uchun link preview o'chiriladi
     });
   } catch (err) {
-    console.error("Top-5 yuborishda xatolik:", err);
+    console.error("Top-3 yuborishda xatolik:", err);
   }
 }
+
+// =====================================================================
+// 🛠 ADMIN UCHUN MAXSUS TEST BUYRUG'I
+// =====================================================================
+bot.command("test_top3", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  
+  await ctx.reply("⏳ <i>TOP-3 post tayyorlanmoqda va kanalga yuborilmoqda...</i>", { parse_mode: "HTML" });
+  await sendDailyTop3();
+  await ctx.reply("✅ <b>TOP-3 test muvaffaqiyatli yakunlandi! Kanalni tekshiring.</b>", { parse_mode: "HTML" });
+});
 
 // =====================================================================
 // ⏰ UMUMIY TAYMER: HAR 30 MINUTDA VAQTNI TEKSHIRIB TURADI
@@ -2626,27 +2637,25 @@ let lastTop5Date = null;
 
 setInterval(() => {
     const now = new Date();
-    const dateStr = now.toISOString().split('T')[0]; // "2026-08-09" shaklida
+    const dateStr = now.toISOString().split('T')[0]; 
 
     // 1. HAFTALIK ANALITIKA (Yakshanba kuni soat 05:xx da)
     if (now.getDay() === 0 && now.getHours() === 5) {
         if (lastAnalyticsDate !== dateStr) {
             lastAnalyticsDate = dateStr;
             sendWeeklyAnalytics();
-            console.log("✅ Haftalik analitika kanalga yuborildi!");
         }
     }
 
-    // 2. KUNLIK TOP-5 POST (Har kuni kechqurun soat 20:xx atrofida)
+    // 2. KUNLIK TOP-3 POST (Har kuni kechqurun soat 20:xx da)
     if (now.getHours() === 20) { 
         if (lastTop5Date !== dateStr) {
             lastTop5Date = dateStr;
-            sendDailyTop5();
-            console.log("✅ Kunlik TOP-5 kanalga yuborildi!");
+            sendDailyTop3();
         }
     }
-}, 60 * 1000 * 30); // Har 30 minutda aylanadi
-// =====================================================================
+}, 60 * 1000 * 30);
+
 bot.start({
   allowed_updates: ["message", "edited_message", "callback_query", "chat_member", "my_chat_member", "channel_post", "edited_channel_post"]
 });
