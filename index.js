@@ -1963,29 +1963,97 @@ bot.hears("🔍 Mashina qidirish", async (ctx) => {
   await ctx.conversation.enter("searchCarConversation");
 });
 
+// ==============================================================
+// 📂 MENING E'LONLARIM (20 TALIK PAGINATSIYA VA RO'YXAT)
+// ==============================================================
+async function sendMyAdsPage(ctx, page = 1) {
+  const [ads] = await db.execute("SELECT * FROM ads WHERE userId = ? AND status = 'active' ORDER BY created_at DESC", [ctx.from.id]);
+  
+  if (ads.length === 0) {
+    const text = "📭 <b>Sizda hozirda faol e'lonlar yo'q.</b>";
+    return ctx.callbackQuery ? ctx.editMessageText(text, { parse_mode: "HTML" }) : ctx.reply(text, { parse_mode: "HTML" });
+  }
+
+  const PER_PAGE = 20;
+  const totalPages = Math.ceil(ads.length / PER_PAGE);
+  if (page > totalPages) page = totalPages;
+  if (page < 1) page = 1;
+
+  const startIndex = (page - 1) * PER_PAGE;
+  const endIndex = startIndex + PER_PAGE;
+  const currentAds = ads.slice(startIndex, endIndex);
+
+  let text = `📂 <b>Sizning faol e'lonlaringiz</b>\nJami: <b>${ads.length} ta</b> | Sahifa: <b>${page}/${totalPages}</b>\n\n`;
+  const kb = new InlineKeyboard();
+  
+  // 20 ta e'lonni ro'yxat qilib yozamiz
+  currentAds.forEach((ad, index) => {
+    const adNum = startIndex + index + 1;
+    text += `<b>${adNum}.</b> ${ad.carDetails} — <b>${formatNum(ad.price)}$</b>\n`;
+    
+    // Tugmalarni 5 tadan qilib bir qatorga taxlaymiz
+    kb.text(`${adNum}`, `manage_ad:${ad.id}`);
+    if ((index + 1) % 5 === 0) kb.row(); 
+  });
+
+  // Paginatsiya (Oldingi / Keyingi) tugmalari
+  const navRow = [];
+  if (page > 1) navRow.push(InlineKeyboard.text("⬅️ Oldingi", `myads_page:${page - 1}`));
+  if (page < totalPages) navRow.push(InlineKeyboard.text("Keyingi ➡️", `myads_page:${page + 1}`));
+  
+  if (navRow.length > 0) {
+    if (currentAds.length % 5 !== 0) kb.row(); // Yangi qatorga tushirish uchun
+    kb.row(...navRow);
+  }
+
+  text += `\n👇 <i>Boshqarmoqchi bo'lgan e'loningiz raqamini tanlang:</i>`;
+
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
+  } else {
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+  }
+}
+
+// 1. Asosiy tugma bosilganda 1-sahifani ochish
 bot.hears("📂 Mening e'lonlarim", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
-  const [ads] = await db.execute("SELECT * FROM ads WHERE userId = ? AND status = 'active'", [ctx.from.id]);
-  if (ads.length === 0) return ctx.reply("📭 <b>Sizda hozirda faol e'lonlar yo'q.</b>", { parse_mode: "HTML" });
+  await sendMyAdsPage(ctx, 1);
+});
+
+// 2. Sahifalarni o'tkazish logikasi
+bot.callbackQuery(/^myads_page:(\d+)/, async (ctx) => {
+  const page = parseInt(ctx.match[1]) || 1;
+  await ctx.answerCallbackQuery().catch(()=>{});
+  await sendMyAdsPage(ctx, page);
+});
+
+// 3. Bitta e'lonni tanlaganda uning menyusini chiqarish
+bot.callbackQuery(/^manage_ad:(\d+)/, async (ctx) => {
+  const adId = ctx.match[1];
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ? AND status = 'active'", [adId, ctx.from.id]);
+  const ad = rows[0];
+  
+  if (!ad) return ctx.answerCallbackQuery("❌ Bu e'lon faol emas yoki yopilgan.", { show_alert: true });
 
   const [[u]] = await db.execute("SELECT free_ups FROM users WHERE id = ?", [ctx.from.id]);
   const freeUps = u ? u.free_ups : 0;
 
-  for (const ad of ads) {
-    const kb = new InlineKeyboard()
-      .text("💰 Sotildi", `sold_req:${ad.id}`)
-      .text("📉 Narxni tushirish", `edit_price:${ad.id}`).row()
-      .text("✏️ To'liq tahrirlash", `full_edit_req:${ad.id}`).row()
-      .text("🌟 VIP QILISH (50 ⭐️)", `buy_vip:${ad.id}`); // <--- YANGI TUGMA QO'SHILDI
+  const kb = new InlineKeyboard()
+    .text("💰 Sotildi", `confirm_sold:${ad.id}`) 
+    .text("📉 Narxni tushirish", `edit_price:${ad.id}`).row()
+    .text("✏️ To'liq tahrirlash", `full_edit_req:${ad.id}`).row()
+    .text("🌟 VIP QILISH (50 ⭐️)", `buy_vip:${ad.id}`).row(); 
 
-      if (freeUps > 0) {
-        kb.row().text(`🚀 BEPUL UP (VIP) (${freeUps} ta bor)`, `free_up_req:${ad.id}`);
-    }
-
-    await ctx.reply(`🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n💰 <b>Narxi: ${ad.price}$</b>`, {
-      reply_markup: kb, parse_mode: "HTML",
-    });
+  if (freeUps > 0) {
+    kb.text(`🚀 BEPUL UP (${freeUps} ta bor)`, `free_up_req:${ad.id}`).row();
   }
+  kb.text("🔙 Ro'yxatga qaytish", "myads_page:1"); // Ro'yxatga oson qaytish uchun
+
+  const text = `🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n💰 <b>Narxi: ${formatNum(ad.price)}$</b>\n\n👇 <i>Kerakli amalni tanlang:</i>`;
+  
+  await ctx.answerCallbackQuery().catch(()=>{});
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
 });
 bot.hears("🔔 Obunalarim", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
@@ -2495,20 +2563,29 @@ bot.callbackQuery(/^del_alert:(\d+)/, async (ctx) => {
 // ==============================================================
 // 🌟 VIP MONETIZATSIYA (TELEGRAM STARS TO'LOV TIZIMI)
 // ==============================================================
+// ==============================================================
+// 🌟 VIP MONETIZATSIYA (TELEGRAM STARS TO'LOV TIZIMI)
+// ==============================================================
 bot.callbackQuery(/^buy_vip:(\d+)/, async (ctx) => {
     const adId = ctx.match[1];
-    await ctx.answerCallbackQuery();
     
-    // Telegram Stars orqali to'lov (Invoys) yuborish
-    await ctx.api.sendInvoice(
-        ctx.from.id,
-        "🌟 VIP E'LON",
-        "E'loningizni OLTIN maqomda kanalga joylaymiz va kanalning eng tepasiga qadab (Pin qilib) qo'yamiz!",
-        `vip_${adId}`,
-        "", // Telegram Stars uchun provayder token bo'sh qoladi
-        "XTR", // Yulduzcha valyutasi
-        [{ label: "VIP Xizmat", amount: 50 }] // 50 ta yulduzcha
-    );
+    // ✅ Timeout xatosini yashiramiz (query is too old xatosi boshqa chiqmaydi)
+    await ctx.answerCallbackQuery().catch(() => {}); 
+    
+    try {
+        // Yangilangan Grammy versiyasi bo'yicha parametrlar
+        await ctx.api.sendInvoice(
+            ctx.from.id,
+            "🌟 VIP E'LON", // Sarlavha
+            "E'loningizni OLTIN maqomda kanalga joylaymiz va kanalning eng tepasiga qadab (Pin qilib) qo'yamiz!", // Ta'rif
+            `vip_${adId}`, // Payload
+            "XTR", // Valyuta
+            [{ label: "VIP Xizmat", amount: 50 }] // Narxi
+        );
+    } catch (err) {
+        console.error("Yulduzcha Invoys yuborishda xato:", err.message);
+        await ctx.reply("❌ To'lov tizimiga ulanishda vaqtinchalik nosozlik yuz berdi.");
+    }
 });
 
 // To'lovni tasdiqlash
