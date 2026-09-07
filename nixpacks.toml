@@ -1,2 +1,5 @@
 [phases.setup]
-aptPkgs = ["fontconfig", "fonts-liberation", "fonts-dejavu", "fonts-noto"]
+aptPkgs = ["fontconfig", "fonts-liberation", "fonts-dejavu", "fonts-noto-color-emoji"]
+
+[phases.build]
+cmds = ["npm install", "fc-cache -f -v"]
