@@ -222,67 +222,194 @@ async function deleteMsgs(ctx, msgIds) {
 // Watermark kesh
 let cachedWatermarkText = null; 
 
-async function createCollage(photoUrls) {
+// ==============================================================
+// 🎨 MUKAMMAL SVG INFOGRAFIKA (BLUR FON VA AQLLI YORLIQ BILAN)
+// ==============================================================
+async function createCollage(photoUrls, adData = {}) {
+  // 1. 4 tagacha rasmni olib kelish
   const buffers = await Promise.all(
-    photoUrls.map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
+    photoUrls.slice(0, 4).map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
   );
 
-  const layoutParams = [];
-  const canvasWidth = 1200;
-  let canvasHeight = 0;
-  const len = buffers.length;
+  const width = 1000;
+  const height = 1350; 
+  const composites = [];
 
-  if (len === 1) {
-    layoutParams.push({ width: 1200, height: 900, left: 0, top: 0 });
-    canvasHeight = 900;
+  // Orqa oq-kulrang fon
+  composites.push({
+    input: Buffer.from(`<svg width="${width}" height="${height}"><rect width="100%" height="100%" fill="#f4f6f8"/></svg>`),
+    top: 0, left: 0
+  });
+
+  const photoTop = 80;
+  
+  // 📸 RASMLARNI DINAMIK VA CHIROYLI TAXLASH
+  if (buffers.length === 1) {
+     // 1 ta rasm bo'lsa: Orqasiga chiroyli BLUR (xira) fon qo'yamiz
+     const blurredBg = await sharp(buffers[0]).resize(960, 500, {fit: 'cover'}).blur(20).toBuffer();
+     composites.push({ input: blurredBg, top: photoTop, left: 20 });
+     
+     // Asosiy rasmni qirqmasdan markazga joylaymiz
+     const mainImg = await sharp(buffers[0]).resize(960, 500, {fit: 'contain', background: {r:0,g:0,b:0,alpha:0}}).toBuffer();
+     composites.push({ input: mainImg, top: photoTop, left: 20 });
+  } else if (buffers.length === 2) {
+     composites.push({ input: await sharp(buffers[0]).resize(475, 500, {fit: 'cover'}).toBuffer(), top: photoTop, left: 20 });
+     composites.push({ input: await sharp(buffers[1]).resize(475, 500, {fit: 'cover'}).toBuffer(), top: photoTop, left: 505 });
+  } else if (buffers.length === 3) {
+     composites.push({ input: await sharp(buffers[0]).resize(640, 500, {fit: 'cover'}).toBuffer(), top: photoTop, left: 20 });
+     composites.push({ input: await sharp(buffers[1]).resize(310, 245, {fit: 'cover'}).toBuffer(), top: photoTop, left: 670 });
+     composites.push({ input: await sharp(buffers[2]).resize(310, 245, {fit: 'cover'}).toBuffer(), top: photoTop + 255, left: 670 });
   } else {
-    for (let i = 0; i < len; i++) {
-      if (i === len - 1 && len % 2 !== 0) {
-        layoutParams.push({ width: 1200, height: 600, left: 0, top: Math.floor(i / 2) * 600 });
-        canvasHeight = Math.max(canvasHeight, (Math.floor(i / 2) + 1) * 600);
-      } else {
-        layoutParams.push({ width: 600, height: 600, left: (i % 2) * 600, top: Math.floor(i / 2) * 600 });
-        canvasHeight = Math.max(canvasHeight, (Math.floor(i / 2) + 1) * 600);
-      }
-    }
+     composites.push({ input: await sharp(buffers[0]).resize(640, 500, {fit: 'cover'}).toBuffer(), top: photoTop, left: 20 });
+     composites.push({ input: await sharp(buffers[1]).resize(310, 160, {fit: 'cover'}).toBuffer(), top: photoTop, left: 670 });
+     composites.push({ input: await sharp(buffers[2]).resize(310, 160, {fit: 'cover'}).toBuffer(), top: photoTop + 170, left: 670 });
+     composites.push({ input: await sharp(buffers[3]).resize(310, 160, {fit: 'cover'}).toBuffer(), top: photoTop + 340, left: 670 });
   }
 
-  const composites = await Promise.all(
-    buffers.map(async (buf, i) => {
-      const param = layoutParams[i];
-      const resized = await sharp(buf).resize(param.width, param.height, { fit: "cover" }).toBuffer();
-      return { input: resized, top: param.top, left: param.left };
-    })
-  );
+  // XML xatoliklarini 100% oldini olish filtri
+  const escapeXml = (unsafe) => (unsafe || "").toString().replace(/[<>&'"]/g, c => {
+      switch (c) { case '<': return '&lt;'; case '>': return '&gt;'; case '&': return '&amp;'; case '\'': return '&apos;'; case '"': return '&quot;'; }
+  });
 
-  const rectHeight = 120;
-  const rectY = Math.floor((canvasHeight / 2) - (rectHeight / 2));
-  const blackBandSvg = `<svg width="${canvasWidth}" height="${canvasHeight}"><rect x="0" y="${rectY}" width="${canvasWidth}" height="${rectHeight}" fill="rgba(0, 0, 0, 0.5)" /></svg>`;
-
-  composites.push({ input: Buffer.from(blackBandSvg), top: 0, left: 0 });
-
-  if (!cachedWatermarkText) {
-    try {
-      const url = `https://placehold.co/${canvasWidth}x${rectHeight}/transparent/ffffff/png?text=%40engarzonidamoshina&font=Montserrat`;
-      const response = await axios.get(url, { responseType: "arraybuffer" });
-      cachedWatermarkText = Buffer.from(response.data);
-    } catch (error) {
-      console.error("Watermark xatolik:", error.message);
-    }
+  let brand = "AVTO", model = "MOSHINA";
+  if (adData.carDetails) {
+      const parts = adData.carDetails.split(" ");
+      brand = parts[0] || "AVTO";
+      model = parts.slice(1).join(" ") || "MOSHINA";
+  } else {
+      brand = adData.brand || "AVTO";
+      model = adData.model || "MOSHINA";
   }
 
-  if (cachedWatermarkText) {
-    composites.push({ input: cachedWatermarkText, top: rectY, left: 0 });
+  brand = escapeXml(brand.toUpperCase());
+  model = escapeXml(model.toUpperCase());
+  const price = escapeXml(adData.price ? formatNum(adData.price) : "Kelishuv");
+  const year = escapeXml(adData.year || "-");
+  const probeg = escapeXml(adData.probeg ? (adData.probeg.toLowerCase() === 'salon' ? 'Salon' : `${formatNum(adData.probeg)} km`) : "Salon");
+  const paint = escapeXml(adData.paint || "-");
+  const color = escapeXml(adData.color || "-");
+  const trans = escapeXml(adData.transmission || adData.trans || "-");
+  const fuel = escapeXml(adData.fuel || "-");
+  const region = escapeXml(adData.region || "-");
+  const phone = escapeXml(adData.phone || "-");
+  const adId = escapeXml(adData.id || adData.editId || Math.floor(Math.random() * 900) + 100);
+  
+  const tagColor = adData.urgent ? "#ff2a00" : "#28a745";
+  const tagText = adData.urgent ? "SHOSHILINCH" : "YANGI E'LON";
+
+  // Linux uchun eng ishonchli shrift qoidasi
+  const fonts = "sans-serif";
+
+  // ✏️ AQLLI YORLIQ (SMART BADGE) KODI
+  let smartBadgeSvg = "";
+  if (adData.smartBadge) {
+      smartBadgeSvg = `
+      <rect x="680" y="100" width="300" height="40" rx="8" fill="${adData.smartBadgeColor}" />
+      <text x="830" y="127" font-family="${fonts}" font-size="16" font-weight="bold" fill="white" text-anchor="middle">${adData.smartBadge}</text>
+      `;
   }
+
+  const svg = `
+  <svg width="${width}" height="${height}">
+    <rect x="20" y="15" width="960" height="50" rx="10" fill="#0b409c"/>
+    <text x="50" y="48" font-family="${fonts}" font-size="24" font-weight="bold" fill="#fff">ENG ARZON MASHINALAR</text>
+    <text x="950" y="48" font-family="${fonts}" font-size="20" font-weight="bold" fill="#fff" text-anchor="end">ISHONCHLI • TEZ • QULAY</text>
+
+    <!-- Rasm tagidagi qorayuvchi fon -->
+    <defs>
+      <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="rgba(0,0,0,0)"/>
+        <stop offset="100%" stop-color="rgba(0,0,0,0.85)"/>
+      </linearGradient>
+    </defs>
+    <rect x="20" y="420" width="${buffers.length > 1 ? 640 : 960}" height="160" fill="url(#grad)"/>
+
+    <rect x="30" y="95" width="160" height="35" rx="17" fill="${tagColor}"/>
+    <text x="110" y="119" font-family="${fonts}" font-size="16" font-weight="bold" fill="#fff" text-anchor="middle">${tagText}</text>
+
+    ${smartBadgeSvg}
+
+    <text x="40" y="480" font-family="${fonts}" font-size="30" font-weight="900" font-style="italic" fill="#fff">${brand}</text>
+    <text x="40" y="535" font-family="${fonts}" font-size="65" font-weight="900" font-style="italic" fill="#4dabff">${model}</text>
+    <text x="40" y="565" font-family="${fonts}" font-size="18" font-weight="bold" fill="#fff">${year} yil  •  ${trans}  •  ${fuel}</text>
+
+    <rect x="520" y="480" width="280" height="90" rx="15" fill="#0b57d0"/>
+    <text x="660" y="510" font-family="${fonts}" font-size="18" font-weight="bold" fill="#bbdefb" text-anchor="middle">NARXI</text>
+    <text x="660" y="555" font-family="${fonts}" font-size="45" font-weight="900" fill="#fff" text-anchor="middle">${price} $</text>
+
+    <rect x="20" y="600" width="960" height="200" rx="15" fill="#fff" stroke="#e1e8ed" stroke-width="2"/>
+    <line x1="20" y1="700" x2="980" y2="700" stroke="#e1e8ed" stroke-width="2"/>
+    <line x1="260" y1="600" x2="260" y2="800" stroke="#e1e8ed" stroke-width="2"/>
+    <line x1="500" y1="600" x2="500" y2="800" stroke="#e1e8ed" stroke-width="2"/>
+    <line x1="740" y1="600" x2="740" y2="800" stroke="#e1e8ed" stroke-width="2"/>
+
+    <text x="140" y="645" font-family="${fonts}" font-size="16" font-weight="bold" fill="#546e7a" text-anchor="middle">YILI</text>
+    <text x="140" y="675" font-family="${fonts}" font-size="24" font-weight="bold" fill="#14171a" text-anchor="middle">${year}</text>
+
+    <text x="380" y="645" font-family="${fonts}" font-size="16" font-weight="bold" fill="#546e7a" text-anchor="middle">PROBEG</text>
+    <text x="380" y="675" font-family="${fonts}" font-size="24" font-weight="bold" fill="#14171a" text-anchor="middle">${probeg}</text>
+
+    <text x="620" y="645" font-family="${fonts}" font-size="16" font-weight="bold" fill="#546e7a" text-anchor="middle">KRASKASI</text>
+    <text x="620" y="675" font-family="${fonts}" font-size="24" font-weight="bold" fill="#14171a" text-anchor="middle">${paint}</text>
+
+    <text x="860" y="645" font-family="${fonts}" font-size="16" font-weight="bold" fill="#546e7a" text-anchor="middle">RANGI</text>
+    <text x="860" y="675" font-family="${fonts}" font-size="24" font-weight="bold" fill="#14171a" text-anchor="middle">${color}</text>
+
+    <text x="140" y="745" font-family="${fonts}" font-size="16" font-weight="bold" fill="#546e7a" text-anchor="middle">KAROBKA</text>
+    <text x="140" y="775" font-family="${fonts}" font-size="24" font-weight="bold" fill="#14171a" text-anchor="middle">${trans}</text>
+
+    <text x="380" y="745" font-family="${fonts}" font-size="16" font-weight="bold" fill="#546e7a" text-anchor="middle">YOQILG'I</text>
+    <text x="380" y="775" font-family="${fonts}" font-size="24" font-weight="bold" fill="#14171a" text-anchor="middle">${fuel}</text>
+
+    <text x="620" y="745" font-family="${fonts}" font-size="16" font-weight="bold" fill="#546e7a" text-anchor="middle">VILOYAT</text>
+    <text x="620" y="775" font-family="${fonts}" font-size="24" font-weight="bold" fill="#14171a" text-anchor="middle">${region}</text>
+
+    <text x="860" y="745" font-family="${fonts}" font-size="16" font-weight="bold" fill="#546e7a" text-anchor="middle">NARXI</text>
+    <text x="860" y="775" font-family="${fonts}" font-size="24" font-weight="bold" fill="#14171a" text-anchor="middle">${price} $</text>
+
+    <rect x="20" y="820" width="470" height="220" rx="15" fill="#eafaf1"/>
+    <text x="160" y="860" font-family="${fonts}" font-size="20" font-weight="bold" fill="#1b5e20">AFZALLIKLARI</text>
+    <text x="40" y="900" font-family="${fonts}" font-size="18" fill="#14171a">• Toza va ozoda holat</text>
+    <text x="40" y="935" font-family="${fonts}" font-size="18" fill="#14171a">• Karobkasi: ${trans}</text>
+    <text x="40" y="970" font-family="${fonts}" font-size="18" fill="#14171a">• Yoqilg'i: ${fuel}</text>
+    <text x="40" y="1005" font-family="${fonts}" font-size="18" fill="#14171a">• Real rasmlar va ishonchli variant</text>
+
+    <rect x="510" y="820" width="470" height="220" rx="15" fill="#f0f7ff"/>
+    <text x="590" y="860" font-family="${fonts}" font-size="20" font-weight="bold" fill="#0b57d0">NIMA UCHUN USHBU E'LON?</text>
+    <text x="530" y="900" font-family="${fonts}" font-size="18" fill="#14171a">• Qulay narx va sifatli holat</text>
+    <text x="530" y="935" font-family="${fonts}" font-size="18" fill="#14171a">• O'z vaqtida xizmat qilingan</text>
+    <text x="530" y="970" font-family="${fonts}" font-size="18" fill="#14171a">• Shahar ichida va uzoq yo'lga mos</text>
+    <text x="530" y="1005" font-family="${fonts}" font-size="18" fill="#14171a">• Ishonchli sotuvchi</text>
+
+    <rect x="20" y="1060" width="470" height="60" rx="15" fill="#f0f2f5"/>
+    <text x="255" y="1098" font-family="${fonts}" font-size="24" font-weight="bold" fill="#14171a" text-anchor="middle">+ ${phone}</text>
+
+    <rect x="510" y="1060" width="280" height="60" rx="15" fill="#e8f0fe"/>
+    <text x="650" y="1098" font-family="${fonts}" font-size="22" font-weight="bold" fill="#0b57d0" text-anchor="middle">#${region.replace(/\s+/g, "_")}</text>
+
+    <rect x="810" y="1060" width="170" height="60" rx="15" fill="#f3e8fa"/>
+    <rect x="825" y="1075" width="40" height="30" rx="8" fill="#ab47bc"/>
+    <text x="845" y="1096" font-family="${fonts}" font-size="14" font-weight="bold" fill="#fff" text-anchor="middle">ID</text>
+    <text x="925" y="1098" font-family="${fonts}" font-size="22" font-weight="bold" fill="#6a1b9a" text-anchor="middle">ID: ${adId}</text>
+
+    <text x="20" y="1160" font-family="${fonts}" font-size="18" fill="#14171a">Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi!</text>
+    <text x="20" y="1200" font-family="${fonts}" font-size="18" font-weight="bold" fill="#0b57d0">https://t.me/+einfd7upTxxlZDYy</text>
+    
+    <rect x="20" y="1230" width="960" height="50" rx="10" fill="#f0f2f5"/>
+    <text x="250" y="1262" font-family="${fonts}" font-size="18" font-weight="bold" fill="#0b57d0" text-anchor="middle">ENG ARZON MASHINALAR</text>
+    <text x="750" y="1262" font-family="${fonts}" font-size="18" font-weight="bold" fill="#14171a" text-anchor="middle">SIZNING ISHONCHLI AVTO BOZORINGIZ!</text>
+  </svg>
+  `;
+
+  composites.push({ input: Buffer.from(svg), top: 0, left: 0 });
 
   const collagePath = path.join(__dirname, `collage_${Date.now()}.jpg`);
-  
   await sharp({
-    create: { width: canvasWidth, height: canvasHeight, channels: 3, background: { r: 255, g: 255, b: 255 } },
+    create: { width, height, channels: 3, background: { r: 244, g: 246, b: 248 } }
   })
-    .composite(composites)
-    .jpeg({ quality: 90 })
-    .toFile(collagePath);
+  .composite(composites)
+  .jpeg({ quality: 90 })
+  .toFile(collagePath);
 
   return collagePath;
 }
@@ -1110,25 +1237,31 @@ async function createAdConversation(conversation, ctx) {
         
         const numericPrice = parseInt(ad.price) || 0;
         let priceBadge = "";
+        ad.smartBadge = null;
+        ad.smartBadgeColor = null;
         
         try {
-            const [avgRows] = await db.execute("SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice FROM ads WHERE carDetails LIKE ? AND status = 'active'", [`%${ad.model}%`]);
-            const avgPrice = avgRows[0].avgPrice;
+            const [avgRows] = await db.execute("SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice FROM ads WHERE carDetails LIKE ? AND status IN ('active', 'sold')", [`%${ad.model}%`]);
+            const avgPrice = parseInt(avgRows[0].avgPrice) || 0;
             
-            if (avgPrice && numericPrice < avgPrice * 0.95) { 
-                priceBadge = " 🔥 (Qaynoq narx)";
-            } else if (avgPrice && numericPrice > avgPrice * 1.1) {
-                priceBadge = " 📈 (Bozordan biroz qimmat)";
+            if (avgPrice > 1000) {
+                if (numericPrice <= avgPrice * 0.90) { // Bozordan 10% va undan ko'proq arzon bo'lsa
+                    ad.smartBadge = "🔥 TEZ SOTILISHI MUMKIN";
+                    ad.smartBadgeColor = "#d32f2f"; // To'q qizil
+                } else if (numericPrice <= avgPrice * 0.95) { // Bozordan 5-10% gacha arzon bo'lsa
+                    ad.smartBadge = "💎 JUDA YAXSHI TAKLIF";
+                    ad.smartBadgeColor = "#1976d2"; // To'q ko'k
+                }
             }
-        } catch (e) {
-            console.error("Narx analitikasi xatosi:", e);
-        }
+        } catch (e) { console.error("Analiz xatosi:", e); }
 
         const photoUrls = await Promise.all(ad.photos.map(async (id) => {
             const file = await bot.api.getFile(id);
             return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
         }));
-        const collagePath = await createCollage(photoUrls);
+        
+        // Rasmga yorliqlarni ulab yuboramiz
+        const collagePath = await createCollage(photoUrls, {...ad, id: isFullUpdate ? updateAdId : "000"});
         
         // ================= YANGI: Agar shoshilinch bo'lsa PREVIEW da ko'rsatiladi =================
         let caption = "";
