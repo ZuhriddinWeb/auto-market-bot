@@ -220,14 +220,11 @@ async function deleteMsgs(ctx, msgIds) {
   }, 1500); 
 }
 // Watermark kesh
-// ==============================================================
-// 📸 ASL (ORIGINAL) KOLLAJ FUNKSIYASI (Faqat rasm va watermark)
-// ==============================================================
 let cachedWatermarkText = null; 
 
 async function createCollage(photoUrls) {
   const buffers = await Promise.all(
-    photoUrls.slice(0, 4).map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
+    photoUrls.map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
   );
 
   const layoutParams = [];
@@ -235,7 +232,6 @@ async function createCollage(photoUrls) {
   let canvasHeight = 0;
   const len = buffers.length;
 
-  // 1 dan 4 tagacha rasmlarni joylashuvi
   if (len === 1) {
     layoutParams.push({ width: 1200, height: 900, left: 0, top: 0 });
     canvasHeight = 900;
@@ -259,14 +255,12 @@ async function createCollage(photoUrls) {
     })
   );
 
-  // Markazdagi qora fon
   const rectHeight = 120;
   const rectY = Math.floor((canvasHeight / 2) - (rectHeight / 2));
   const blackBandSvg = `<svg width="${canvasWidth}" height="${canvasHeight}"><rect x="0" y="${rectY}" width="${canvasWidth}" height="${rectHeight}" fill="rgba(0, 0, 0, 0.5)" /></svg>`;
 
   composites.push({ input: Buffer.from(blackBandSvg), top: 0, left: 0 });
 
-  // @engarzonidamoshina yozuvi
   if (!cachedWatermarkText) {
     try {
       const url = `https://placehold.co/${canvasWidth}x${rectHeight}/transparent/ffffff/png?text=%40engarzonidamoshina&font=Montserrat`;
@@ -1110,27 +1104,21 @@ async function createAdConversation(conversation, ctx) {
         await deleteMsgs(ctx, chatToClean);
       }
 
-else if (step === "PREVIEW") {
+      else if (step === "PREVIEW") {
         isEditing = false;
         let waitMsg = await ctx.reply("⏳ <b>Aqlli tizim e'lonni tahlil qilmoqda...</b>", { parse_mode: "HTML" });
         
-        // --- BOZOR NARXINI TAHLIL QILISH ---
         const numericPrice = parseInt(ad.price) || 0;
         let priceBadge = "";
-        let topBadgeText = "";
         
         try {
-            const [avgRows] = await db.execute("SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice FROM ads WHERE carDetails LIKE ? AND status IN ('active', 'sold')", [`%${ad.model}%`]);
-            const avgPrice = parseInt(avgRows[0].avgPrice) || 0;
+            const [avgRows] = await db.execute("SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice FROM ads WHERE carDetails LIKE ? AND status = 'active'", [`%${ad.model}%`]);
+            const avgPrice = avgRows[0].avgPrice;
             
-            if (avgPrice > 1000) {
-                if (numericPrice <= avgPrice * 0.90) { 
-                    priceBadge = " 🔥 (Qaynoq narx)";
-                    topBadgeText = "🔥 <b>QAYNOQ NARX!</b>\n\n";
-                } else if (numericPrice <= avgPrice * 0.95) { 
-                    priceBadge = " 💎 (Yaxshi taklif)";
-                    topBadgeText = "💎 <b>JUDA YAXSHI TAKLIF!</b>\n\n";
-                }
+            if (avgPrice && numericPrice < avgPrice * 0.95) { 
+                priceBadge = " 🔥 (Qaynoq narx)";
+            } else if (avgPrice && numericPrice > avgPrice * 1.1) {
+                priceBadge = " 📈 (Bozordan biroz qimmat)";
             }
         } catch (e) {
             console.error("Narx analitikasi xatosi:", e);
@@ -1140,29 +1128,26 @@ else if (step === "PREVIEW") {
             const file = await bot.api.getFile(id);
             return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
         }));
-        
-        // Faqat rasmni o'zini (asl holida) yasaymiz
         const collagePath = await createCollage(photoUrls);
         
-        // --- MATNNI SHAKLLANTIRISH ---
-        let caption = topBadgeText;
+        // ================= YANGI: Agar shoshilinch bo'lsa PREVIEW da ko'rsatiladi =================
+        let caption = "";
         if (ad.urgent) {
             caption += `🚨 <b>SHOSHILINCH SOTILADI!</b>\n\n`;
         }
         caption += 
-          `🆔 ID: ${isFullUpdate ? updateAdId : "000"}\n` +
-          `🚗 Moshina: ${ad.brand} ${ad.model}\n` +
-          `📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)}\n` +
-          `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.trans}\n` +
-          `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: ${formatNum(ad.price)}$${priceBadge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n`;
+          `🚗 <b>Moshina:</b> ${ad.brand} ${ad.model}\n` +
+          `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${formatNum(ad.probeg)} km\n` +
+          `💎 <b>Kraska:</b> ${ad.paint}\n🎨 <b>Rangi:</b> ${ad.color}\n` +
+          `⚙️ <b>Korobka:</b> ${ad.trans}\n⛽ <b>Yoqilg'i:</b> ${ad.fuel}\n`;
 
-        if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 Tarixi: ${ad.history}\n\n`;
-        if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 Barter: ${ad.barter}\n\n`;
+        if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 <b>Tarixi:</b> ${ad.history}\n`;
+        if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 <b>Barter:</b> ${ad.barter}\n`;
 
-        caption += 
-          `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗️\n\n` +
-          `👉 https://t.me/+einfd7upTxxlZDYy`;
+        caption += `💰 <b>Narxi:</b> ${formatNum(ad.price)}$${priceBadge}\n☎️ <b>Tel:</b> +${ad.phone}\n🚩 <b>Viloyat:</b> ${ad.region}`;
+        if (ad.videoId) caption += `\n🎥 <i>(Ushbu e'londa video-obzor mavjud!)</i>`;
 
+        // ================= O'ZGARISH: edit_URGENT tugmasi qo'shildi =================
         const kb = new InlineKeyboard()
           .text("✅ ADMINGA YUBORISH", "submit_ad").row()
           .text("✏️ Marka", "edit_BRAND").text("✏️ Model", "edit_MODEL").text("✏️ Yili", "edit_YEAR").row()
@@ -1180,14 +1165,13 @@ else if (step === "PREVIEW") {
         
         if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath); 
 
-        // O'tish qismi oldingidek davom etadi...
         let res, action;
         while(true) {
             res = await conversation.waitFor(["callback_query:data", "message:text"]);
             if (res.message?.text) {
                 if (cancelTexts.includes(res.message.text)) {
                     await ctx.api.deleteMessage(ctx.chat.id, previewMsg.message_id).catch(()=>{});
-                    return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>", { reply_markup: mainMenu, parse_mode: "HTML" });
+                    return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" });
                 }
                 await ctx.api.deleteMessage(ctx.chat.id, res.message.message_id).catch(()=>{});
                 continue; 
@@ -1197,7 +1181,7 @@ else if (step === "PREVIEW") {
         }
 
         await safeAnswerCbq(res);
-        await ctx.api.deleteMessage(ctx.chat.id, previewMsg.message_id);
+        await ctx.api.deleteMessage(ctx.chat.id, previewMsg.message_id); 
 
         if (action === "cancel_ad") break;
         
