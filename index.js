@@ -222,11 +222,116 @@ async function deleteMsgs(ctx, msgIds) {
 // Watermark kesh
 let cachedWatermarkText = null; 
 
-async function createCollage(photoUrls) {
+/**
+ * ==========================================================================
+ *  YANGI: STILGA EGA E'LON KARTOCHKASI GENERATORI
+ * ==========================================================================
+ *  QO'LLANMA:
+ *  1) bot.js faylingizdagi ESKI `createCollage` funksiyasini butunlay o'chiring
+ *     (u yerda `async function createCollage(photoUrls) { ... }` bor edi).
+ *  2) O'sha joyga shu faylning TO'LIQ mazmunini joylashtiring
+ *     (require("sharp"), require("axios") va h.k. bot.js da allaqachon bor,
+ *     shuning uchun bu yerdagi require qatorlarini qo'shmang — pastda
+ *     ular izoh sifatida qoldirilgan, faqat funksiyalarni ko'chiring).
+ *  3) `createCollage(photoUrls)` deb chaqirilgan HAR BIR joyda ikkinchi
+ *     argument sifatida `toCardData(...)` qo'shing. Bular quyidagi
+ *     ro'yxatda ko'rsatilgan (kod faylining oxiridagi izohga qarang).
+ *
+ *  Diqqat: dizaynda faqat 1 ta katta rasm + 3 tagacha kichik rasm ko'rinadi
+ *  (aynan namunadagi rasmga o'xshab). Qolgan rasmlar (5-,6-) kartochkaga
+ *  chiqmaydi, lekin siz alohida video/rasm sifatida reply qilib yuborishda
+ *  davom etaverasiz (bu qism o'zgarmagan).
+ * ==========================================================================
+ */
+
+// const sharp = require("sharp");
+// const axios = require("axios");
+
+// ---- YORDAMCHI FUNKSIYALAR -------------------------------------------------
+
+function escXml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function truncate(str, n) {
+  str = String(str || "");
+  return str.length > n ? str.slice(0, n - 1) + "…" : str;
+}
+
+// Agar bot.js da formatNum allaqachon bor bo'lsa, shu yerdagini o'chirib,
+// o'shani ishlating. Yo'q bo'lsa shu yerdagisi ishlayveradi.
+function formatNum(value) {
+  if (!value) return "0";
+  const num = String(value).replace(/\D/g, "");
+  return num ? Number(num).toLocaleString("en-US") : "0";
+}
+
+function probegText(probeg) {
+  const s = String(probeg || "").toLowerCase();
+  if (s.includes("salon") || s.includes("0")) {
+    if (s.includes("salon")) return "0 km (Yangi)";
+  }
+  const digits = String(probeg || "").replace(/\D/g, "");
+  return digits ? `${formatNum(digits)} km` : escXml(probeg);
+}
+
+function roundedMaskSvg(w, h, r) {
+  return Buffer.from(
+    `<svg width="${w}" height="${h}"><rect x="0" y="0" width="${w}" height="${h}" rx="${r}" ry="${r}" fill="#fff"/></svg>`
+  );
+}
+
+/**
+ * Turli manbalardan (ads jadvali, ad_edits jadvali, yoki suhbat davomidagi
+ * `ad` obyekti) kelgan ma'lumotlarni bitta yagona formatga keltiradi.
+ */
+function toCardData(source, opts = {}) {
+  const carDetails = source.carDetails || `${source.brand || ""} ${source.model || ""}`.trim();
+  const parts = carDetails.split(" ");
+  return {
+    id: source.id ?? source.oldAdId ?? "",
+    brand: source.brand || parts[0] || "",
+    model: source.model || parts.slice(1).join(" ") || "",
+    year: source.year,
+    probeg: source.probeg,
+    paint: source.paint,
+    color: source.color,
+    transmission: source.transmission || source.trans,
+    fuel: source.fuel,
+    price: source.price,
+    phone: source.phone,
+    region: source.region,
+    history: source.history,
+    barter: source.barter,
+    urgent: !!(source.urgent || opts.urgent),
+    badgeText: opts.badgeText || (source.urgent || opts.urgent ? "🔥 QAYNOQ NARX" : "🆕 YANGI E'LON"),
+  };
+}
+
+// ---- ASOSIY FUNKSIYA (eski createCollage O'RNIGA) --------------------------
+
+/**
+ * @param {string[]} photoUrls - rasm URL manzillari
+ * @param {object|null} cardData - toCardData(...) natijasi. Berilmasa,
+ *        oddiy (eski) kollaj yasaladi (orqaga moslik uchun).
+ */
+async function createCollage(photoUrls, cardData = null) {
   const buffers = await Promise.all(
     photoUrls.map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
   );
 
+  if (!cardData) {
+    return createSimpleCollage(buffers);
+  }
+  return createStyledAdCard(buffers, cardData);
+}
+
+// Eski, oddiy (matn-siz) kollaj — cardData berilmagan holatlar uchun zaxira
+async function createSimpleCollage(buffers) {
   const layoutParams = [];
   const canvasWidth = 1200;
   let canvasHeight = 0;
@@ -255,28 +360,7 @@ async function createCollage(photoUrls) {
     })
   );
 
-  const rectHeight = 120;
-  const rectY = Math.floor((canvasHeight / 2) - (rectHeight / 2));
-  const blackBandSvg = `<svg width="${canvasWidth}" height="${canvasHeight}"><rect x="0" y="${rectY}" width="${canvasWidth}" height="${rectHeight}" fill="rgba(0, 0, 0, 0.5)" /></svg>`;
-
-  composites.push({ input: Buffer.from(blackBandSvg), top: 0, left: 0 });
-
-  if (!cachedWatermarkText) {
-    try {
-      const url = `https://placehold.co/${canvasWidth}x${rectHeight}/transparent/ffffff/png?text=%40engarzonidamoshina&font=Montserrat`;
-      const response = await axios.get(url, { responseType: "arraybuffer" });
-      cachedWatermarkText = Buffer.from(response.data);
-    } catch (error) {
-      console.error("Watermark xatolik:", error.message);
-    }
-  }
-
-  if (cachedWatermarkText) {
-    composites.push({ input: cachedWatermarkText, top: rectY, left: 0 });
-  }
-
-  const collagePath = path.join(__dirname, `collage_${Date.now()}.jpg`);
-  
+  const collagePath = require("path").join(__dirname, `collage_${Date.now()}.jpg`);
   await sharp({
     create: { width: canvasWidth, height: canvasHeight, channels: 3, background: { r: 255, g: 255, b: 255 } },
   })
@@ -286,6 +370,190 @@ async function createCollage(photoUrls) {
 
   return collagePath;
 }
+
+// YANGI DIZAYNLI KARTOCHKA
+async function createStyledAdCard(buffers, card) {
+  const path = require("path");
+  const fs = require("fs");
+
+  const W = 1080;
+  const H = 1900;
+  const headerH = 100;
+  const photoY = headerH;
+  const photoH = 620;
+
+  // ---- 1) RASMLARNI JOYLASHTIRISH (1 katta + 3 tagacha kichik) ----
+  const mainSrc = buffers[0];
+  const thumbSrcs = buffers.slice(1, 4);
+
+  const mainW = thumbSrcs.length > 0 ? Math.round(W * 0.68) : W;
+  const thumbW = W - mainW;
+  const thumbCount = Math.max(thumbSrcs.length, 0);
+  const thumbH = thumbCount > 0 ? Math.round(photoH / thumbCount) : 0;
+
+  const photoComposites = [];
+  const mainResized = await sharp(mainSrc).resize(mainW, photoH, { fit: "cover" }).toBuffer();
+  photoComposites.push({ input: mainResized, left: 0, top: photoY });
+
+  for (let i = 0; i < thumbSrcs.length; i++) {
+    const r = await sharp(thumbSrcs[i]).resize(thumbW, thumbH, { fit: "cover" }).toBuffer();
+    photoComposites.push({ input: r, left: mainW, top: photoY + i * thumbH });
+  }
+
+  // ---- 2) MATNLI QATLAM (SVG) ----
+  const brand = escXml(card.brand || "Boshqa");
+  const model = escXml(card.model || "");
+  const year = escXml(card.year || "-");
+  const transmission = escXml(card.transmission || "-");
+  const fuel = escXml(truncate(card.fuel || "-", 16));
+  const paint = escXml(card.paint || "-");
+  const color = escXml(truncate(card.color || "-", 16));
+  const region = escXml(truncate(card.region || "-", 18));
+  const phone = escXml(card.phone || "");
+  const priceStr = `${formatNum(card.price)}$`;
+  const badgeColor = card.urgent ? "#e53935" : "#e53935";
+  const badgeText = escXml(card.badgeText || "🆕 YANGI E'LON");
+
+  const gridCells = [
+    ["📅", "YILI", year],
+    ["📏", "PROBEG", probegText(card.probeg)],
+    ["💎", "KRASKASI", paint],
+    ["🎨", "RANGI", color],
+    ["⚙️", "KOROBKA", transmission],
+    ["⛽", "YOQILG'I", fuel],
+    ["🚩", "VILOYAT", region],
+    ["💰", "NARXI", priceStr],
+  ];
+
+  const gridStartY = photoY + photoH + 220;
+  const cellW = (W - 80 - 24) / 2;
+  const cellH = 92;
+  const gridRects = [];
+  const gridTexts = [];
+  for (let i = 0; i < gridCells.length; i++) {
+    const row = Math.floor(i / 2);
+    const col = i % 2;
+    const x = 40 + col * (cellW + 24);
+    const y = gridStartY + row * (cellH + 16);
+    gridRects.push(
+      `<rect x="${x}" y="${y}" width="${cellW}" height="${cellH}" rx="16" fill="#f4f6f9"/>`
+    );
+    gridTexts.push(`
+      <text x="${x + 24}" y="${y + 34}" font-size="24" fill="#8a94a3" font-family="Arial, sans-serif">${gridCells[i][0]} ${escXml(gridCells[i][1])}</text>
+      <text x="${x + 24}" y="${y + 70}" font-size="30" font-weight="700" fill="#1a1a1a" font-family="Arial, sans-serif">${escXml(gridCells[i][2])}</text>
+    `);
+  }
+  const gridEndY = gridStartY + Math.ceil(gridCells.length / 2) * (cellH + 16) - 16;
+
+  const boxY = gridEndY + 40;
+  const boxH = 220;
+  const boxW = (W - 80 - 24) / 2;
+
+  const advantageLines = [
+    "Toza va ozoda holat",
+    transmission.toLowerCase() === "avtomat" ? "Avtomat karobka" : `${transmission} karobka`,
+    card.barter && card.barter !== "Yo'q" ? "Barter mumkin" : "Real rasmlar",
+    "Ishonchli variant",
+  ];
+  const whyLines = ["Qulay narx", "Sifatli holat", "O'z vaqtida xizmat qilingan", "Ishonchli sotuvchi"];
+
+  function bulletList(lines, x, yStart) {
+    return lines
+      .map((l, i) => `<text x="${x}" y="${yStart + i * 40}" font-size="24" fill="#2b2b2b" font-family="Arial, sans-serif">✅ ${escXml(truncate(l, 30))}</text>`)
+      .join("\n");
+  }
+
+  const contactY = boxY + boxH + 60;
+  const idText = card.id ? `ID: ${escXml(card.id)}` : "";
+
+  const warningY = contactY + 90;
+  const linkY = warningY + 90;
+  const infoBarY = linkY + 60;
+  const infoBarH = 70;
+  const footerY = infoBarY + infoBarH + 10;
+  const footerH = 90;
+
+  const overlaySvg = `
+  <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/>
+
+    <!-- HEADER -->
+    <rect x="0" y="0" width="${W}" height="${headerH}" fill="#1565c0"/>
+    <text x="40" y="42" font-size="30" font-weight="800" fill="#ffffff" font-family="Arial, sans-serif">🚘 ENG ARZON</text>
+    <text x="40" y="76" font-size="22" font-weight="600" fill="#dce8fb" font-family="Arial, sans-serif">MASHINALAR</text>
+    <text x="${W - 40}" y="58" font-size="22" font-weight="600" fill="#ffffff" text-anchor="end" font-family="Arial, sans-serif">ISHONCHLI • TEZ • QULAY</text>
+
+    <!-- BADGE ustidan rasmga -->
+    <rect x="40" y="${photoY + 24}" width="270" height="56" rx="28" fill="${badgeColor}"/>
+    <text x="175" y="${photoY + 60}" font-size="26" font-weight="700" fill="#ffffff" text-anchor="middle" font-family="Arial, sans-serif">${badgeText}</text>
+
+    <!-- NARX belgisi (rasm pastki-o'ng burchagida) -->
+    <rect x="${W - 320}" y="${photoY + photoH - 60}" width="280" height="110" rx="18" fill="#1565c0"/>
+    <text x="${W - 180}" y="${photoY + photoH - 22}" font-size="20" fill="#cfe0f8" text-anchor="middle" font-family="Arial, sans-serif">NARXI</text>
+    <text x="${W - 180}" y="${photoY + photoH + 18}" font-size="38" font-weight="800" fill="#ffffff" text-anchor="middle" font-family="Arial, sans-serif">${escXml(priceStr)}</text>
+
+    <!-- SARLAVHA -->
+    <text x="40" y="${photoY + photoH + 60}" font-size="30" fill="#8a94a3" font-weight="600" font-family="Arial, sans-serif">${brand.toUpperCase()}</text>
+    <text x="40" y="${photoY + photoH + 120}" font-size="60" fill="#1565c0" font-weight="800" font-family="Arial, sans-serif">${model.toUpperCase()}</text>
+    <text x="40" y="${photoY + photoH + 168}" font-size="26" fill="#555555" font-family="Arial, sans-serif">📅 ${year}   ⚙️ ${transmission}   ⛽ ${fuel}</text>
+
+    <!-- GRID -->
+    ${gridRects.join("\n")}
+    ${gridTexts.join("\n")}
+
+    <!-- AFZALLIKLARI / NIMA UCHUN -->
+    <rect x="40" y="${boxY}" width="${boxW}" height="${boxH}" rx="16" fill="#eaf7ed"/>
+    <text x="70" y="${boxY + 44}" font-size="26" font-weight="700" fill="#1e7d32" font-family="Arial, sans-serif">✅ AFZALLIKLARI</text>
+    ${bulletList(advantageLines, 70, boxY + 90)}
+
+    <rect x="${40 + boxW + 24}" y="${boxY}" width="${boxW}" height="${boxH}" rx="16" fill="#eaf1fb"/>
+    <text x="${70 + boxW + 24}" y="${boxY + 44}" font-size="26" font-weight="700" fill="#1565c0" font-family="Arial, sans-serif">🤝 NIMA UCHUN?</text>
+    ${bulletList(whyLines, 70 + boxW + 24, boxY + 90)}
+
+    <!-- ALOQA QATORI -->
+    <rect x="40" y="${contactY}" width="380" height="60" rx="30" fill="#f4f6f9"/>
+    <text x="70" y="${contactY + 40}" font-size="26" fill="#1a1a1a" font-family="Arial, sans-serif">📞 +${phone}</text>
+
+    <rect x="440" y="${contactY}" width="300" height="60" rx="30" fill="#f4f6f9"/>
+    <text x="470" y="${contactY + 40}" font-size="24" fill="#1a1a1a" font-family="Arial, sans-serif">#${region.replace(/\s+/g, "_")}</text>
+
+    <rect x="760" y="${contactY}" width="${W - 800}" height="60" rx="30" fill="#f0e9fb"/>
+    <text x="${760 + (W - 800) / 2}" y="${contactY + 40}" font-size="24" fill="#6a35c9" text-anchor="middle" font-family="Arial, sans-serif">${escXml(idText)}</text>
+
+    <!-- OGOHLANTIRISH -->
+    <text x="40" y="${warningY}" font-size="22" fill="#e65100" font-family="Arial, sans-serif">⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang.</text>
+    <text x="40" y="${warningY + 32}" font-size="22" fill="#e65100" font-family="Arial, sans-serif">Ogohlik davr talabi ❗</text>
+
+    <!-- LINK -->
+    <text x="40" y="${linkY}" font-size="24" fill="#1565c0" text-decoration="underline" font-family="Arial, sans-serif">👉 t.me/+einfd7upTxxlZDYy</text>
+
+    <!-- PASTKI MA'LUMOT PANELI -->
+    <rect x="0" y="${infoBarY}" width="${W}" height="${infoBarH}" fill="#1565c0"/>
+    <text x="40" y="${infoBarY + 44}" font-size="24" font-weight="700" fill="#ffffff" font-family="Arial, sans-serif">🚘 ENG ARZON MASHINALAR</text>
+    <text x="${W - 40}" y="${infoBarY + 44}" font-size="22" font-weight="600" fill="#ffffff" text-anchor="end" font-family="Arial, sans-serif">✅ ISHONCHLI AVTO BOZORINGIZ!</text>
+
+    <!-- PASTKI TUGMALAR (dekorativ) -->
+    <rect x="0" y="${footerY}" width="${W / 2}" height="${footerH / 2}" fill="#2e7d32"/>
+    <rect x="${W / 2}" y="${footerY}" width="${W / 2}" height="${footerH / 2}" fill="#33843a"/>
+    <rect x="0" y="${footerY + footerH / 2}" width="${W / 2}" height="${footerH / 2}" fill="#33843a"/>
+    <rect x="${W / 2}" y="${footerY + footerH / 2}" width="${W / 2}" height="${footerH / 2}" fill="#2e7d32"/>
+    <text x="${W / 4}" y="${footerY + footerH / 4 + 8}" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle" font-family="Arial, sans-serif">📞 SOTUVCHI BILAN BOG'LANISH</text>
+    <text x="${(3 * W) / 4}" y="${footerY + footerH / 4 + 8}" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle" font-family="Arial, sans-serif">🖼 BARCHA RASMLAR</text>
+    <text x="${W / 4}" y="${footerY + (3 * footerH) / 4 + 8}" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle" font-family="Arial, sans-serif">🎁 BEPUL E'LON BERISH</text>
+    <text x="${(3 * W) / 4}" y="${footerY + (3 * footerH) / 4 + 8}" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle" font-family="Arial, sans-serif">📢 KANALIMIZ</text>
+  </svg>`;
+
+  const collagePath = path.join(__dirname, `collage_${Date.now()}.jpg`);
+
+  await sharp({ create: { width: W, height: H, channels: 3, background: { r: 255, g: 255, b: 255 } } })
+    .composite([...photoComposites, { input: Buffer.from(overlaySvg), left: 0, top: 0 }])
+    .jpeg({ quality: 92 })
+    .toFile(collagePath);
+
+  return collagePath;
+}
+
+module.exports = { createCollage, toCardData };
 // Raqamlarni vergul (yoki probel) bilan ajratib beruvchi funksiya
 function formatNum(value) {
   if (!value) return "0";
