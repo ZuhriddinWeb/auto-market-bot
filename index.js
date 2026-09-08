@@ -1682,23 +1682,123 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
   }
 });
 //Shu yergacha lotinga o'zgardi
+// ==============================================================
+// ❌ RAD ETISH VA SABAB YOZISH (KONVERSATSIYA)
+// ==============================================================
+async function rejectReasonConversation(conversation, ctx) {
+  const adId = ctx.session.rejectAdId;
+  const isEdit = ctx.session.rejectIsEdit;
+  const photoMsgId = ctx.session.rejectMsgId;
 
+  const table = isEdit ? "ad_edits" : "ads";
+  const idField = isEdit ? "editId" : "id";
 
-bot.callbackQuery(/^reject:(\d+)/, async (ctx) => {
-  const adId = ctx.match[1];
-  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  // Bazadan e'lonni tekshirish
+  const [rows] = await conversation.external(() => db.execute(`SELECT * FROM ${table} WHERE ${idField} = ?`, [adId]));
   const ad = rows[0];
-  
-  if (ad && ad.status === "pending") {
-    await db.execute("UPDATE ads SET status='rejected' WHERE id=?", [adId]);
-    await ctx.editMessageCaption({ caption: "❌ <b>E'lon rad etildi.</b>", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
-    try {
-        await bot.api.sendMessage(ad.userId, `❌ <b>E'loningiz rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz qoidalarga mos kelmaganligi sababli rad etildi. Iltimos, ma'lumotlarni to'g'rilab qaytadan e'lon bering.`, { parse_mode: "HTML", reply_markup: mainMenu });
-    } catch (e) {}
-  } else {
-      await ctx.answerCallbackQuery("Bu e'lon allaqachon ko'rib chiqilgan.");
+
+  if (!ad) {
+      await ctx.reply("❌ E'lon allaqachon ko'rib chiqilgan yoki topilmadi.");
+      return;
   }
+
+  // Admin uchun qulay tayyor sabablar
+  const kb = new InlineKeyboard()
+    .text("📸 Rasmlar sifatsiz", "rsn:Rasmlar sifatsiz yoki xiralashgan.").row()
+    .text("💰 Narxi xato", "rsn:Narx noto'g'ri (Masalan, so'mda yozilgan).").row()
+    .text("📝 Ma'lumot xato", "rsn:Mashina ma'lumotlari to'liq emas yoki xato.").row()
+    .text("✍️ Qo'lda yozish", "rsn:manual").row()
+    .text("❌ Bekor qilish", "cancel_reject");
+
+  const promptMsg = await ctx.reply("📝 <b>Nima uchun e'lon rad etildi?</b>\nSababni tanlang yoki qo'lda yozing:", { parse_mode: "HTML", reply_markup: kb });
+
+  let reasonText = "";
+  const res = await conversation.waitFor("callback_query:data");
+  
+  if (res.callbackQuery.data === "cancel_reject") {
+      await res.answerCallbackQuery();
+      await ctx.api.deleteMessage(ctx.chat.id, promptMsg.message_id);
+      return;
+  }
+
+  if (res.callbackQuery.data.startsWith("rsn:")) {
+      const val = res.callbackQuery.data.split(":")[1];
+      if (val === "manual") {
+          await res.answerCallbackQuery();
+          await ctx.api.editMessageText(ctx.chat.id, promptMsg.message_id, "✍️ <b>Foydalanuvchiga yuboriladigan rad etish sababini matn ko'rinishida yozib yuboring:</b>", { parse_mode: "HTML" });
+          const textRes = await conversation.waitFor("message:text");
+          reasonText = textRes.message.text;
+          await ctx.api.deleteMessage(ctx.chat.id, textRes.message.message_id).catch(()=>{});
+      } else {
+          reasonText = val;
+          await res.answerCallbackQuery();
+      }
+  }
+
+  await ctx.api.deleteMessage(ctx.chat.id, promptMsg.message_id).catch(()=>{});
+
+  // DB dan o'chirish yoki 'rejected' qilish
+  if (isEdit) {
+      await conversation.external(() => db.execute("DELETE FROM ad_edits WHERE editId = ?", [adId]));
+  } else {
+      await conversation.external(() => db.execute("UPDATE ads SET status='rejected' WHERE id=?", [adId]));
+  }
+
+  // Admindagi rasmni "Rad etildi" deb o'zgartirish
+  if (photoMsgId) {
+      try {
+         await ctx.api.editMessageCaption(ctx.chat.id, photoMsgId, { caption: "❌ <b>E'lon rad etildi.</b>", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
+      } catch(e) {}
+  }
+
+  // Userga xabar yuborish
+  const userMsg = isEdit
+      ? `❌ <b>E'lonni yangilash rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningizdagi o'zgarishlar qabul qilinmadi.\n\n📝 <b>Sabab:</b> ${reasonText}`
+      : `❌ <b>E'loningiz rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz admin tomonidan rad etildi.\n\n📝 <b>Sabab:</b> ${reasonText}\n\nIltimos, xatolikni to'g'rilab qaytadan e'lon bering.`;
+
+  try {
+      await bot.api.sendMessage(ad.userId, userMsg, { parse_mode: "HTML" });
+  } catch (e) {}
+
+  await ctx.reply(`✅ Foydalanuvchiga rad etish sababi yuborildi:\n<i>"${reasonText}"</i>`, { parse_mode: "HTML" });
+}
+
+// Konversatsiyani ulash
+bot.use(createConversation(rejectReasonConversation));
+
+// Yangi e'lonni rad etish tugmasi
+bot.callbackQuery(/^reject:(\d+)/, async (ctx) => {
+  ctx.session.rejectAdId = ctx.match[1];
+  ctx.session.rejectIsEdit = false;
+  ctx.session.rejectMsgId = ctx.callbackQuery.message.message_id;
+  await ctx.answerCallbackQuery();
+  await ctx.conversation.enter("rejectReasonConversation");
 });
+
+// Tahrirlashni rad etish tugmasi
+bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
+  ctx.session.rejectAdId = ctx.match[1];
+  ctx.session.rejectIsEdit = true;
+  ctx.session.rejectMsgId = ctx.callbackQuery.message.message_id;
+  await ctx.answerCallbackQuery();
+  await ctx.conversation.enter("rejectReasonConversation");
+});
+
+// bot.callbackQuery(/^reject:(\d+)/, async (ctx) => {
+//   const adId = ctx.match[1];
+//   const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+//   const ad = rows[0];
+  
+//   if (ad && ad.status === "pending") {
+//     await db.execute("UPDATE ads SET status='rejected' WHERE id=?", [adId]);
+//     await ctx.editMessageCaption({ caption: "❌ <b>E'lon rad etildi.</b>", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
+//     try {
+//         await bot.api.sendMessage(ad.userId, `❌ <b>E'loningiz rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz qoidalarga mos kelmaganligi sababli rad etildi. Iltimos, ma'lumotlarni to'g'rilab qaytadan e'lon bering.`, { parse_mode: "HTML", reply_markup: mainMenu });
+//     } catch (e) {}
+//   } else {
+//       await ctx.answerCallbackQuery("Bu e'lon allaqachon ko'rib chiqilgan.");
+//   }
+// });
 
 bot.callbackQuery(/^sold_req:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
@@ -2527,21 +2627,22 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
   }
 });
 
-bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
-  const editId = ctx.match[1];
-  const [editRows] = await db.execute("SELECT * FROM ad_edits WHERE editId = ?", [editId]);
-  const editData = editRows[0];
+// bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
+//   const editId = ctx.match[1];
+//   const [editRows] = await db.execute("SELECT * FROM ad_edits WHERE editId = ?", [editId]);
+//   const editData = editRows[0];
 
-  if (editData) {
-    await db.execute("DELETE FROM ad_edits WHERE editId = ?", [editId]);
-    await ctx.editMessageCaption({ caption: "❌ <b>E'lonni yangilash rad etildi.</b>", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
-    try {
-        await bot.api.sendMessage(editData.userId, `❌ <b>E'lonni yangilash rad etildi.</b>\n\nAdminlar o'zgarishni qoidalarga mos emas deb topdi va kanaldagi eski e'loningiz o'zgarishsiz qoldi.`, { parse_mode: "HTML", reply_markup: mainMenu });
-    } catch (e) {}
-  } else {
-      await ctx.answerCallbackQuery("Bu so'rov allaqachon ko'rib chiqilgan.", {show_alert:true});
-  }
-});
+//   if (editData) {
+//     await db.execute("DELETE FROM ad_edits WHERE editId = ?", [editId]);
+//     await ctx.editMessageCaption({ caption: "❌ <b>E'lonni yangilash rad etildi.</b>", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
+//     try {
+//         await bot.api.sendMessage(editData.userId, `❌ <b>E'lonni yangilash rad etildi.</b>\n\nAdminlar o'zgarishni qoidalarga mos emas deb topdi va kanaldagi eski e'loningiz o'zgarishsiz qoldi.`, { parse_mode: "HTML", reply_markup: mainMenu });
+//     } catch (e) {}
+//   } else {
+//       await ctx.answerCallbackQuery("Bu so'rov allaqachon ko'rib chiqilgan.", {show_alert:true});
+//   }
+// });
+
 bot.callbackQuery(/^del_alert:(\d+)/, async (ctx) => {
   const alertId = ctx.match[1];
   
