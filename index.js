@@ -2830,9 +2830,12 @@ async function sendWeeklyAnalytics() {
 // =====================================================================
 // 🏆 HAR KUNLIK "ENG ARZON TOP-3" AVTO-POST TIZIMI (Oxirgi 24 soat)
 // =====================================================================
-async function sendDailyTop3() {
+// =====================================================================
+// 🏆 HAR KUNLIK "ENG ARZON TOP-5" AVTO-POST TIZIMI (Oxirgi 24 soat)
+// =====================================================================
+async function sendDailyTop3() { // Funksiya nomi taymer bilan bir xil ishlashi uchun o'zgarmadi
   try {
-    // Faqat oxirgi 24 soatda qo'shilgan, faol va narxi 100$ dan yuqori e'lonlarni eng arzondan boshlab olamiz
+    // 1. LIMIT 5 ga o'zgartirildi
     const [topAds] = await db.execute(`
       SELECT id, carDetails, price, channelMsgId
       FROM ads
@@ -2840,7 +2843,7 @@ async function sendDailyTop3() {
         AND created_at >= NOW() - INTERVAL 24 HOUR
         AND CAST(price AS UNSIGNED) >= 100
       ORDER BY CAST(price AS UNSIGNED) ASC
-      LIMIT 3
+      LIMIT 5
     `);
 
     // Agar oxirgi 24 soatda umuman e'lon qo'shilmagan bo'lsa
@@ -2852,8 +2855,11 @@ async function sendDailyTop3() {
     const dateOptions = { day: 'numeric', month: 'long', timeZone: 'Asia/Tashkent' };
     const todayStr = new Intl.DateTimeFormat('uz-UZ', dateOptions).format(new Date());
 
-    let text = `🏆 <b>BUGUNNING (${todayStr}) ENG ARZON MASHINALARI</b>\n<i>Oxirgi 24 soat ichida bozorga chiqqan eng hamyonbop 3 ta taklif:</i>\n\n`;
-    const emojis = ["1️⃣", "2️⃣", "3️⃣"];
+    // 2. Matndagi 3 soni 5 ga o'zgartirildi
+    let text = `🏆 <b>BUGUNNING (${todayStr}) ENG ARZON MASHINALARI</b>\n<i>Oxirgi 24 soat ichida bozorga chiqqan eng hamyonbop 5 ta taklif:</i>\n\n`;
+    
+    // 3. 4 va 5 emojilari qo'shildi
+    const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
     const channelUsername = process.env.CHANNEL_ID.replace("@", "");
 
     topAds.forEach((ad, index) => {
@@ -2868,9 +2874,9 @@ async function sendDailyTop3() {
       parse_mode: "HTML",
       disable_web_page_preview: true
     });
-    console.log("✅ Tizim: Eng arzon TOP-3 post muvaffaqiyatli yuborildi!");
+    console.log("✅ Tizim: Eng arzon TOP-5 post muvaffaqiyatli yuborildi!");
   } catch (err) {
-    console.error("Eng arzon Top-3 yuborishda xatolik:", err);
+    console.error("Eng arzon Top-5 yuborishda xatolik:", err);
   }
 }
 
