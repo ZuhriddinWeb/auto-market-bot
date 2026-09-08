@@ -2140,7 +2140,7 @@ bot.callbackQuery(/^manage_ad:(\d+)/, async (ctx) => {
   const freeUps = u ? u.free_ups : 0;
 
   const kb = new InlineKeyboard()
-    .text("💰 Sotildi", `confirm_sold:${ad.id}`) 
+    .text("💰 Sotildi", `sold_req:${ad.id}`)
     .text("📉 Narxni tushirish", `edit_price:${ad.id}`).row()
     .text("✏️ To'liq tahrirlash", `full_edit_req:${ad.id}`).row()
     .text("🌟 VIP QILISH (50 ⭐️)", `buy_vip:${ad.id}`).row(); 
