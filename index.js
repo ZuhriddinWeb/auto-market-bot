@@ -1685,10 +1685,15 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
 // ==============================================================
 // ❌ RAD ETISH VA SABAB YOZISH (KONVERSATSIYA)
 // ==============================================================
+// ==============================================================
+// ❌ RAD ETISH VA SABAB YOZISH (XATOSIZ KONVERSATSIYA)
+// ==============================================================
 async function rejectReasonConversation(conversation, ctx) {
-  const adId = ctx.session.rejectAdId;
-  const isEdit = ctx.session.rejectIsEdit;
-  const photoMsgId = ctx.session.rejectMsgId;
+  // 1. Ma'lumotlarni xotiradan emas, to'g'ridan-to'g'ri bosilgan tugmadan ajratib olamiz!
+  const cbData = ctx.callbackQuery.data; 
+  const isEdit = cbData.startsWith("reject_edit:");
+  const adId = cbData.split(":")[1];
+  const photoMsgId = ctx.callbackQuery.message?.message_id;
 
   const table = isEdit ? "ad_edits" : "ads";
   const idField = isEdit ? "editId" : "id";
@@ -1704,9 +1709,9 @@ async function rejectReasonConversation(conversation, ctx) {
 
   // Admin uchun qulay tayyor sabablar
   const kb = new InlineKeyboard()
-    .text("📸 Rasmlar sifatsiz", "rsn:Rasmlar sifatsiz yoki xiralashgan.").row()
-    .text("💰 Narxi xato", "rsn:Narx noto'g'ri (Masalan, so'mda yozilgan).").row()
-    .text("📝 Ma'lumot xato", "rsn:Mashina ma'lumotlari to'liq emas yoki xato.").row()
+    .text("📸 Rasmlar sifatsiz", "rsn:Rasmlar sifatsiz yoki xiralashgan").row()
+    .text("💰 Narxi xato", "rsn:Narx noto'g'ri (Masalan, so'mda yozilgan)").row()
+    .text("📝 Ma'lumot xato", "rsn:Ma'lumotlar to'liq emas yoki xato").row()
     .text("✍️ Qo'lda yozish", "rsn:manual").row()
     .text("❌ Bekor qilish", "cancel_reject");
 
@@ -1717,15 +1722,15 @@ async function rejectReasonConversation(conversation, ctx) {
   
   if (res.callbackQuery.data === "cancel_reject") {
       await res.answerCallbackQuery();
-      await ctx.api.deleteMessage(ctx.chat.id, promptMsg.message_id);
+      await ctx.api.deleteMessage(ctx.chat.id, promptMsg.message_id).catch(()=>{});
       return;
   }
 
   if (res.callbackQuery.data.startsWith("rsn:")) {
-      const val = res.callbackQuery.data.split(":")[1];
+      const val = res.callbackQuery.data.replace("rsn:", ""); // Tayyor matnni ajratib olamiz
       if (val === "manual") {
           await res.answerCallbackQuery();
-          await ctx.api.editMessageText(ctx.chat.id, promptMsg.message_id, "✍️ <b>Foydalanuvchiga yuboriladigan rad etish sababini matn ko'rinishida yozib yuboring:</b>", { parse_mode: "HTML" });
+          await ctx.api.editMessageText(ctx.chat.id, promptMsg.message_id, "✍️ <b>Foydalanuvchiga yuboriladigan rad etish sababini yozib yuboring:</b>", { parse_mode: "HTML" });
           const textRes = await conversation.waitFor("message:text");
           reasonText = textRes.message.text;
           await ctx.api.deleteMessage(ctx.chat.id, textRes.message.message_id).catch(()=>{});
@@ -1751,7 +1756,7 @@ async function rejectReasonConversation(conversation, ctx) {
       } catch(e) {}
   }
 
-  // Userga xabar yuborish
+  // Foydalanuvchiga sababni yuborish
   const userMsg = isEdit
       ? `❌ <b>E'lonni yangilash rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningizdagi o'zgarishlar qabul qilinmadi.\n\n📝 <b>Sabab:</b> ${reasonText}`
       : `❌ <b>E'loningiz rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz admin tomonidan rad etildi.\n\n📝 <b>Sabab:</b> ${reasonText}\n\nIltimos, xatolikni to'g'rilab qaytadan e'lon bering.`;
@@ -1768,18 +1773,12 @@ bot.use(createConversation(rejectReasonConversation));
 
 // Yangi e'lonni rad etish tugmasi
 bot.callbackQuery(/^reject:(\d+)/, async (ctx) => {
-  ctx.session.rejectAdId = ctx.match[1];
-  ctx.session.rejectIsEdit = false;
-  ctx.session.rejectMsgId = ctx.callbackQuery.message.message_id;
   await ctx.answerCallbackQuery();
   await ctx.conversation.enter("rejectReasonConversation");
 });
 
 // Tahrirlashni rad etish tugmasi
 bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
-  ctx.session.rejectAdId = ctx.match[1];
-  ctx.session.rejectIsEdit = true;
-  ctx.session.rejectMsgId = ctx.callbackQuery.message.message_id;
   await ctx.answerCallbackQuery();
   await ctx.conversation.enter("rejectReasonConversation");
 });
