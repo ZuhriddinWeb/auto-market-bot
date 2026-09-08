@@ -2727,33 +2727,38 @@ async function sendWeeklyAnalytics() {
 // =====================================================================
 // 🏆 HAR KUNLIK "TOP-3" AVTO-POST TIZIMI
 // =====================================================================
+// =====================================================================
+// 🏆 HAR KUNLIK "ENG ARZON TOP-3" AVTO-POST TIZIMI (Oxirgi 24 soat)
+// =====================================================================
 async function sendDailyTop3() {
   try {
-    // Faqat bugungi sanada (CURDATE) qilingan "Saqlash (❤️)" lar bo'yicha TOP-3 ni oladi
+    // Faqat oxirgi 24 soatda qo'shilgan, faol va narxi 100$ dan yuqori e'lonlarni eng arzondan boshlab olamiz
     const [topAds] = await db.execute(`
-      SELECT a.id, a.carDetails, a.price, a.channelMsgId, COUNT(f.id) as saves
-      FROM ads a
-      JOIN favorites f ON a.id = f.adId
-      WHERE a.status = 'active' AND DATE(f.created_at) = CURDATE()
-      GROUP BY a.id, a.carDetails, a.price, a.channelMsgId
-      ORDER BY saves DESC
+      SELECT id, carDetails, price, channelMsgId
+      FROM ads
+      WHERE status = 'active' 
+        AND created_at >= NOW() - INTERVAL 24 HOUR
+        AND CAST(price AS UNSIGNED) >= 100
+      ORDER BY CAST(price AS UNSIGNED) ASC
       LIMIT 3
     `);
 
-    // Agar bugun hech kim mashina saqlamagan bo'lsa, post tashlamaydi
-    if (topAds.length === 0) return; 
+    // Agar oxirgi 24 soatda umuman e'lon qo'shilmagan bo'lsa
+    if (topAds.length === 0) {
+        console.log("📭 Tizim: Oxirgi 24 soat ichida mos e'lonlar topilmadi.");
+        return; 
+    }
 
-    // O'zbek tilida bugungi sanani olish (Masalan: 7-Sentabr)
     const dateOptions = { day: 'numeric', month: 'long', timeZone: 'Asia/Tashkent' };
     const todayStr = new Intl.DateTimeFormat('uz-UZ', dateOptions).format(new Date());
 
-    let text = `🏆 <b>BUGUNNING (${todayStr}) TOP 3 MASHINALARI</b>\n<i>Xaridorlar tomonidan bugun eng ko'p qiziqish bildirilgan e'lonlar:</i>\n\n`;
+    let text = `🏆 <b>BUGUNNING (${todayStr}) ENG ARZON MASHINALARI</b>\n<i>Oxirgi 24 soat ichida bozorga chiqqan eng hamyonbop 3 ta taklif:</i>\n\n`;
     const emojis = ["1️⃣", "2️⃣", "3️⃣"];
     const channelUsername = process.env.CHANNEL_ID.replace("@", "");
 
     topAds.forEach((ad, index) => {
       const postLink = `https://t.me/${channelUsername}/${ad.channelMsgId}`;
-      text += `${emojis[index]} <a href="${postLink}">${ad.carDetails}</a> — ${formatNum(ad.price)}$ \n\n`;
+      text += `${emojis[index]} <a href="${postLink}">${ad.carDetails}</a> — <b>${formatNum(ad.price)}$</b> \n\n`;
     });
 
     text += `👉 <i>Moshinalarning rasmi va to'liq ma'lumotlarini ko'rish uchun ko'k yozuv ustiga bosing!</i>\n\n🤖 @arzonida_bot`;
@@ -2763,8 +2768,9 @@ async function sendDailyTop3() {
       parse_mode: "HTML",
       disable_web_page_preview: true
     });
+    console.log("✅ Tizim: Eng arzon TOP-3 post muvaffaqiyatli yuborildi!");
   } catch (err) {
-    console.error("Top-3 yuborishda xatolik:", err);
+    console.error("Eng arzon Top-3 yuborishda xatolik:", err);
   }
 }
 
@@ -2831,39 +2837,47 @@ async function runAutomations() {
 // =====================================================================
 // ⏰ UMUMIY TAYMER: HAR 30 MINUTDA VAQTNI TEKSHIRIB TURADI
 // =====================================================================
+// =====================================================================
+// ⏰ UMUMIY TAYMER: HAR 30 MINUTDA VAQTNI TEKSHIRIB TURADI
+// =====================================================================
 let lastAnalyticsDate = null;
-let lastTop5Date = null;
+let lastTop3Date = null; // Nomini to'g'rilab qo'ydik
 let lastAutoCleanDate = null;
 
 setInterval(() => {
     const now = new Date();
-    // Server qayerda joylashishidan qat'i nazar vaqtni O'zbekistonga buramiz
-    const uzbTime = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Tashkent"}));
     
-    const dateStr = uzbTime.toISOString().split('T')[0]; 
+    // Server qayerda bo'lishidan qat'i nazar, O'zbekiston vaqtini ajratib olamiz
+    const uzbDateStr = new Intl.DateTimeFormat('uz-UZ', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+    const uzbHour = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tashkent', hour: 'numeric', hour12: false }).format(now));
+    const dayString = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tashkent', weekday: 'long' }).format(now);
+    const isSunday = dayString === 'Sunday';
 
     // 1. HAFTALIK ANALITIKA (Yakshanba kuni roppa-rosa soat 05:xx da)
-    if (uzbTime.getDay() === 0 && uzbTime.getHours() === 5) {
-        if (lastAnalyticsDate !== dateStr) {
-            lastAnalyticsDate = dateStr;
+    if (isSunday && uzbHour === 5) {
+        if (lastAnalyticsDate !== uzbDateStr) {
+            lastAnalyticsDate = uzbDateStr;
             sendWeeklyAnalytics();
         }
     }
 
-    // 2. KUNLIK TOP-3 POST (Har kuni kechqurun roppa-rosa soat 20:xx da)
-    if (uzbTime.getHours() === 20) { 
-        if (lastTop5Date !== dateStr) {
-            lastTop5Date = dateStr;
+    // 2. KUNLIK ENG ARZON TOP-3 POST (Har kuni kechqurun roppa-rosa soat 20:xx da)
+    if (uzbHour === 20) { 
+        if (lastTop3Date !== uzbDateStr) {
+            lastTop3Date = uzbDateStr; // Nomini to'g'rilab qo'ydik
             sendDailyTop3();
         }
     }
-    if (uzbTime.getHours() === 12) {
-        if (lastAutoCleanDate !== dateStr) {
-            lastAutoCleanDate = dateStr;
+
+    // 3. 🤖 AVTOMAT TOZALASH VA MASLAHATCHI (Har kuni soat 12:xx da ishga tushadi)
+    if (uzbHour === 12) {
+        if (lastAutoCleanDate !== uzbDateStr) {
+            lastAutoCleanDate = uzbDateStr;
             runAutomations(); 
             console.log("✅ Avto-tozalash va maslahatchi xabarlari yuborildi!");
         }
     }
+
 }, 60 * 1000 * 30);
 
 bot.start({
