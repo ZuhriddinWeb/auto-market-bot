@@ -119,7 +119,50 @@ if (!fs.existsSync(collagesDir)) {
 
 bot.catch((err) => console.error(`Хатолик:`, err.error));
 bot.use(session({ initial: () => ({}) }));
+const LOG_CHANNEL_ID = "-1001742614612"; 
 
+bot.use(async (ctx, next) => {
+  // Faqat o'zingizdan (Admindan) boshqa barcha userlarni kuzatadi
+  if (ctx.from && ctx.from.id !== ADMIN_ID) {
+    let action = "";
+    
+    // User qaysi amalni bajarganini aniqlaymiz
+   if (ctx.message?.text) {
+        action = `📝 Yozdi: "${ctx.message.text}"`;
+    } else if (ctx.message?.photo) {
+        action = `📸 Rasm yubordi`;
+    } else if (ctx.message?.video) {
+        action = `🎥 Video yubordi`;
+    } else if (ctx.message?.contact) {
+        action = `☎️ Kontakt (Raqam) yubordi`;
+    } else if (ctx.message?.successful_payment) {
+        // VIP to'lov qilinganini kuzatish uchun
+        action = `⭐️ To'lov qildi: ${ctx.message.successful_payment.total_amount} Yulduzcha (Payload: ${ctx.message.successful_payment.invoice_payload})`;
+    } else if (ctx.callbackQuery?.data) {
+        action = `🔘 Tugma bosdi: [${ctx.callbackQuery.data}]`;
+    } else if (ctx.message) {
+        // Agar boshqa kutilmagan narsa (masalan stiker yoki fayl) tashlasa
+        action = `❓ Boshqa turdagi xabar yubordi`;
+    }
+
+    if (action) {
+        // Xabarni to'g'ridan-to'g'ri log kanalga (yoki admin lichkasiga) yuborish
+        try {
+            await bot.api.sendMessage(
+                LOG_CHANNEL_ID, 
+                `🕵️ <b>User:</b> <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a> (ID: <code>${ctx.from.id}</code>)\n👉 <b>Amal:</b> ${action}`, 
+                { parse_mode: "HTML" }
+            );
+        } catch (error) {
+            // Agar bot kanalga qo'shilmagan bo'lsa yoki ID xato bo'lsa, bot qotib qolmasligi uchun
+            console.error("Kuzatuv xabarini yuborishda xato. Kanal ID sini tekshiring!");
+        }
+    }
+  }
+  
+  // MUHIM: Bot o'zining asosiy ishini davom ettirishi uchun keyingi bosqichga o'tkazib yuboramiz
+  await next(); 
+});
 // 1. BLOKLANGANLARNI TEKSHIRISH
 bot.use(async (ctx, next) => {
   if (ctx.from && ctx.from.id !== ADMIN_ID) {
