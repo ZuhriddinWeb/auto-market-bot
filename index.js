@@ -859,13 +859,19 @@ async function createAdConversation(conversation, ctx) {
         step = isEditing ? "PREVIEW" : "MODEL";
       }
 
-      else if (step === "MODEL") {
+else if (step === "MODEL") {
         const kb = new InlineKeyboard();
         if (carCatalog[ad.brand] && carCatalog[ad.brand].length > 0) {
           carCatalog[ad.brand].forEach((m, i) => { kb.text(m, `m:${m}`); if ((i + 1) % 3 === 0) kb.row(); });
         }
         kb.row().text("🔙 Orqaga", "back_BRAND").text("❌ Bekor qilish", "cancel_ad");
-        msgPrompt = await ctx.reply(`🚙 <b>${ad.brand}</b> modelini tanlang yoki yozing:`, { reply_markup: kb, parse_mode: "HTML" });
+
+        // "Boshqa" tanlanganda matnni o'zgartirish
+        const promptText = ad.brand === "Boshqa" 
+            ? "🚙 <b>Moshinangiz markasi va modelini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>"
+            : `🚙 <b>${ad.brand}</b> modelini tanlang yoki yozing:`;
+            
+        msgPrompt = await ctx.reply(promptText, { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
@@ -1179,9 +1185,12 @@ async function createAdConversation(conversation, ctx) {
         await deleteMsgs(ctx, chatToClean);
       }
 
-      else if (step === "PREVIEW") {
+else if (step === "PREVIEW") {
         isEditing = false;
         let waitMsg = await ctx.reply("⏳ <b>Aqlli tizim e'lonni tahlil qilmoqda...</b>", { parse_mode: "HTML" });
+        
+        // ========= "BOSHQA" SO'ZINI OLIB TASHLASH =========
+        const fullCarName = ad.brand === "Boshqa" ? ad.model : `${ad.brand} ${ad.model}`;
         
         const numericPrice = parseInt(ad.price) || 0;
         let priceBadge = "";
@@ -1205,13 +1214,12 @@ async function createAdConversation(conversation, ctx) {
         }));
         const collagePath = await createCollage(photoUrls);
         
-        // ================= YANGI: Agar shoshilinch bo'lsa PREVIEW da ko'rsatiladi =================
         let caption = "";
         if (ad.urgent) {
             caption += `🚨 <b>SHOSHILINCH SOTILADI!</b>\n\n`;
         }
         caption += 
-          `🚗 <b>Moshina:</b> ${ad.brand} ${ad.model}\n` +
+          `🚗 <b>Moshina:</b> ${fullCarName}\n` + // <--- Shu joy fullCarName bo'ldi
           `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${formatNum(ad.probeg)} km\n` +
           `💎 <b>Kraska:</b> ${ad.paint}\n🎨 <b>Rangi:</b> ${ad.color}\n` +
           `⚙️ <b>Korobka:</b> ${ad.trans}\n⛽ <b>Yoqilg'i:</b> ${ad.fuel}\n`;
@@ -1222,7 +1230,6 @@ async function createAdConversation(conversation, ctx) {
         caption += `💰 <b>Narxi:</b> ${formatNum(ad.price)}$${priceBadge}\n☎️ <b>Tel:</b> +${ad.phone}\n🚩 <b>Viloyat:</b> ${ad.region}`;
         if (ad.videoId) caption += `\n🎥 <i>(Ushbu e'londa video-obzor mavjud!)</i>`;
 
-        // ================= O'ZGARISH: edit_URGENT tugmasi qo'shildi =================
         const kb = new InlineKeyboard()
           .text("✅ ADMINGA YUBORISH", "submit_ad").row()
           .text("✏️ Marka", "edit_BRAND").text("✏️ Model", "edit_MODEL").text("✏️ Yili", "edit_YEAR").row()
@@ -1271,7 +1278,7 @@ if (action === "submit_ad") {
             
             const [result] = await db.execute(
               `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-              [updateAdId, ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.videoId || null]
+              [updateAdId, ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.videoId || null]
             );
             const editId = result.insertId; 
             
@@ -1292,12 +1299,10 @@ if (action === "submit_ad") {
             return; 
           }
 
-          // ================= TO'G'RILANGAN QISM =================
-
           // 1. Avval bazaga saqlaymiz va adId ni aniqlaymiz
           const [result] = await db.execute(
             `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [ctx.from.id, `${ad.brand} ${ad.model}`, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.videoId || null]
+            [ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.videoId || null]
           );
           const adId = result.insertId; 
 
