@@ -710,53 +710,190 @@ bot.callbackQuery("admin_pending", async (ctx) => {
 /**
  * ✅ МОШИНА ҚИДИРИШ ЖАРАЁНИ (Тўғирланган)
  */
+/**
+ * ✅ МОШИНА ҚИДИРИШ ЖАРАЁНИ (Tugmali, Narx oraliqli va Takroriy qidiruv)
+ */
 async function searchCarConversation(conversation, ctx) {
-  const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim"];
-  
-  await ctx.reply("🔍 <b>Qaysi moshinani qidiryapsiz?</b>\n<i>(Masalan: Cobalt yoki Gentra)</i>\n\nBekor qilish uchun pastdagi menyudan foydalaning.", { reply_markup: mainMenu, parse_mode: "HTML" });
-  const qRes = await conversation.waitFor("message:text");
-  if(cancelTexts.includes(qRes.message.text)) return ctx.reply("❌ Qidiruv bekor qilindi.", {reply_markup: mainMenu});
-  const query = qRes.message.text.toLowerCase();
+  const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim", "🔔 Obunalarim", "🎁 Bepul VIP (UP)", "🧮 Mashina narxini aniqlash"];
+  const chatToClean = [];
 
-  await ctx.reply("💰 <b>Maksimal narx qancha bo'lsin? ($)</b>\n<i>(Masalan: 12000)</i>\n\nBekor qilish uchun pastdagi menyudan foydalaning.", { reply_markup: mainMenu, parse_mode: "HTML" });
-  const pRes = await conversation.waitFor("message:text");
-  if(cancelTexts.includes(pRes.message.text)) return ctx.reply("❌ Qidiruv bekor qilindi.", {reply_markup: mainMenu});
-  const maxPrice = parseInt(pRes.message.text.replace(/\D/g, "")) || 999999;
+  const carCatalog = {
+    "Chevrolet": ["Cobalt", "Gentra", "Lacetti","Epica", "Spark","Orlando", "Nexia 1", "Nexia 2", "Nexia 3", "Matiz", "Damas", "Labo", "Tracker", "Onix", "Monza", "Malibu 1", "Malibu 2", "Captiva","Captiva 5", "Equinox", "Tahoe", "Traverse","Trablaizer"],
+    "Daewoo": ["Matiz", "Nexia 1", "Tico", "Damas"],
+    "BYD": ["Song L","Seal","Chazor", "Song Plus", "Song Pro","Champion","Han", "Tang", "Seagull", "Yuan Up", "Yuan Plus", "Destroyer 05", "e2"],
+    "Kia": ["Sonet","K3","K4","K5", "K8","K9","EV6", "Carens","Sportage", "Sorento", "Carnival", "Cerato", "Seltos", "Bongo"],
+    "Hyundai": ["Accent","Creta","Kona", "Elantra", "Sonata", "Tucson", "Santa Fe", "Staria", "Porter","Palisade"],
+    "Chery": ["Tiggo 7 Pro", "Tiggo 8 Pro", "Arrizo 6 Pro","Tiggo 2 Pro","Tiggo 4 Pro","Tiggo 9"],
+    "Haval": ["M6", "H6", "Dargo","H9","Jolion"],
+    "Lada": ["Vesta", "Largus", "Granta", "Niva Legend"],
+    "Jetour": ["X70", "X70 Plus", "X90 Plus", "Dashing","T2"],
+    "Changan":["UNI-K","UNI-T","UNI-V","CS35 Plus","CS55 Plus"],
+    "Geely":["Coolray","Monjaro","Tugella","Emgrand"],
+    "Exeed":["RX","VX","TXL","LX"],
+    "Omoda":["C5","S5"],
+    "Volkswagen":["ID4","ID6","Bora","Lavida","eTharu"],
+    "Xpeng":["G6","G9","P7"],
+    "Lexus":["RX","LX","ES","NX"],
+    "Toyota": ["Highlander","Avalon","Prius","Hilux","Camry", "Corolla", "Prado", "Land Cruiser 100","Land Cruiser 120","Land Cruiser 150","Land Cruiser 200","Land Cruiser 300", "RAV4"],
+    "Honda / Nissan":["CR-V","NS1 (Honda)","Sylphy","Altima"],
+    "Mercedes": ["C-Class", "E-Class", "S-Class", "GLE", "G-Class"],
+    "BMW": ["3-Series", "5-Series", "7-Series", "X5", "X7"],
+    "Zeekr": ["001", "007", "009", "X"],
+    "Li Auto": ["L7", "L8", "L9"],
+    "Tesla": ["Model 3", "Model Y", "Model S"],
+    "Boshqa": [],
+  };
 
-  const waitMsg = await ctx.reply("⏳ <i>Qidirilmoqda...</i>", {parse_mode: "HTML"});
+  // ================= KATTA SIKL: YANA QIDIRISH UCHUN =================
+  while (true) {
+      let brand = "";
+      let model = "";
+      let query = "";
+      let step = "BRAND";
 
-  const [ads] = await db.execute("SELECT * FROM ads WHERE status = 'active'");
-  const filtered = ads.filter(ad => {
-      const matchQuery = ad.carDetails.toLowerCase().includes(query);
-      const price = parseInt(ad.price.replace(/\D/g,"")) || 0;
-      return matchQuery && price <= maxPrice;
-  });
+      // 1. Marka va Modelni tanlash sikli
+      while (true) {
+          if (step === "BRAND") {
+              const kb = new InlineKeyboard();
+              Object.keys(carCatalog).forEach((b, i) => { kb.text(b, `sb:${b}`); if ((i + 1) % 3 === 0) kb.row(); });
+              kb.row().text("❌ Bekor qilish", "cancel_search");
 
-  await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
+              const msgPrompt = await ctx.reply("🔍 <b>Qaysi moshina markasini qidiryapsiz?</b>", { reply_markup: kb, parse_mode: "HTML" });
+              chatToClean.push(msgPrompt.message_id);
 
-  if(filtered.length === 0) {
-     await ctx.reply(`📭 <b>${maxPrice}$</b> gacha bo'lgan <b>${query}</b> topilmadi.`, {parse_mode: "HTML", reply_markup: mainMenu});
-  } else {
-     await ctx.reply(`✅ <b>Topildi: ${filtered.length} ta e'lon!</b>\nEng so'nggi e'lonlar:`, {parse_mode: "HTML", reply_markup: mainMenu});
+              const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+              if (res.message) chatToClean.push(res.message.message_id);
 
-     const resultsToSend = filtered.slice(-3);
-     for (const ad of resultsToSend) {
-         try {
-            if (ad.channelMsgId) {
-               await ctx.api.copyMessage(ctx.chat.id, CHANNEL_ID, ad.channelMsgId);
-            } else {
-               const caption = `🚗 <b>${ad.carDetails}</b>\n📅 Yili: ${ad.year}\n👣 Probeg: ${ad.probeg}\n💰 Narxi: ${ad.price}$\n☎️ Tel: +${ad.phone}`;
-               const photos = ad.photoId.split(",");
-               await ctx.replyWithPhoto(photos[0], {caption: caption, parse_mode: "HTML"});
-            }
-         } catch(e) {
-            console.error("Qidiruv xabarini yuborishda xatolik:", e.message);
+              if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ Qidiruv bekor qilindi.", { reply_markup: mainMenu }); }
+              if (res.callbackQuery?.data === "cancel_search") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ Qidiruv bekor qilindi.", { reply_markup: mainMenu }); }
+
+              brand = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+              await safeAnswerCbq(res);
+              await deleteMsgs(ctx, chatToClean);
+              step = "MODEL";
+          }
+          else if (step === "MODEL") {
+              const kb = new InlineKeyboard();
+              if (carCatalog[brand] && carCatalog[brand].length > 0) {
+                  carCatalog[brand].forEach((m, i) => { kb.text(m, `sm:${m}`); if ((i + 1) % 3 === 0) kb.row(); });
+              }
+              kb.row().text("🔙 Orqaga", "back_to_brand").text("❌ Bekor qilish", "cancel_search");
+
+              const promptText = brand === "Boshqa" 
+                  ? "🔍 <b>Qidirayotgan moshinangiz rusumini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>"
+                  : `🔍 <b>${brand}</b> qaysi modelini qidiryapsiz?`;
+
+              const msgPrompt = await ctx.reply(promptText, { reply_markup: kb, parse_mode: "HTML" });
+              chatToClean.push(msgPrompt.message_id);
+
+              const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+              if (res.message) chatToClean.push(res.message.message_id);
+
+              if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ Qidiruv bekor qilindi.", { reply_markup: mainMenu }); }
+              if (res.callbackQuery?.data === "cancel_search") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ Qidiruv bekor qilindi.", { reply_markup: mainMenu }); }
+              if (res.callbackQuery?.data === "back_to_brand") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); step = "BRAND"; continue; }
+
+              model = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+              await safeAnswerCbq(res);
+              await deleteMsgs(ctx, chatToClean);
+              
+              query = model.toLowerCase();
+              break; 
+          }
+      }
+
+      // 2. Narx oralig'ini so'rash
+      const msgPromptPrice = await ctx.reply(
+          `💰 <b>${brand === "Boshqa" ? model : `${brand} ${model}`}</b> uchun narxni kiriting ($)\n\n` +
+          `<i>Narxni ikki xil usulda kiritishingiz mumkin:</i>\n` +
+          `1️⃣ <b>Bitta narx:</b> Masalan, <code>12000</code> deb yozsangiz 12,000$ gacha izlaydi.\n` +
+          `2️⃣ <b>Oraliq narx:</b> Masalan, <code>8000-12000</code> deb yozsangiz shu oraliqdan izlaydi.\n\n` +
+          `Bekor qilish uchun pastdagi menyudan foydalaning.`, 
+          { reply_markup: mainMenu, parse_mode: "HTML" }
+      );
+      
+      const pRes = await conversation.waitFor("message:text");
+      if(cancelTexts.includes(pRes.message.text)) return ctx.reply("❌ Qidiruv bekor qilindi.", {reply_markup: mainMenu});
+      
+      const userInput = pRes.message.text;
+      let minPrice = 0;
+      let maxPrice = 999999;
+
+      const numbers = userInput.match(/\d+/g);
+      if (numbers && numbers.length >= 2) {
+          let num1 = parseInt(numbers[0]);
+          let num2 = parseInt(numbers[1]);
+          minPrice = Math.min(num1, num2);
+          maxPrice = Math.max(num1, num2);
+      } else if (numbers && numbers.length === 1) {
+          maxPrice = parseInt(numbers[0]);
+      }
+
+      const waitMsg = await ctx.reply("⏳ <i>Qidirilmoqda...</i>", {parse_mode: "HTML"});
+
+      const [ads] = await conversation.external(() => db.execute("SELECT * FROM ads WHERE status = 'active'"));
+      
+      const filtered = ads.filter(ad => {
+          const matchQuery = ad.carDetails.toLowerCase().includes(query);
+          const price = parseInt(ad.price.replace(/\D/g,"")) || 0;
+          return matchQuery && price >= minPrice && price <= maxPrice; 
+      });
+
+      await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(()=>{});
+
+      let priceText = minPrice > 0 ? `<b>${minPrice}$ - ${maxPrice}$</b> oraliq` : `<b>${maxPrice}$</b> gacha`;
+
+      if(filtered.length === 0) {
+         await ctx.reply(`📭 ${priceText} bo'lgan <b>${brand === "Boshqa" ? model : `${brand} ${model}`}</b> topilmadi.`, {parse_mode: "HTML", reply_markup: mainMenu});
+      } else {
+         await ctx.reply(`✅ <b>Topildi: ${filtered.length} ta e'lon! (${priceText})</b>\nEng so'nggi e'lonlar:`, {parse_mode: "HTML", reply_markup: mainMenu});
+
+         const resultsToSend = filtered.slice(-3);
+         for (const ad of resultsToSend) {
+             try {
+                if (ad.channelMsgId) {
+                   await ctx.api.copyMessage(ctx.chat.id, CHANNEL_ID, ad.channelMsgId);
+                } else {
+                   const caption = `🚗 <b>${ad.carDetails}</b>\n📅 Yili: ${ad.year}\n👣 Probeg: ${ad.probeg}\n💰 Narxi: ${ad.price}$\n☎️ Tel: +${ad.phone}`;
+                   const photos = ad.photoId.split(",");
+                   await ctx.replyWithPhoto(photos[0], {caption: caption, parse_mode: "HTML"});
+                }
+             } catch(e) { console.error("Qidiruv xabarini yuborishda xatolik:", e.message); }
          }
-     }
-  }
+      }
 
-  const alertKb = new InlineKeyboard().text("🔔 Qidiruvga obuna bo'lish", `al_sub:${query.substring(0, 20)}:${maxPrice}`);
-  await ctx.reply(`<i>Agar shunday moshinalar sotuvga chiqqanda birinchilardan bo'lib xabardor bo'lishni istasangiz, pastdagi tugmani bosing:</i>`, { parse_mode: "HTML", reply_markup: alertKb });
+      // Obuna qismi
+      const alertKb = new InlineKeyboard().text("🔔 Qidiruvga obuna bo'lish", `al_sub:${query.substring(0, 20)}:${maxPrice}`);
+      await ctx.reply(`<i>Agar ushbu moshina bozorga chiqqanda darhol xabardor bo'lishni istasangiz, qo'ng'iroqchani bosing:</i>`, { parse_mode: "HTML", reply_markup: alertKb });
+
+      // ================= YANGI QO'SHILGAN QISM =================
+      const againKb = new InlineKeyboard()
+          .text("🔍 Ha, yana qidirish", "search_again")
+          .text("❌ Yo'q, rahmat", "search_stop");
+
+      const promptMsg = await ctx.reply("🔄 <b>Yana boshqa moshina qidirishni xohlaysizmi?</b>", {
+          parse_mode: "HTML",
+          reply_markup: againKb
+      });
+
+      const againRes = await conversation.waitFor(["callback_query:data", "message:text"]);
+      
+      if (againRes.message?.text && cancelTexts.includes(againRes.message.text)) {
+          await ctx.api.deleteMessage(ctx.chat.id, promptMsg.message_id).catch(()=>{});
+          return ctx.reply("❌ Qidiruv yakunlandi.", { reply_markup: mainMenu });
+      }
+
+      await safeAnswerCbq(againRes);
+      await ctx.api.deleteMessage(ctx.chat.id, promptMsg.message_id).catch(()=>{});
+
+      if (againRes.callbackQuery?.data === "search_again") {
+          continue; // Sikl yana eng boshiga, markani tanlashga qaytadi!
+      } else {
+          await ctx.reply("✅ Qidiruv jarayoni yakunlandi. Bosh menyudasiz.", { reply_markup: mainMenu });
+          break; // Sikl tugaydi
+      }
+      // =========================================================
+  }
 }
 bot.use(createConversation(searchCarConversation));
 
