@@ -421,6 +421,33 @@ bot.command("test_analytics", async (ctx) => {
   await sendWeeklyAnalytics();
   await ctx.reply("✅ <b>Test muvaffaqiyatli yakunlandi! Kanalni tekshiring.</b>", { parse_mode: "HTML" });
 });
+// =====================================================================
+// 🛠 15 KUNLIK "UP" TIZIMINI TEST QILISH UCHUN MAXSUS BUYRUQ
+// =====================================================================
+bot.command("test_up", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  
+  // Bazadan bitta ixtiyoriy faol e'lonni olamiz
+  const [ads] = await db.execute("SELECT id, userId, carDetails FROM ads WHERE status = 'active' LIMIT 1");
+  
+  if (ads.length === 0) {
+      return ctx.reply("📭 Bazada hozircha hech qanday faol e'lon yo'q. Avval bot orqali bitta e'lon bering.");
+  }
+
+  const ad = ads[0];
+  
+  const text = `⚠️ <b>[TEST] E'loningiz eski xabarlar qatorida qolib ketdi!</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 15 kun bo'ldi va u kanalda ancha tepaga chiqib ketib, xaridorlarga ko'rinishi qiyinlashdi.\n\nE'lonni qaytadan kanalning eng oxiriga (tepaga) ko'tarishni istaysizmi?`;
+  
+  // Xabarni foydalanuvchiga emas, to'g'ridan-to'g'ri o'zingizga (adminga) yuboramiz
+  await ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard()
+        .text("🚀 Ha, tepaga ko'tarish", `ask_bump:${ad.id}`).row()
+        .text("✅ Allaqachon sotildi", `confirm_sold:${ad.id}`)
+  });
+  
+  await ctx.reply("✅ <b>Test xabari tayyor!</b> \nEndi yuqoridagi <i>«🚀 Ha, tepaga ko'tarish»</i> tugmasini bosib, uzer so'rov yuborganda adminga qanday kelishi va tasdiqlangach kanalda qanday ko'tarilishini tekshirib ko'ring.", { parse_mode: "HTML" });
+});
 /**
  * ✅ АДМИН УЧУН БЛОКЛАШ ТИЗИМИ
  */
@@ -3044,27 +3071,21 @@ async function sendWeeklyAnalytics() {
 // =====================================================================
 // 🏆 HAR KUNLIK "TOP-3" AVTO-POST TIZIMI
 // =====================================================================
-// =====================================================================
-// 🏆 HAR KUNLIK "ENG ARZON TOP-3" AVTO-POST TIZIMI (Oxirgi 24 soat)
-// =====================================================================
-// =====================================================================
-// 🏆 HAR KUNLIK "ENG ARZON TOP-5" AVTO-POST TIZIMI (Oxirgi 24 soat)
-// =====================================================================
-async function sendDailyTop3() { // Funksiya nomi taymer bilan bir xil ishlashi uchun o'zgarmadi
+
+async function sendDailyTop3() { 
   try {
-    // 1. LIMIT 5 ga o'zgartirildi
-    const [topAds] = await db.execute(`
+    // LIMIT 5 ni olib tashladik, oxirgi 24 soatdagi hamma e'lonni narx bo'yicha arzonidan qimmatiga qarab olamiz
+    const [allAds] = await db.execute(`
       SELECT id, carDetails, price, channelMsgId
       FROM ads
       WHERE status = 'active' 
         AND created_at >= NOW() - INTERVAL 24 HOUR
         AND CAST(price AS UNSIGNED) >= 100
       ORDER BY CAST(price AS UNSIGNED) ASC
-      LIMIT 5
     `);
 
     // Agar oxirgi 24 soatda umuman e'lon qo'shilmagan bo'lsa
-    if (topAds.length === 0) {
+    if (allAds.length === 0) {
         console.log("📭 Tizim: Oxirgi 24 soat ichida mos e'lonlar topilmadi.");
         return; 
     }
@@ -3072,28 +3093,41 @@ async function sendDailyTop3() { // Funksiya nomi taymer bilan bir xil ishlashi 
     const dateOptions = { day: 'numeric', month: 'long', timeZone: 'Asia/Tashkent' };
     const todayStr = new Intl.DateTimeFormat('uz-UZ', dateOptions).format(new Date());
 
-    // 2. Matndagi 3 soni 5 ga o'zgartirildi
-    let text = `🏆 <b>BUGUNNING (${todayStr}) ENG ARZON MASHINALARI</b>\n<i>Oxirgi 24 soat ichida bozorga chiqqan eng hamyonbop 5 ta taklif:</i>\n\n`;
+    // E'lonlarni 2 ga ajratamiz (Top 5 va Qolganlar)
+    const top5Ads = allAds.slice(0, 5);
+    const otherAds = allAds.slice(5);
+
+    let text = `🏆 <b>BUGUNNING (${todayStr}) ENG ARZON 5 TA MASHINASI</b>\n\n`;
     
-    // 3. 4 va 5 emojilari qo'shildi
     const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
     const channelUsername = process.env.CHANNEL_ID.replace("@", "");
 
-    topAds.forEach((ad, index) => {
+    // 1-qism: TOP 5 likni chiroyli shaklda chiqarish
+    top5Ads.forEach((ad, index) => {
       const postLink = `https://t.me/${channelUsername}/${ad.channelMsgId}`;
       text += `${emojis[index]} <a href="${postLink}">${ad.carDetails}</a> — <b>${formatNum(ad.price)}$</b> \n\n`;
     });
 
-    text += `👉 <i>Moshinalarning rasmi va to'liq ma'lumotlarini ko'rish uchun ko'k yozuv ustiga bosing!</i>\n\n🤖 @arzonida_bot`;
+    // 2-qism: Qolgan barcha e'lonlarni (agar bor bo'lsa) ro'yxat qilib chiqarish
+    if (otherAds.length > 0) {
+        text += `🔄 <b>Shuningdek, bugun bozorga chiqqan boshqa e'lonlar:</b>\n\n`;
+        otherAds.forEach((ad) => {
+            const postLink = `https://t.me/${channelUsername}/${ad.channelMsgId}`;
+            text += `🔹 <a href="${postLink}">${ad.carDetails}</a> — <b>${formatNum(ad.price)}$</b>\n`;
+        });
+        text += `\n`;
+    }
+
+    text += `👉 <i>Mashinalarning rasmi va to'liq ma'lumotlarini ko'rish uchun ko'k yozuv ustiga bosing!</i>\n\n🤖 @arzonida_bot`;
 
     // Asosiy kanalga yuborish
     await bot.api.sendMessage(CHANNEL_ID, text, {
       parse_mode: "HTML",
       disable_web_page_preview: true
     });
-    console.log("✅ Tizim: Eng arzon TOP-5 post muvaffaqiyatli yuborildi!");
+    console.log("✅ Tizim: Kunlik dayjest post muvaffaqiyatli yuborildi!");
   } catch (err) {
-    console.error("Eng arzon Top-5 yuborishda xatolik:", err);
+    console.error("Kunlik post yuborishda xatolik:", err);
   }
 }
 
@@ -3110,9 +3144,12 @@ bot.command("test_top3", async (ctx) => {
 // ==============================================================
 // 🤖 AVTO-TOZALASH VA AQLLI MASLAHATCHI TIZIMI (ADMIN ishtirok etmaydi)
 // ==============================================================
+// ==============================================================
+// 🤖 AVTO-ESLATMA VA TEPAGA KO'TARISH (UP) TIZIMI
+// ==============================================================
 async function runAutomations() {
   try {
-      // 1. AQLLI MASLAHATCHI (5 KUNLIK) - Admindan tashqari barcha uchun
+      // 1. AQLLI MASLAHATCHI (5 KUNLIK)
       const [ads5] = await db.execute(
           "SELECT id, userId, carDetails FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) = 5",
           [ADMIN_ID]
@@ -3126,34 +3163,132 @@ async function runAutomations() {
           await delay(200); // Spam blokiga tushmaslik uchun
       }
 
-      // 2. AVTO-TOZALASH ESLATMASI (15 KUNLIK) - Admindan tashqari barcha uchun
+      // 2. TEPAGA KO'TARISH TAKLIFI (15 KUNLIK) 
+      // (O'chirib yuborilmaydi, faqat tepaga ko'tarish taklif qilinadi)
       const [ads15] = await db.execute(
           "SELECT id, userId, carDetails FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) = 15",
           [ADMIN_ID]
       );
       for (let ad of ads15) {
-          const text = `⚠️ <b>E'lon muddati tugamoqda:</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 15 kun bo'ldi. Moshina sotildimi?\n\n<i>(Agar "Hali sotilmadi" tugmasi bosilmasa, e'loningiz 3 kundan so'ng bazamizdan va kanaldan o'chiriladi)</i>`;
+          const text = `⚠️ <b>E'loningiz eski xabarlar qatorida qolib ketdi!</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 15 kun bo'ldi va u kanalda ancha tepaga chiqib ketib, xaridorlarga ko'rinishi qiyinlashdi.\n\nE'lonni qaytadan kanalning eng oxiriga (tepaga) ko'tarishni istaysizmi?`;
           await bot.api.sendMessage(ad.userId, text, {
               parse_mode: "HTML",
-              reply_markup: new InlineKeyboard().text("✅ Sotildi", `confirm_sold:${ad.id}`).row().text("🔄 Hali sotilmadi (Uzaytirish)", `keep_ad:${ad.id}`)
+              reply_markup: new InlineKeyboard()
+                .text("🚀 Ha, tepaga ko'tarish", `ask_bump:${ad.id}`).row()
+                .text("✅ Allaqachon sotildi", `confirm_sold:${ad.id}`)
           }).catch(()=>{});
           await delay(200);
       }
+      
+      // 3-qism (18 kunlik o'chirish) butunlay olib tashlandi!
 
-      // 3. O'LIK E'LONLARNI TOZALASH (18 KUN) - Admindan tashqari barcha uchun
-      const [ads18] = await db.execute(
-          "SELECT id, channelMsgId, secondChannelMsgId FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) >= 18",
-          [ADMIN_ID]
-      );
-      for (let ad of ads18) {
-          await db.execute("UPDATE ads SET status = 'deleted' WHERE id = ?", [ad.id]);
-          await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(()=>{});
-          if(process.env.SECOND_CHANNEL_ID && ad.secondChannelMsgId) {
-              await bot.api.deleteMessage(process.env.SECOND_CHANNEL_ID, ad.secondChannelMsgId).catch(()=>{});
-          }
-      }
   } catch(e) { console.error("Avtomatizatsiya xatosi:", e); }
 }
+
+// ---------------------------------------------------------
+// 🚀 TEPAGA KO'TARISH SO'ROVINI YUBORISH (UZER BOSGANDA)
+// ---------------------------------------------------------
+bot.callbackQuery(/^ask_bump:(\d+)/, async (ctx) => {
+    const adId = ctx.match[1];
+    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+    const ad = rows[0];
+
+    if (!ad || ad.status !== 'active') {
+        return ctx.answerCallbackQuery({ text: "Bu e'lon faol emas yoki allaqachon sotilgan.", show_alert: true });
+    }
+
+    // Adminga so'rov yuborish
+    const adminText = `🚀 <b>UP (Tepaga ko'tarish) SO'ROVI!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>\n\n<i>E'lon kanalda 15 kunlik bo'ldi. Uzer uni qayta ko'tarmoqchi. Ruxsat berasizmi?</i>`;
+    
+    await bot.api.sendMessage(ADMIN_ID, adminText, {
+        parse_mode: "HTML",
+        reply_markup: new InlineKeyboard()
+          .text("✅ Ruxsat berish (UP)", `approve_bump:${adId}`)
+          .text("❌ Rad etish", `reject_bump:${adId}`)
+    });
+
+    await ctx.editMessageText(`⏳ <b>${ad.carDetails}</b> e'lonini tepaga ko'tarish bo'yicha so'rov adminga yuborildi. \n\nAdmin tasdiqlagach, u kanalda eng yangi e'lonlar qatoriga chiqadi!`, { parse_mode: "HTML" });
+});
+
+// ---------------------------------------------------------
+// ✅ ADMIN TEPAGA KO'TARISHNI TASDIQLAGANDA
+// ---------------------------------------------------------
+bot.callbackQuery(/^approve_bump:(\d+)/, async (ctx) => {
+    const adId = ctx.match[1];
+    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+    const ad = rows[0];
+
+    if (!ad || ad.status !== 'active') {
+        return ctx.editMessageText("❌ Bu e'lon faol emas yoki yopilgan.");
+    }
+
+    await ctx.editMessageText(`⏳ <i>E'lon kanalga qayta ko'tarilmoqda...</i>`, { parse_mode: "HTML" });
+
+    try {
+        const channelMarkup = new InlineKeyboard()
+          .url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
+          .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
+          .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot")
+          .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+
+        let newMsgId;
+        let newSecMsgId = null;
+
+        // Asosiy kanalga ko'tarish
+        const newMsg = await bot.api.copyMessage(CHANNEL_ID, CHANNEL_ID, ad.channelMsgId, { reply_markup: channelMarkup });
+        newMsgId = newMsg.message_id;
+        if (ad.videoId) {
+            try { await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: newMsgId }); } catch(e){}
+        }
+        await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(() => {});
+
+        // 2-kanalga ko'tarish (agar u ulangan bo'lsa)
+        const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
+        if (SECOND_CHANNEL_ID && ad.secondChannelMsgId) {
+            try {
+                const secMsg = await bot.api.copyMessage(SECOND_CHANNEL_ID, SECOND_CHANNEL_ID, ad.secondChannelMsgId, { reply_markup: channelMarkup });
+                newSecMsgId = secMsg.message_id;
+                if (ad.videoId) {
+                    try { await bot.api.sendVideo(SECOND_CHANNEL_ID, ad.videoId, { reply_to_message_id: newSecMsgId }); } catch(e){}
+                }
+                await bot.api.deleteMessage(SECOND_CHANNEL_ID, ad.secondChannelMsgId).catch(() => {});
+            } catch(e) {}
+        }
+
+        // BAZANI YANGILASH: Yaratilgan vaqtini (created_at) yangilaymiz, shunda 15 kundan keyin yana ko'tarish taklifi boradi.
+        let updateQuery = "UPDATE ads SET channelMsgId = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?";
+        let updateParams = [newMsgId, adId];
+        if (newSecMsgId) {
+            updateQuery = "UPDATE ads SET channelMsgId = ?, secondChannelMsgId = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?";
+            updateParams = [newMsgId, newSecMsgId, adId];
+        }
+        await db.execute(updateQuery, updateParams);
+
+        await ctx.editMessageText(`✅ <b>${ad.carDetails}</b> (ID: ${ad.id}) kanalda muvaffaqiyatli UP qilindi!`, { parse_mode: "HTML" });
+        
+        // Mijozni xursand qilish
+        await bot.api.sendMessage(ad.userId, `🚀 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz adminga ma'qullandi va kanalda eng yangi xabarlar qatoriga ko'tarildi! Moshina tezroq sotilishiga tilakdoshmiz.`, { parse_mode: "HTML" }).catch(()=>{});
+
+    } catch (err) {
+        console.error("Bump xatosi:", err);
+        await ctx.editMessageText("❌ Xatolik yuz berdi. Kanaldagi eski e'lon o'chirib yuborilgan bo'lishi mumkin.");
+    }
+});
+
+// ---------------------------------------------------------
+// ❌ ADMIN TEPAGA KO'TARISHNI RAD ETGANDA
+// ---------------------------------------------------------
+bot.callbackQuery(/^reject_bump:(\d+)/, async (ctx) => {
+    const adId = ctx.match[1];
+    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+    const ad = rows[0];
+
+    await ctx.editMessageText(`❌ UP (Tepaga ko'tarish) so'rovi rad etildi. (ID: ${adId})`);
+    
+    if (ad) {
+        await bot.api.sendMessage(ad.userId, `❌ <b>E'lonni ko'tarish rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningizni qayta ko'tarish adminlar tomonidan rad etildi. Hozirda e'loningiz eski o'rnida turibdi.`, { parse_mode: "HTML" }).catch(()=>{});
+    }
+});
 // =====================================================================
 // ⏰ UMUMIY TAYMER: HAR 30 MINUTDA VAQTNI TEKSHIRIB TURADI
 // =====================================================================
