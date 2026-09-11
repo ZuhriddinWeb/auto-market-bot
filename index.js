@@ -408,18 +408,123 @@ bot.use(createConversation(broadcastConversation));
 /**
  * ✅ АДМИН БУЙРУҚЛАРИ
  */
-const adminMenu = new InlineKeyboard().text("📊 Statistika", "admin_stats").row().text("⏳ Kutayotganlar", "admin_pending").row().text("📢 Rassilka", "admin_broadcast").row().text("❌ Yopish", "admin_close");
+const adminMenu = new InlineKeyboard()
+  .text("📊 Statistika", "admin_stats")
+  .text("⏳ Kutayotganlar", "admin_pending").row()
+  .text("📢 Rassilka", "admin_broadcast")
+  .text("🏆 Konkurs (Top-10)", "admin_top").row()
+  .text("🚗 Kunlik TOP-5 yuborish", "admin_test_top5")
+  .text("📈 Haftalik Analitika", "admin_test_analytics").row()
+  .text("🔔 7-kunlik UP xabar jo'natish", "admin_send_7day").row()
+  .text("🛠 Boshqa buyruqlar (Qo'llanma)", "admin_help").row()
+  .text("❌ Yopish", "admin_close");
 
 bot.command("admin", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
-  await ctx.reply("👨‍💻 <b>Admin panelga xush kelibsiz!</b>\nQuyidagi menyudan kerakli bo'limni tanlang:", { reply_markup: adminMenu, parse_mode: "HTML" });
+  await ctx.reply("👨‍💻 <b>Boshqaruv paneliga xush kelibsiz!</b>\n\nQuyidagi tugmalar orqali botdagi barcha jarayonlarni birgina bosish bilan boshqarishingiz mumkin:", { reply_markup: adminMenu, parse_mode: "HTML" });
 });
+// Orqaga qaytish tugmasi
+bot.callbackQuery("admin_back", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.editMessageText("👨‍💻 <b>Boshqaruv paneliga xush kelibsiz!</b>\n\nQuyidagi tugmalar orqali botdagi barcha jarayonlarni birgina bosish bilan boshqarishingiz mumkin:", { reply_markup: adminMenu, parse_mode: "HTML" });
+});
+// 🏆 Konkurs Top-10
+bot.callbackQuery("admin_top", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const [topUsers] = await db.execute("SELECT id, first_name, username, contest_score FROM users WHERE contest_score > 0 ORDER BY contest_score DESC LIMIT 10");
+  
+  if (topUsers.length === 0) {
+      return ctx.answerCallbackQuery({ text: "📭 Hali hech kim konkursda ball yig'madi.", show_alert: true });
+  }
 
+  let text = "🏆 <b>KONKURS LIDERLARI (TOP-10):</b>\n\n";
+  topUsers.forEach((u, i) => {
+      const name = u.first_name || "Ismsiz";
+      const userLink = u.username ? `(@${u.username})` : "";
+      text += `${i + 1}. <a href="tg://user?id=${u.id}">${name}</a> ${userLink} — <b>${u.contest_score} ta</b>\n(ID: <code>${u.id}</code>)\n\n`;
+  });
+  
+  text += `💡 <i>G'olib bilan bog'lanish uchun: /xabar [ID] [Matn]</i>`;
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_back") });
+});
+// 🚗 Kunlik TOP-5 ni ishga tushirish
+bot.callbackQuery("admin_test_top5", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.answerCallbackQuery("⏳ Kunlik TOP-5 tayyorlanmoqda...");
+  await sendDailyTop3(); // Funksiya kanalda post chiqaradi
+  await ctx.reply("✅ <b>Kunlik TOP-5 ro'yxati kanalga muvaffaqiyatli yuborildi!</b>", { parse_mode: "HTML" });
+});
+// 📈 Haftalik analitikani ishga tushirish
+bot.callbackQuery("admin_test_analytics", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.answerCallbackQuery("⏳ Analitika hisoblanmoqda...");
+  await sendWeeklyAnalytics(); // Funksiya kanalda post chiqaradi
+  await ctx.reply("✅ <b>Haftalik bozor analitikasi kanalga muvaffaqiyatli yuborildi!</b>", { parse_mode: "HTML" });
+});
 bot.command("test_analytics", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   await ctx.reply("⏳ <i>Analitika hisoblanmoqda va kanalga yuborilmoqda...</i>", { parse_mode: "HTML" });
   await sendWeeklyAnalytics();
   await ctx.reply("✅ <b>Test muvaffaqiyatli yakunlandi! Kanalni tekshiring.</b>", { parse_mode: "HTML" });
+});
+// 🔔 7-kunlik xabarlarni Hozir yuborish
+bot.callbackQuery("admin_send_7day", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.editMessageText("⏳ <i>Real foydalanuvchilarga 7 kunlik e'lonlar bo'yicha xabarlar yuborish boshlandi... Kuting.</i>", { parse_mode: "HTML" });
+
+  try {
+      const [ads7] = await db.execute(
+          "SELECT id, userId, carDetails FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) = 7",
+          [ADMIN_ID]
+      );
+
+      if (ads7.length === 0) {
+          return ctx.editMessageText("📭 <b>Bugun roppa-rosa 7 kun bo'lgan e'lonlar topilmadi.</b>", { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_back") });
+      }
+
+      let notifiedUsersText = ""; 
+      let notifiedCount = 0;
+
+      for (let ad of ads7) {
+          const text = `⚠️ <b>E'loningiz eski xabarlar qatorida qolib ketdi!</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 7 kun bo'ldi va u kanalda ancha tepaga chiqib ketib, xaridorlarga ko'rinishi qiyinlashdi.\n\nE'lonni qaytadan kanalning eng oxiriga (tepaga) ko'tarishni istaysizmi?`;
+          
+          try {
+              await bot.api.sendMessage(ad.userId, text, {
+                  parse_mode: "HTML",
+                  reply_markup: new InlineKeyboard()
+                    .text("🚀 Ha, tepaga ko'tarish", `ask_bump:${ad.id}`).row()
+                    .text("✅ Allaqachon sotildi", `confirm_sold:${ad.id}`)
+              });
+              notifiedUsersText += `👤 <a href="tg://user?id=${ad.userId}">Profilga o'tish</a> | 🚗 ${ad.carDetails} (ID: ${ad.id})\n`;
+              notifiedCount++;
+          } catch (err) {}
+          await delay(200); 
+      }
+
+      if (notifiedCount > 0) {
+          const adminReport = `📊 <b>YUBORILGAN HISOBOT (7 KUNLIK):</b>\n\nJami <b>${notifiedCount} ta</b> real foydalanuvchiga UP taklifi yuborildi:\n\n${notifiedUsersText}`;
+          await ctx.editMessageText(adminReport, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_back") });
+      } else {
+          await ctx.editMessageText("❌ Xabarlar yuborilmadi (Foydalanuvchilar botni bloklagan bo'lishi mumkin).", { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_back") });
+      }
+  } catch (e) {
+      await ctx.editMessageText("❌ Xatolik yuz berdi.", { reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_back") });
+  }
+});
+
+// 🛠 Qo'lda yoziladigan buyruqlar bo'yicha QO'LLANMA
+bot.callbackQuery("admin_help", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const helpText = 
+    `🛠 <b>BOSHQA MAXSUS BUYRUQLAR:</b>\n\n` +
+    `<i>Ushbu buyruqlarni botga oddiy xabar kabi yozib yuborasiz:</i>\n\n` +
+    `🚫 <b>Foydalanuvchini bloklash:</b>\n<code>/ban [Foydalanuvchi_ID]</code>\n\n` +
+    `✅ <b>Foydalanuvchini blokdan ochish:</b>\n<code>/unban [Foydalanuvchi_ID]</code>\n\n` +
+    `🚀 <b>E'lonni qo'lda UP qilish (Tepaga ko'tarish):</b>\n<code>/up [E'lon_ID]</code>\n\n` +
+    `✉️ <b>G'olibga yoki uzerga xabar yuborish:</b>\n<code>/xabar [Foydalanuvchi_ID] [Sizning matningiz]</code>\n\n` +
+    `🔄 <b>Konkurs ballarini nollash (Yangi hafta uchun):</b>\n<code>/reset_contest</code>`;
+    
+  await ctx.editMessageText(helpText, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_back") });
 });
 // =====================================================================
 // 🛠 15 KUNLIK "UP" TIZIMINI TEST QILISH UCHUN MAXSUS BUYRUQ
@@ -454,56 +559,7 @@ bot.command("test_up", async (ctx) => {
 // =====================================================================
 // 🚀 REAL FOYDALANUVCHILARGA 7 KUNLIK XABARNI HOZIROQ YUBORISH
 // =====================================================================
-bot.command("send_7day_now", async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return;
 
-    await ctx.reply("⏳ <i>Real foydalanuvchilarga 7 kunlik e'lonlar bo'yicha xabarlar yuborish boshlandi... Kuting.</i>", { parse_mode: "HTML" });
-
-    try {
-        // Bazadan roppa-rosa 7 kun bo'lgan e'lonlarni olamiz
-        const [ads7] = await db.execute(
-            "SELECT id, userId, carDetails FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) = 7",
-            [ADMIN_ID]
-        );
-
-        if (ads7.length === 0) {
-            return ctx.reply("📭 <b>Bugun roppa-rosa 7 kun bo'lgan e'lonlar topilmadi.</b>", { parse_mode: "HTML" });
-        }
-
-        let notifiedUsersText = ""; 
-        let notifiedCount = 0;
-
-        for (let ad of ads7) {
-            const text = `⚠️ <b>E'loningiz eski xabarlar qatorida qolib ketdi!</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 7 kun bo'ldi va u kanalda ancha tepaga chiqib ketib, xaridorlarga ko'rinishi qiyinlashdi.\n\nE'lonni qaytadan kanalning eng oxiriga (tepaga) ko'tarishni istaysizmi?`;
-            
-            try {
-                await bot.api.sendMessage(ad.userId, text, {
-                    parse_mode: "HTML",
-                    reply_markup: new InlineKeyboard()
-                      .text("🚀 Ha, tepaga ko'tarish", `ask_bump:${ad.id}`).row()
-                      .text("✅ Allaqachon sotildi", `confirm_sold:${ad.id}`)
-                });
-                
-                notifiedUsersText += `👤 <a href="tg://user?id=${ad.userId}">Profilga o'tish</a> | 🚗 ${ad.carDetails} (ID: ${ad.id})\n`;
-                notifiedCount++;
-            } catch (err) {
-                // Foydalanuvchi botni bloklagan bo'lsa
-            }
-            await delay(200); // Telegram limitiga tushmaslik uchun pauza
-        }
-
-        if (notifiedCount > 0) {
-            const adminReport = `📊 <b>HOZIRGINA YUBORILGAN HISOBOT (7 KUNLIK):</b>\n\nJami <b>${notifiedCount} ta</b> real foydalanuvchiga e'lonini ko'tarish (UP) haqida taklif yuborildi:\n\n${notifiedUsersText}`;
-            await ctx.reply(adminReport, { parse_mode: "HTML" });
-        } else {
-            await ctx.reply("❌ Xabarlar yuborilmadi (Foydalanuvchilar botni bloklagan bo'lishi mumkin).");
-        }
-
-    } catch (e) {
-        console.error(e);
-        await ctx.reply("❌ Xatolik yuz berdi.");
-    }
-});
 bot.command("ban", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   const match = ctx.message.text.split(" ");
@@ -617,10 +673,7 @@ bot.command("unban", async (ctx) => {
   }
 });
 
-bot.callbackQuery("admin_close", async (ctx) => {
-  if (ctx.from.id !== ADMIN_ID) return;
-  await ctx.deleteMessage();
-});
+
 
 bot.callbackQuery("admin_stats", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
