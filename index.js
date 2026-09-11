@@ -3183,9 +3183,11 @@ async function sendWeeklyAnalytics() {
 // 🏆 HAR KUNLIK "TOP-3" AVTO-POST TIZIMI
 // =====================================================================
 
+// =====================================================================
+// 🏆 HAR KUNLIK "ENG ARZON TOP-5" VA QOLGAN E'LONLAR (PRO DIZAYN)
+// =====================================================================
 async function sendDailyTop3() { 
   try {
-    // LIMIT 5 ni olib tashladik, oxirgi 24 soatdagi hamma e'lonni narx bo'yicha arzonidan qimmatiga qarab olamiz
     const [allAds] = await db.execute(`
       SELECT id, carDetails, price, channelMsgId
       FROM ads
@@ -3195,7 +3197,6 @@ async function sendDailyTop3() {
       ORDER BY CAST(price AS UNSIGNED) ASC
     `);
 
-    // Agar oxirgi 24 soatda umuman e'lon qo'shilmagan bo'lsa
     if (allAds.length === 0) {
         console.log("📭 Tizim: Oxirgi 24 soat ichida mos e'lonlar topilmadi.");
         return; 
@@ -3204,38 +3205,49 @@ async function sendDailyTop3() {
     const dateOptions = { day: 'numeric', month: 'long', timeZone: 'Asia/Tashkent' };
     const todayStr = new Intl.DateTimeFormat('uz-UZ', dateOptions).format(new Date());
 
-    // E'lonlarni 2 ga ajratamiz (Top 5 va Qolganlar)
     const top5Ads = allAds.slice(0, 5);
     const otherAds = allAds.slice(5);
-
-    let text = `🏆 <b>BUGUNNING (${todayStr}) ENG ARZON 5 TA MASHINASI</b>\n\n`;
-    
-    const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
     const channelUsername = process.env.CHANNEL_ID.replace("@", "");
 
-    // 1-qism: TOP 5 likni chiroyli shaklda chiqarish
+    // 🌟 Sarlavha qismi
+    let text = `📊 <b>BUGUNGI AVTO-BOZOR XULOSASI</b>\n`;
+    text += `📅 <i>${todayStr} holatiga</i>\n\n`;
+    
+    text += `🔥 <b>ENG ARZON TOP-5 LIK:</b>\n\n`;
+    
+    // 🥇 Top-5 likni vizual chiroyli qilib (Daraxt ko'rinishida) chiqarish
+    const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
     top5Ads.forEach((ad, index) => {
       const postLink = `https://t.me/${channelUsername}/${ad.channelMsgId}`;
-      text += `${emojis[index]} <a href="${postLink}">${ad.carDetails}</a> — <b>${formatNum(ad.price)}$</b> \n\n`;
+      text += `${emojis[index]} <b><a href="${postLink}">${ad.carDetails}</a></b>\n`;
+      text += `   └ 💵 <b>${formatNum(ad.price)} $</b>\n\n`;
     });
 
-    // 2-qism: Qolgan barcha e'lonlarni (agar bor bo'lsa) ro'yxat qilib chiqarish
+    // 📋 Qolgan e'lonlar qismi
     if (otherAds.length > 0) {
-        text += `🔄 <b>Shuningdek, bugun bozorga chiqqan boshqa e'lonlar:</b>\n\n`;
+        text += `〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n`;
+        text += `📋 <b>BOSHQA YANGI E'LONLAR:</b>\n\n`;
         otherAds.forEach((ad) => {
             const postLink = `https://t.me/${channelUsername}/${ad.channelMsgId}`;
-            text += `🔹 <a href="${postLink}">${ad.carDetails}</a> — <b>${formatNum(ad.price)}$</b>\n`;
+            text += `🔹 <b><a href="${postLink}">${ad.carDetails}</a></b> — ${formatNum(ad.price)} $\n`;
         });
         text += `\n`;
     }
 
-    text += `👉 <i>Mashinalarning rasmi va to'liq ma'lumotlarini ko'rish uchun ko'k yozuv ustiga bosing!</i>\n\n🤖 @arzonida_bot`;
+    text += `💡 <i>Mashinalarning rasmi va to'liq ma'lumotlarini ko'rish uchun ularning ko'k yozuvli nomiga bosing!</i>`;
+
+    // 🚀 PRO DARAJADAGI TUGMALAR (Kanal postining tagiga tushadi)
+    const proKeyboard = new InlineKeyboard()
+      .url("🔍 Mashina qidirish", "https://t.me/arzonida_bot").row()
+      .url("➕ Bepul e'lon joylash", "https://t.me/arzonida_bot");
 
     // Asosiy kanalga yuborish
     await bot.api.sendMessage(CHANNEL_ID, text, {
       parse_mode: "HTML",
-      disable_web_page_preview: true
+      disable_web_page_preview: true,
+      reply_markup: proKeyboard // Tugmalarni ulaymiz
     });
+    
     console.log("✅ Tizim: Kunlik dayjest post muvaffaqiyatli yuborildi!");
   } catch (err) {
     console.error("Kunlik post yuborishda xatolik:", err);
