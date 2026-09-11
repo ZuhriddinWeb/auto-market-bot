@@ -436,7 +436,7 @@ bot.command("test_up", async (ctx) => {
 
   const ad = ads[0];
   
-  const text = `⚠️ <b>[TEST] E'loningiz eski xabarlar qatorida qolib ketdi!</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 15 kun bo'ldi va u kanalda ancha tepaga chiqib ketib, xaridorlarga ko'rinishi qiyinlashdi.\n\nE'lonni qaytadan kanalning eng oxiriga (tepaga) ko'tarishni istaysizmi?`;
+ const text = `⚠️ <b>E'loningiz eski xabarlar qatorida qolib ketdi!</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 7 kun bo'ldi va u kanalda ancha tepaga chiqib ketib, xaridorlarga ko'rinishi qiyinlashdi.\n\nE'lonni qaytadan kanalning eng oxiriga (tepaga) ko'tarishni istaysizmi?`;
   
   // Xabarni foydalanuvchiga emas, to'g'ridan-to'g'ri o'zingizga (adminga) yuboramiz
   await ctx.reply(text, {
@@ -451,6 +451,59 @@ bot.command("test_up", async (ctx) => {
 /**
  * ✅ АДМИН УЧУН БЛОКЛАШ ТИЗИМИ
  */
+// =====================================================================
+// 🚀 REAL FOYDALANUVCHILARGA 7 KUNLIK XABARNI HOZIROQ YUBORISH
+// =====================================================================
+bot.command("send_7day_now", async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+
+    await ctx.reply("⏳ <i>Real foydalanuvchilarga 7 kunlik e'lonlar bo'yicha xabarlar yuborish boshlandi... Kuting.</i>", { parse_mode: "HTML" });
+
+    try {
+        // Bazadan roppa-rosa 7 kun bo'lgan e'lonlarni olamiz
+        const [ads7] = await db.execute(
+            "SELECT id, userId, carDetails FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) = 7",
+            [ADMIN_ID]
+        );
+
+        if (ads7.length === 0) {
+            return ctx.reply("📭 <b>Bugun roppa-rosa 7 kun bo'lgan e'lonlar topilmadi.</b>", { parse_mode: "HTML" });
+        }
+
+        let notifiedUsersText = ""; 
+        let notifiedCount = 0;
+
+        for (let ad of ads7) {
+            const text = `⚠️ <b>E'loningiz eski xabarlar qatorida qolib ketdi!</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 7 kun bo'ldi va u kanalda ancha tepaga chiqib ketib, xaridorlarga ko'rinishi qiyinlashdi.\n\nE'lonni qaytadan kanalning eng oxiriga (tepaga) ko'tarishni istaysizmi?`;
+            
+            try {
+                await bot.api.sendMessage(ad.userId, text, {
+                    parse_mode: "HTML",
+                    reply_markup: new InlineKeyboard()
+                      .text("🚀 Ha, tepaga ko'tarish", `ask_bump:${ad.id}`).row()
+                      .text("✅ Allaqachon sotildi", `confirm_sold:${ad.id}`)
+                });
+                
+                notifiedUsersText += `👤 <a href="tg://user?id=${ad.userId}">Profilga o'tish</a> | 🚗 ${ad.carDetails} (ID: ${ad.id})\n`;
+                notifiedCount++;
+            } catch (err) {
+                // Foydalanuvchi botni bloklagan bo'lsa
+            }
+            await delay(200); // Telegram limitiga tushmaslik uchun pauza
+        }
+
+        if (notifiedCount > 0) {
+            const adminReport = `📊 <b>HOZIRGINA YUBORILGAN HISOBOT (7 KUNLIK):</b>\n\nJami <b>${notifiedCount} ta</b> real foydalanuvchiga e'lonini ko'tarish (UP) haqida taklif yuborildi:\n\n${notifiedUsersText}`;
+            await ctx.reply(adminReport, { parse_mode: "HTML" });
+        } else {
+            await ctx.reply("❌ Xabarlar yuborilmadi (Foydalanuvchilar botni bloklagan bo'lishi mumkin).");
+        }
+
+    } catch (e) {
+        console.error(e);
+        await ctx.reply("❌ Xatolik yuz berdi.");
+    }
+});
 bot.command("ban", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   const match = ctx.message.text.split(" ");
@@ -3147,6 +3200,9 @@ bot.command("test_top3", async (ctx) => {
 // ==============================================================
 // 🤖 AVTO-ESLATMA VA TEPAGA KO'TARISH (UP) TIZIMI
 // ==============================================================
+// ==============================================================
+// 🤖 AVTO-ESLATMA VA TEPAGA KO'TARISH (UP) TIZIMI
+// ==============================================================
 async function runAutomations() {
   try {
       // 1. AQLLI MASLAHATCHI (5 KUNLIK)
@@ -3163,24 +3219,43 @@ async function runAutomations() {
           await delay(200); // Spam blokiga tushmaslik uchun
       }
 
-      // 2. TEPAGA KO'TARISH TAKLIFI (15 KUNLIK) 
-      // (O'chirib yuborilmaydi, faqat tepaga ko'tarish taklif qilinadi)
-      const [ads15] = await db.execute(
-          "SELECT id, userId, carDetails FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) = 15",
+      // ================= YANGILANISH =================
+      // 2. TEPAGA KO'TARISH TAKLIFI (7 KUNLIK) VA ADMINGA HISOBOT
+      const [ads7] = await db.execute(
+          "SELECT id, userId, carDetails FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) = 7",
           [ADMIN_ID]
       );
-      for (let ad of ads15) {
-          const text = `⚠️ <b>E'loningiz eski xabarlar qatorida qolib ketdi!</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 15 kun bo'ldi va u kanalda ancha tepaga chiqib ketib, xaridorlarga ko'rinishi qiyinlashdi.\n\nE'lonni qaytadan kanalning eng oxiriga (tepaga) ko'tarishni istaysizmi?`;
-          await bot.api.sendMessage(ad.userId, text, {
-              parse_mode: "HTML",
-              reply_markup: new InlineKeyboard()
-                .text("🚀 Ha, tepaga ko'tarish", `ask_bump:${ad.id}`).row()
-                .text("✅ Allaqachon sotildi", `confirm_sold:${ad.id}`)
-          }).catch(()=>{});
+      
+      let notifiedUsersText = ""; // Admin uchun hisobot yig'ishga
+      let notifiedCount = 0;
+
+      for (let ad of ads7) {
+          const text = `⚠️ <b>E'loningiz eski xabarlar qatorida qolib ketdi!</b>\n\n🚗 <b>${ad.carDetails}</b> e'lon qilinganiga 7 kun bo'ldi va u kanalda ancha tepaga chiqib ketib, xaridorlarga ko'rinishi qiyinlashdi.\n\nE'lonni qaytadan kanalning eng oxiriga (tepaga) ko'tarishni istaysizmi?`;
+          
+          try {
+              // Foydalanuvchiga xabar jo'natish
+              await bot.api.sendMessage(ad.userId, text, {
+                  parse_mode: "HTML",
+                  reply_markup: new InlineKeyboard()
+                    .text("🚀 Ha, tepaga ko'tarish", `ask_bump:${ad.id}`).row()
+                    .text("✅ Allaqachon sotildi", `confirm_sold:${ad.id}`)
+              });
+              
+              // Muvaffaqiyatli jo'natilsa, admin ro'yxatiga qo'shamiz
+              notifiedUsersText += `👤 <a href="tg://user?id=${ad.userId}">Foydalanuvchi profili</a> | 🚗 ${ad.carDetails} (ID: ${ad.id})\n`;
+              notifiedCount++;
+          } catch (err) {
+              // Agar uzer botni bloklagan bo'lsa xatolik ushlanadi va dastur to'xtab qolmaydi
+          }
           await delay(200);
       }
-      
-      // 3-qism (18 kunlik o'chirish) butunlay olib tashlandi!
+
+      // Agar kamida 1 kishiga xabar ketgan bo'lsa, Adminga ro'yxatni yuboramiz
+      if (notifiedCount > 0) {
+          const adminReport = `📊 <b>AVTO-ESLATMA HISOBOTI (7 KUNLIK):</b>\n\nBugun jami <b>${notifiedCount} ta</b> foydalanuvchiga e'lonini ko'tarish (UP) haqida taklif yuborildi:\n\n${notifiedUsersText}`;
+          await bot.api.sendMessage(ADMIN_ID, adminReport, { parse_mode: "HTML" }).catch(()=>{});
+      }
+      // ===============================================
 
   } catch(e) { console.error("Avtomatizatsiya xatosi:", e); }
 }
