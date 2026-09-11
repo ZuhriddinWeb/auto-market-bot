@@ -3186,6 +3186,9 @@ async function sendWeeklyAnalytics() {
 // =====================================================================
 // 🏆 HAR KUNLIK "ENG ARZON TOP-5" VA QOLGAN E'LONLAR (PRO DIZAYN)
 // =====================================================================
+// =====================================================================
+// 🏆 HAR KUNLIK "ENG ARZON TOP-5" VA QOLGAN E'LONLAR (PREMIUM DIZAYN)
+// =====================================================================
 async function sendDailyTop3() { 
   try {
     const [allAds] = await db.execute(`
@@ -3209,46 +3212,48 @@ async function sendDailyTop3() {
     const otherAds = allAds.slice(5);
     const channelUsername = process.env.CHANNEL_ID.replace("@", "");
 
-    // 🌟 Sarlavha qismi
-    let text = `📊 <b>BUGUNGI AVTO-BOZOR XULOSASI</b>\n`;
-    text += `📅 <i>${todayStr} holatiga</i>\n\n`;
+    // 🌟 Sarlavha qismi (Zamonaviy ajratgich bilan)
+    let text = `🗓 <b>${todayStr.toUpperCase()} | KUNLIK AVTO-BOZOR</b>\n`;
+    text += `━━━━━━━━━━━━━━━━━━\n\n`;
     
-    text += `🔥 <b>ENG ARZON TOP-5 LIK:</b>\n\n`;
+    text += `🏆 <b>ENG ARZON 5 TA TAKLIF:</b>\n\n`;
     
-    // 🥇 Top-5 likni vizual chiroyli qilib (Daraxt ko'rinishida) chiqarish
-    const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
+    // 🥇 Top-5 lik (Narxlar code formatida, ya'ni kulrang fonda chiqadi)
+    const topEmojis = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"];
     top5Ads.forEach((ad, index) => {
       const postLink = `https://t.me/${channelUsername}/${ad.channelMsgId}`;
-      text += `${emojis[index]} <b><a href="${postLink}">${ad.carDetails}</a></b>\n`;
-      text += `   └ 💵 <b>${formatNum(ad.price)} $</b>\n\n`;
+      text += `${topEmojis[index]} <b><a href="${postLink}">${ad.carDetails.toUpperCase()}</a></b>\n`;
+      text += `💸 <b>Narxi:</b> <code> ${formatNum(ad.price)} $ </code>\n\n`;
     });
 
-    // 📋 Qolgan e'lonlar qismi
+    // 📋 Qolgan e'lonlar qismi (Kompakt va chiroyli ro'yxat)
     if (otherAds.length > 0) {
-        text += `〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n`;
+        text += `➖➖➖➖➖➖➖➖➖➖\n\n`;
         text += `📋 <b>BOSHQA YANGI E'LONLAR:</b>\n\n`;
         otherAds.forEach((ad) => {
             const postLink = `https://t.me/${channelUsername}/${ad.channelMsgId}`;
-            text += `🔹 <b><a href="${postLink}">${ad.carDetails}</a></b> — ${formatNum(ad.price)} $\n`;
+            // Nuqtali ajratgich va code formatidagi narx
+            text += `🚘 <b><a href="${postLink}">${ad.carDetails}</a></b>  •  <code>${formatNum(ad.price)} $</code>\n`;
         });
         text += `\n`;
     }
 
-    text += `💡 <i>Mashinalarning rasmi va to'liq ma'lumotlarini ko'rish uchun ularning ko'k yozuvli nomiga bosing!</i>`;
+    text += `━━━━━━━━━━━━━━━━━━\n`;
+    text += `👆 <i>Mashina rasmlari va batafsil ma'lumotni ko'rish uchun ko'k yozuv ustiga bosing.</i>`;
 
-    // 🚀 PRO DARAJADAGI TUGMALAR (Kanal postining tagiga tushadi)
+    // 🚀 PREMIUM TUGMALAR
     const proKeyboard = new InlineKeyboard()
-      .url("🔍 Mashina qidirish", "https://t.me/arzonida_bot").row()
-      .url("➕ Bepul e'lon joylash", "https://t.me/arzonida_bot");
+      .url("🔍 Mashina izlash", "https://t.me/arzonida_bot").row()
+      .url("➕ Tekin e'lon berish", "https://t.me/arzonida_bot");
 
     // Asosiy kanalga yuborish
     await bot.api.sendMessage(CHANNEL_ID, text, {
       parse_mode: "HTML",
       disable_web_page_preview: true,
-      reply_markup: proKeyboard // Tugmalarni ulaymiz
+      reply_markup: proKeyboard
     });
     
-    console.log("✅ Tizim: Kunlik dayjest post muvaffaqiyatli yuborildi!");
+    console.log("✅ Tizim: Premium dayjest post muvaffaqiyatli yuborildi!");
   } catch (err) {
     console.error("Kunlik post yuborishda xatolik:", err);
   }
