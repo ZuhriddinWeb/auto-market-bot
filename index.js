@@ -428,6 +428,11 @@ bot.callbackQuery("admin_back", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   await ctx.editMessageText("👨‍💻 <b>Boshqaruv paneliga xush kelibsiz!</b>\n\nQuyidagi tugmalar orqali botdagi barcha jarayonlarni birgina bosish bilan boshqarishingiz mumkin:", { reply_markup: adminMenu, parse_mode: "HTML" });
 });
+// ❌ Yopish tugmasi
+bot.callbackQuery("admin_close", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.deleteMessage().catch(() => {});
+});
 // 🏆 Konkurs Top-10
 bot.callbackQuery("admin_top", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
