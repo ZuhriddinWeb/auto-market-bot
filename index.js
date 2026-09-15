@@ -569,10 +569,11 @@ async function getPriceBadge(carDetails, priceRaw, year = null) {
 
     const diffPercent = Math.round(((numericPrice - avgPrice) / avgPrice) * 100);
 
-    if (diffPercent <= -5) {
+if (diffPercent <= -5) {
       return `\n🔥 <b>Bozordan ${Math.abs(diffPercent)}% arzon!</b>`;
     } else if (diffPercent >= 10) {
-      return `\n📈 <b>Bozordan ${diffPercent}% qimmat</b>`;
+      // Qimmat bo'lsa hech narsa yozilmaydi (sotuvchini xafa qilmaslik uchun)
+      return "";
     } else {
       return `\n📊 <b>Bozor narxida (o'rtacha)</b>`;
     }
@@ -611,10 +612,10 @@ async function getPriceBadgeForImage(carDetails, priceRaw, year = null) {
 
     if (diffPercent <= -5) {
       // Yashil lenta — arzon
-      return { text: `🔥 BOZORDAN ${Math.abs(diffPercent)}% ARZON`, color: "#27ae60" };
+      return { text: `BOZORDAN ${Math.abs(diffPercent)}% ARZON`, color: "#27ae60" };
     } else if (diffPercent >= 10) {
-      // Qizil lenta — qimmat (xohlasangiz buni ko'rsatmasa ham bo'ladi)
-      return { text: `BOZORDAN ${diffPercent}% QIMMAT`, color: "#e74c3c" };
+      // Qimmat bo'lsa lenta ko'rsatilmaydi (sotuvchini xafa qilmaslik uchun)
+      return null;
     } else {
       // Kulrang lenta — o'rtacha
       return { text: `BOZOR NARXIDA`, color: "#7f8c8d" };
