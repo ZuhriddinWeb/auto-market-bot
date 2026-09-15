@@ -1725,6 +1725,28 @@ else if (step === "MODEL") {
 
         step = isEditing ? "PREVIEW" : "URGENT";
       }
+       else if (step === "URGENT") {
+        const kb = new InlineKeyboard()
+          .text("🚨 Ha, shoshilinch", "urg:yes")
+          .text("Oddiy sotuv", "urg:no").row()
+          .text("🔙 Orqaga", "back_NASIYA").text("❌ Bekor", "cancel_ad");
+
+        msgPrompt = await ctx.reply("⚡️ <b>Sotuv shoshilinchmi?</b>\n\n<i>Agar moshinani bozor narxidan arzonroq va tezroq sotmoqchi bo'lsangiz «Ha, shoshilinch» ni tanlang. E'loningiz kanalga maxsus maqomda joylanadi!</i>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_NASIYA") { step = "NASIYA"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.urgent = res.callbackQuery?.data === "urg:yes";
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
+        step = isEditing ? "PREVIEW" : "MEDIA";
+      }
       // =========================================================================
       // =========================================================================
 
