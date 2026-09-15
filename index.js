@@ -405,17 +405,18 @@ async function createPriceChart(title, labels, values) {
   const minVal = Math.min(...values);
   const range = maxVal - minVal || 1;
 
+  const paddingTop = 150;   // Sarlavha uchun tepada ko'proq joy
   const chartW = width - padding * 2;
-  const chartH = height - padding * 2;
+  const chartH = height - paddingTop - padding;
 
   const points = values.map((v, i) => {
     const x = padding + (i / (values.length - 1 || 1)) * chartW;
-    const y = padding + chartH - ((v - minVal) / range) * chartH;
+    const y = paddingTop + chartH - ((v - minVal) / range) * chartH;
     return { x, y, val: v, label: labels[i] };
   });
 
   const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
-  const areaPath = `${linePath} L ${points[points.length - 1].x} ${padding + chartH} L ${points[0].x} ${padding + chartH} Z`;
+    const areaPath = `${linePath} L ${points[points.length - 1].x} ${paddingTop + chartH} L ${points[0].x} ${paddingTop + chartH} Z`;
 
   const FONT = "DejaVu Sans, Arial, sans-serif";
 
@@ -425,7 +426,7 @@ async function createPriceChart(title, labels, values) {
   ).join("");
 
   const xLabels = points.map(p =>
-    `<text x="${p.x}" y="${height - padding + 40}" font-family="${FONT}" font-size="24" fill="#636e72" text-anchor="middle">${p.label}</text>`
+    `<text x="${p.x}" y="${height - 30}" font-family="${FONT}" font-size="24" fill="#636e72" text-anchor="middle">${p.label}</text>`
   ).join("");
 
   const svg = `
