@@ -371,6 +371,24 @@ async function createCollage(photoUrls) {
 // ==============================================================
 // 📈 NARX DINAMIKASI GRAFIGINI RASM QILIB YASASH
 // ==============================================================
+// ==============================================================
+// 📈 NARX DINAMIKASI GRAFIGINI RASM QILIB YASASH
+// ==============================================================
+let cachedFontBase64 = null; // Shriftni bir marta o'qib, keshda saqlaymiz
+
+function getFontBase64() {
+  if (cachedFontBase64) return cachedFontBase64;
+  try {
+    const fontPath = path.join(__dirname, "fonts", "ChartFont.ttf");
+    const fontData = fs.readFileSync(fontPath);
+    cachedFontBase64 = fontData.toString("base64");
+    return cachedFontBase64;
+  } catch (e) {
+    console.error("⚠️ Shrift fayli topilmadi (fonts/ChartFont.ttf):", e.message);
+    return null;
+  }
+}
+
 async function createPriceChart(title, labels, values) {
   const width = 1200;
   const height = 675;
@@ -383,7 +401,6 @@ async function createPriceChart(title, labels, values) {
   const chartW = width - padding * 2;
   const chartH = height - padding * 2;
 
-  // Nuqtalarning koordinatalarini hisoblaymiz
   const points = values.map((v, i) => {
     const x = padding + (i / (values.length - 1 || 1)) * chartW;
     const y = padding + chartH - ((v - minVal) / range) * chartH;
@@ -391,29 +408,41 @@ async function createPriceChart(title, labels, values) {
   });
 
   const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
-  // Chiziq ostidagi to'ldirish uchun (gradient effekt)
   const areaPath = `${linePath} L ${points[points.length - 1].x} ${padding + chartH} L ${points[0].x} ${padding + chartH} Z`;
 
   const dots = points.map(p =>
     `<circle cx="${p.x}" cy="${p.y}" r="8" fill="#00b894" stroke="#fff" stroke-width="3"/>
-     <text x="${p.x}" y="${p.y - 20}" font-family="Arial" font-size="26" font-weight="bold" fill="#2d3436" text-anchor="middle">$${p.val.toLocaleString("en-US")}</text>`
+     <text x="${p.x}" y="${p.y - 20}" font-family="ChartFont" font-size="26" font-weight="bold" fill="#2d3436" text-anchor="middle">$${p.val.toLocaleString("en-US")}</text>`
   ).join("");
 
   const xLabels = points.map(p =>
-    `<text x="${p.x}" y="${height - padding + 40}" font-family="Arial" font-size="24" fill="#636e72" text-anchor="middle">${p.label}</text>`
+    `<text x="${p.x}" y="${height - padding + 40}" font-family="ChartFont" font-size="24" fill="#636e72" text-anchor="middle">${p.label}</text>`
   ).join("");
+
+  // Shriftni SVG ichiga base64 orqali singdiramiz
+  const fontB64 = getFontBase64();
+  const fontStyle = fontB64
+    ? `<style>
+         @font-face {
+           font-family: 'ChartFont';
+           src: url('data:font/ttf;base64,${fontB64}') format('truetype');
+         }
+         text { font-family: 'ChartFont', Arial, sans-serif; }
+       </style>`
+    : `<style>text { font-family: Arial, sans-serif; }</style>`;
 
   const svg = `
   <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
     <defs>
+      ${fontStyle}
       <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="#00b894" stop-opacity="0.35"/>
         <stop offset="100%" stop-color="#00b894" stop-opacity="0"/>
       </linearGradient>
     </defs>
     <rect width="${width}" height="${height}" fill="#ffffff"/>
-    <text x="${width / 2}" y="55" font-family="Arial" font-size="40" font-weight="bold" fill="#2d3436" text-anchor="middle">${title}</text>
-    <text x="${width / 2}" y="95" font-family="Arial" font-size="24" fill="#00b894" text-anchor="middle">@engarzonidamoshina | Narx dinamikasi</text>
+    <text x="${width / 2}" y="55" font-family="ChartFont" font-size="40" font-weight="bold" fill="#2d3436" text-anchor="middle">${title}</text>
+    <text x="${width / 2}" y="95" font-family="ChartFont" font-size="24" fill="#00b894" text-anchor="middle">@engarzonidamoshina | Narx dinamikasi</text>
     <path d="${areaPath}" fill="url(#grad)"/>
     <path d="${linePath}" fill="none" stroke="#00b894" stroke-width="5" stroke-linejoin="round"/>
     ${dots}
@@ -421,7 +450,7 @@ async function createPriceChart(title, labels, values) {
   </svg>`;
 
   const chartPath = path.join(__dirname, `chart_${Date.now()}.jpg`);
-  await sharp(Buffer.from(svg)).jpeg({ quality: 90 }).toFile(chartPath);
+  await sharp(Buffer.from(svg), { density: 150 }).jpeg({ quality: 90 }).toFile(chartPath);
   return chartPath;
 }
 // ==============================================================
