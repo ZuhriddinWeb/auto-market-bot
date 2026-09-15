@@ -90,6 +90,13 @@ if (!fs.existsSync(collagesDir)) {
         UNIQUE(userId, adId)
       )
     `);
+        await db.execute(`
+      CREATE TABLE IF NOT EXISTS search_logs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        query VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   const alterQueries = [
       "ALTER TABLE ads ADD COLUMN history TEXT DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
@@ -361,6 +368,132 @@ async function createCollage(photoUrls) {
 
   return collagePath;
 }
+// ==============================================================
+// 📈 NARX DINAMIKASI GRAFIGINI RASM QILIB YASASH
+// ==============================================================
+async function createPriceChart(title, labels, values) {
+  const width = 1200;
+  const height = 675;
+  const padding = 90;
+
+  const maxVal = Math.max(...values);
+  const minVal = Math.min(...values);
+  const range = maxVal - minVal || 1;
+
+  const chartW = width - padding * 2;
+  const chartH = height - padding * 2;
+
+  // Nuqtalarning koordinatalarini hisoblaymiz
+  const points = values.map((v, i) => {
+    const x = padding + (i / (values.length - 1 || 1)) * chartW;
+    const y = padding + chartH - ((v - minVal) / range) * chartH;
+    return { x, y, val: v, label: labels[i] };
+  });
+
+  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+  // Chiziq ostidagi to'ldirish uchun (gradient effekt)
+  const areaPath = `${linePath} L ${points[points.length - 1].x} ${padding + chartH} L ${points[0].x} ${padding + chartH} Z`;
+
+  const dots = points.map(p =>
+    `<circle cx="${p.x}" cy="${p.y}" r="8" fill="#00b894" stroke="#fff" stroke-width="3"/>
+     <text x="${p.x}" y="${p.y - 20}" font-family="Arial" font-size="26" font-weight="bold" fill="#2d3436" text-anchor="middle">$${p.val.toLocaleString("en-US")}</text>`
+  ).join("");
+
+  const xLabels = points.map(p =>
+    `<text x="${p.x}" y="${height - padding + 40}" font-family="Arial" font-size="24" fill="#636e72" text-anchor="middle">${p.label}</text>`
+  ).join("");
+
+  const svg = `
+  <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#00b894" stop-opacity="0.35"/>
+        <stop offset="100%" stop-color="#00b894" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <rect width="${width}" height="${height}" fill="#ffffff"/>
+    <text x="${width / 2}" y="55" font-family="Arial" font-size="40" font-weight="bold" fill="#2d3436" text-anchor="middle">${title}</text>
+    <text x="${width / 2}" y="95" font-family="Arial" font-size="24" fill="#00b894" text-anchor="middle">@engarzonidamoshina | Narx dinamikasi</text>
+    <path d="${areaPath}" fill="url(#grad)"/>
+    <path d="${linePath}" fill="none" stroke="#00b894" stroke-width="5" stroke-linejoin="round"/>
+    ${dots}
+    ${xLabels}
+  </svg>`;
+
+  const chartPath = path.join(__dirname, `chart_${Date.now()}.jpg`);
+  await sharp(Buffer.from(svg)).jpeg({ quality: 90 }).toFile(chartPath);
+  return chartPath;
+}
+// ==============================================================
+// 📊 HAFTALIK GRAFIK POST (Eng ommabop moshina bo'yicha)
+// ==============================================================
+async function sendPriceChartPost() {
+  try {
+    // Bu hafta eng ko'p e'lon qo'yilgan modelni topamiz
+    const [topRows] = await db.execute(`
+      SELECT carDetails, COUNT(*) as cnt FROM ads
+      WHERE status IN ('active','sold') AND created_at >= NOW() - INTERVAL 7 DAY
+      GROUP BY carDetails ORDER BY cnt DESC LIMIT 1
+    `);
+    if (topRows.length === 0) return;
+
+    const topCar = topRows[0].carDetails;
+    const parts = topCar.trim().split(" ");
+    const modelKey = parts.length > 1 ? parts.slice(1).join(" ") : topCar;
+
+    const labels = [];
+    const values = [];
+
+    // Oxirgi 4 haftaning har biri uchun o'rtacha narxni olamiz
+    for (let w = 3; w >= 0; w--) {
+      const [[row]] = await db.execute(`
+        SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice FROM ads
+        WHERE carDetails LIKE ? AND status IN ('active','sold')
+          AND created_at >= NOW() - INTERVAL ? DAY
+          AND created_at <  NOW() - INTERVAL ? DAY
+      `, [`%${modelKey}%`, (w + 1) * 7, w * 7]);
+
+      if (row.avgPrice) {
+        labels.push(w === 0 ? "Bu hafta" : `${w} hafta oldin`);
+        values.push(Math.round(row.avgPrice));
+      }
+    }
+
+    // Grafik uchun kamida 2 ta nuqta kerak
+    if (values.length < 2) {
+      console.log("📭 Grafik uchun narx tarixi yetarli emas.");
+      return;
+    }
+
+    const chartPath = await createPriceChart(topCar, labels, values);
+
+    const first = values[0];
+    const last = values[values.length - 1];
+    const diff = last - first;
+    let trend = "barqaror turibdi ⚖️";
+    if (diff > 0) trend = `<b>${diff.toLocaleString("en-US")}$ ga oshdi 📈</b>`;
+    else if (diff < 0) trend = `<b>${Math.abs(diff).toLocaleString("en-US")}$ ga tushdi 📉</b>`;
+
+    const caption =
+      `📊 <b>${topCar.toUpperCase()} — NARX DINAMIKASI</b>\n\n` +
+      `Oxirgi haftalarda ${topCar} ning o'rtacha bozor narxi ${trend}\n\n` +
+      `<i>Ma'lumot kanalimizdagi real e'lonlar asosida hisoblandi.</i>\n\n` +
+      `👉 O'z moshinangiz narxini bilish uchun: @arzonida_bot`;
+
+    const kb = new InlineKeyboard()
+      .url("🧮 Moshinamni baholash", "https://t.me/arzonida_bot").row()
+      .url("➕ Tekin e'lon berish", "https://t.me/arzonida_bot");
+
+    await bot.api.sendPhoto(CHANNEL_ID, new InputFile(chartPath), {
+      caption, parse_mode: "HTML", reply_markup: kb
+    });
+
+    if (fs.existsSync(chartPath)) fs.unlinkSync(chartPath);
+    console.log("✅ Narx grafigi posti yuborildi!");
+  } catch (err) {
+    console.error("Grafik post xatosi:", err);
+  }
+}
 // Raqamlarni vergul (yoki probel) bilan ajratib beruvchi funksiya
 function formatNum(value) {
   if (!value) return "0";
@@ -369,6 +502,49 @@ function formatNum(value) {
   // "en-US" mingliklarni vergul bilan (17,600) ajratadi. 
   // Agar probel bilan (17 600) ajratishni xohlasangiz "ru-RU" deb yozing.
   return Number(num).toLocaleString("en-US"); 
+}
+// ==============================================================
+// 📊 BOZOR BAHOSI BELGISINI HISOBLASH (Markaziy funksiya)
+// ==============================================================
+async function getPriceBadge(carDetails, priceRaw, year = null) {
+  try {
+    const numericPrice = parseInt(String(priceRaw).replace(/\D/g, "")) || 0;
+    if (numericPrice <= 0) return "";
+
+    // Model nomini ajratib olamiz (masalan "Chevrolet Cobalt" -> "Cobalt")
+    const parts = carDetails.trim().split(" ");
+    const modelKey = parts.length > 1 ? parts.slice(1).join(" ") : carDetails;
+
+    // Shu modeldagi boshqa faol e'lonlar o'rtacha narxini olamiz
+    let sql = "SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice, COUNT(*) as cnt FROM ads WHERE carDetails LIKE ? AND status = 'active'";
+    const params = [`%${modelKey}%`];
+
+    // Agar yil berilgan bo'lsa, aniqroq bo'lishi uchun +/- 2 yil oralig'ini olamiz
+    if (year) {
+      sql += " AND CAST(year AS UNSIGNED) BETWEEN ? AND ?";
+      params.push(parseInt(year) - 2, parseInt(year) + 2);
+    }
+
+    const [rows] = await db.execute(sql, params);
+    const avgPrice = rows[0].avgPrice;
+    const cnt = rows[0].cnt;
+
+    // Ishonchli hisob-kitob uchun kamida 3 ta o'xshash e'lon bo'lishi kerak
+    if (!avgPrice || cnt < 3) return "";
+
+    const diffPercent = Math.round(((numericPrice - avgPrice) / avgPrice) * 100);
+
+    if (diffPercent <= -5) {
+      return `\n🔥 <b>Bozordan ${Math.abs(diffPercent)}% arzon!</b>`;
+    } else if (diffPercent >= 10) {
+      return `\n📈 <b>Bozordan ${diffPercent}% qimmat</b>`;
+    } else {
+      return `\n📊 <b>Bozor narxida (o'rtacha)</b>`;
+    }
+  } catch (e) {
+    console.error("Badge hisoblashda xato:", e.message);
+    return "";
+  }
 }
 /**
  * ✅ 1. АДМИН ПАНЕЛЬ ЖАРАЁНИ (РАССЫЛКА)
@@ -415,6 +591,8 @@ const adminMenu = new InlineKeyboard()
   .text("🏆 Konkurs (Top-10)", "admin_top").row()
   .text("🚗 Kunlik TOP-5 yuborish", "admin_test_top5")
   .text("📈 Haftalik Analitika", "admin_test_analytics").row()
+  .text("🔎 Top qidiruvlar", "admin_topsearch")
+  .text("📊 Narx grafigi", "admin_chart").row()
   .text("🔔 7-kunlik UP xabar jo'natish", "admin_send_7day").row()
   .text("🛠 Boshqa buyruqlar (Qo'llanma)", "admin_help").row()
   .text("❌ Yopish", "admin_close");
@@ -465,6 +643,21 @@ bot.callbackQuery("admin_test_analytics", async (ctx) => {
   await ctx.answerCallbackQuery("⏳ Analitika hisoblanmoqda...");
   await sendWeeklyAnalytics(); // Funksiya kanalda post chiqaradi
   await ctx.reply("✅ <b>Haftalik bozor analitikasi kanalga muvaffaqiyatli yuborildi!</b>", { parse_mode: "HTML" });
+});
+// 🔎 Eng ko'p qidirilganlar reytingini yuborish
+bot.callbackQuery("admin_topsearch", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.answerCallbackQuery("⏳ Qidiruv reytingi tayyorlanmoqda...");
+  await sendTopSearched();
+  await ctx.reply("✅ <b>Eng ko'p qidirilganlar reytingi kanalga yuborildi!</b>\n\n<i>Agar post chiqmagan bo'lsa, demak hali qidiruv statistikasi yetarli emas.</i>", { parse_mode: "HTML" });
+});
+
+// 📊 Narx grafigini yuborish
+bot.callbackQuery("admin_chart", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.answerCallbackQuery("⏳ Grafik yasalmoqda...");
+  await sendPriceChartPost();
+  await ctx.reply("✅ <b>Narx grafigi kanalga yuborildi!</b>\n\n<i>Agar post chiqmagan bo'lsa, demak hali narx tarixi (bir necha haftalik ma'lumot) yetarli emas.</i>", { parse_mode: "HTML" });
 });
 bot.command("test_analytics", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
@@ -935,8 +1128,12 @@ async function searchCarConversation(conversation, ctx) {
               await safeAnswerCbq(res);
               await deleteMsgs(ctx, chatToClean);
               
-              query = model.toLowerCase();
-              break; 
+                            query = model.toLowerCase();
+              // Qidiruvni statistika uchun bazaga yozamiz
+              await conversation.external(() =>
+                db.execute("INSERT INTO search_logs (query) VALUES (?)", [query]).catch(() => {})
+              );
+              break;
           }
       }
 
@@ -1823,7 +2020,8 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
       caption += `🔄 Barter: ${ad.barter}\n`;
     }
 
-    caption += `💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
+        const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year);
+    caption += `💰 Narxi: ${formatNum(ad.price)}$${badge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
 
     const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
@@ -1942,7 +2140,8 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
       caption += `🔄 Barter: ${ad.barter}\n`;
     }
 
-    caption += `💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
+        const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year);
+    caption += `💰 Narxi: ${formatNum(ad.price)}$${badge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
     // ==============================================================================
 
@@ -3175,7 +3374,48 @@ async function sendWeeklyAnalytics() {
       console.error("Haftalik analitika xatosi:", err);
   }
 }
+// =====================================================================
+// 🔎 HAFTALIK "ENG KO'P QIDIRILGAN 5 TA MOSHINA" REYTINGI
+// =====================================================================
+async function sendTopSearched() {
+  try {
+    const [rows] = await db.execute(`
+      SELECT query, COUNT(*) as cnt
+      FROM search_logs
+      WHERE created_at >= NOW() - INTERVAL 7 DAY
+      GROUP BY query
+      ORDER BY cnt DESC
+      LIMIT 5
+    `);
 
+    // Yetarli ma'lumot bo'lmasa, post yubormaymiz
+    if (rows.length === 0) {
+      console.log("📭 Qidiruv statistikasi hali yetarli emas.");
+      return;
+    }
+
+    const medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"];
+    let text = `🔎 <b>BU HAFTA ENG KO'P IZLANGAN MOSHINALAR</b>\n`;
+    text += `━━━━━━━━━━━━━━━━━━\n\n`;
+    text += `<i>Xaridorlar shu hafta botimizda eng ko'p mana bularni qidirishdi:</i>\n\n`;
+
+    rows.forEach((r, i) => {
+      const name = r.query.charAt(0).toUpperCase() + r.query.slice(1);
+      text += `${medals[i]} <b>${name}</b> — <code>${r.cnt} marta</code>\n`;
+    });
+
+    text += `\n💡 <i>Sotuvchilar uchun: agar sizda shu ro'yxatdagi moshina bo'lsa — hoziroq e'lon bering, xaridorlar tayyor turibdi!</i>`;
+
+    const kb = new InlineKeyboard()
+      .url("➕ Tekin e'lon berish", "https://t.me/arzonida_bot").row()
+      .url("🔍 Mashina qidirish", "https://t.me/arzonida_bot");
+
+    await bot.api.sendMessage(CHANNEL_ID, text, { parse_mode: "HTML", reply_markup: kb });
+    console.log("✅ Eng ko'p qidirilganlar reytingi yuborildi!");
+  } catch (err) {
+    console.error("Qidiruv reytingi xatosi:", err);
+  }
+}
 // =====================================================================
 // 🏆 HAR KUNLIK "TOP-3" AVTO-POST TIZIMI
 // =====================================================================
@@ -3268,6 +3508,18 @@ bot.command("test_top3", async (ctx) => {
   await ctx.reply("⏳ <i>TOP-3 post tayyorlanmoqda va kanalga yuborilmoqda...</i>", { parse_mode: "HTML" });
   await sendDailyTop3();
   await ctx.reply("✅ <b>TOP-3 test muvaffaqiyatli yakunlandi! Kanalni tekshiring.</b>", { parse_mode: "HTML" });
+});
+bot.command("test_topsearch", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.reply("⏳ <i>Qidiruv reytingi tayyorlanmoqda...</i>", { parse_mode: "HTML" });
+  await sendTopSearched();
+  await ctx.reply("✅ <b>Tayyor! Kanalni tekshiring.</b>", { parse_mode: "HTML" });
+});
+bot.command("test_chart", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.reply("⏳ <i>Grafik yasalmoqda...</i>", { parse_mode: "HTML" });
+  await sendPriceChartPost();
+  await ctx.reply("✅ <b>Tayyor! Kanalni tekshiring.</b>", { parse_mode: "HTML" });
 });
 // ==============================================================
 // 🤖 AVTO-TOZALASH VA AQLLI MASLAHATCHI TIZIMI (ADMIN ishtirok etmaydi)
@@ -3466,6 +3718,8 @@ setInterval(() => {
         if (lastAnalyticsDate !== uzbDateStr) {
             lastAnalyticsDate = uzbDateStr;
             sendWeeklyAnalytics();
+            sendTopSearched();
+            sendPriceChartPost(); 
         }
     }
 
