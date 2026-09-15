@@ -235,7 +235,8 @@ bot.use(conversations());
 const mainMenu = new Keyboard()
   .text("📝 E'lon berish").text("🔍 Mashina qidirish").row()
   .text("📂 Mening e'lonlarim").text("🎁 Bepul VIP (UP)").row()
-  .text("🧮 Mashina narxini aniqlash").row().text("🔔 Obunalarim").row()
+  .text("🧮 Mashina narxini aniqlash").text("💳 Bo'lib to'lashni hisoblash").row()
+  .text("🔔 Obunalarim").row()
   // .text("🏆 150.000 so'm Yutib oling!").resized()
   .placeholder("Tugmalarni ochish uchun shu yerni bosing 🎛🎛👉");
 /**
@@ -2070,6 +2071,116 @@ async function evaluateCarConversation(conversation, ctx) {
 }
 bot.use(createConversation(evaluateCarConversation));
 /**
+ * ✅ AVTOKREDIT / BO'LIB TO'LASH KALKULYATORI
+ */
+async function creditCalcConversation(conversation, ctx) {
+  const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim", "🎁 Bepul VIP (UP)", "🧮 Mashina narxini aniqlash", "💳 Bo'lib to'lashni hisoblash", "🔔 Obunalarim"];
+
+  await ctx.reply(
+    "💳 <b>Bo'lib to'lash (Avtokredit) kalkulyatori</b>\n\n" +
+    "Moshinani bo'lib to'lab olsangiz, oyiga qancha to'lashingizni hisoblab beraman.\n\n" +
+    "1️⃣ Avval <b>moshina narxini</b> kiriting ($):\n<i>(Masalan: 12000)</i>",
+    { parse_mode: "HTML", reply_markup: mainMenu }
+  );
+
+  // 1. Moshina narxi
+  const priceRes = await conversation.waitFor("message:text");
+  if (cancelTexts.includes(priceRes.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+  const carPrice = parseInt(priceRes.message.text.replace(/\D/g, "")) || 0;
+  if (carPrice <= 0) return ctx.reply("❗️ Xato narx kiritildi. Qaytadan urinib ko'ring.", { reply_markup: mainMenu });
+
+  // 2. Boshlang'ich to'lov
+  await ctx.reply(
+    "2️⃣ <b>Boshlang'ich to'lov</b> (dastlab naqd beradigan pulingiz) qancha ($)?\n\n" +
+    "<i>Agar boshlang'ich to'lov bo'lmasa 0 deb yozing.</i>",
+    { parse_mode: "HTML" }
+  );
+  const downRes = await conversation.waitFor("message:text");
+  if (cancelTexts.includes(downRes.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+  let downPayment = parseInt(downRes.message.text.replace(/\D/g, "")) || 0;
+  if (downPayment >= carPrice) return ctx.reply("❗️ Boshlang'ich to'lov moshina narxidan kam bo'lishi kerak.", { reply_markup: mainMenu });
+
+  // 3. Necha oyga
+  await ctx.reply(
+    "3️⃣ Necha <b>oyga</b> bo'lib to'lamoqchisiz?\n<i>(Masalan: 12, 24, 36)</i>",
+    { parse_mode: "HTML" }
+  );
+  const monthRes = await conversation.waitFor("message:text");
+  if (cancelTexts.includes(monthRes.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+  const months = parseInt(monthRes.message.text.replace(/\D/g, "")) || 0;
+  if (months <= 0 || months > 120) return ctx.reply("❗️ Oy soni 1 dan 120 gacha bo'lishi kerak.", { reply_markup: mainMenu });
+
+  // 4. Foiz stavkasi
+  const kb = new InlineKeyboard()
+    .text("Foizsiz (0%)", "rate:0").row()
+    .text("Foizni o'zim kiritaman", "rate:manual");
+  await ctx.reply(
+    "4️⃣ <b>Yillik foiz stavkasi</b> necha foiz?\n\n" +
+    "<i>Agar sotuvchi foizsiz bersa «Foizsiz» ni tanlang. Bankdan olsangiz, foizni o'zingiz kiriting (masalan 24).</i>",
+    { parse_mode: "HTML", reply_markup: kb }
+  );
+
+  const rateRes = await conversation.waitFor(["callback_query:data", "message:text"]);
+  let annualRate = 0;
+
+  if (rateRes.callbackQuery?.data === "rate:0") {
+    await rateRes.answerCallbackQuery();
+    annualRate = 0;
+  } else if (rateRes.callbackQuery?.data === "rate:manual") {
+    await rateRes.answerCallbackQuery();
+    await ctx.reply("✍️ <b>Yillik foizni raqamda yozing:</b>\n<i>(Masalan: 24)</i>", { parse_mode: "HTML" });
+    const manualRate = await conversation.waitFor("message:text");
+    if (cancelTexts.includes(manualRate.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+    annualRate = parseFloat(manualRate.message.text.replace(",", ".").replace(/[^\d.]/g, "")) || 0;
+  } else {
+    // Foydalanuvchi tugma o'rniga to'g'ridan-to'g'ri raqam yozgan bo'lsa
+    if (cancelTexts.includes(rateRes.message?.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+    annualRate = parseFloat((rateRes.message?.text || "0").replace(",", ".").replace(/[^\d.]/g, "")) || 0;
+  }
+
+  // ============ HISOB-KITOB ============
+  const loanAmount = carPrice - downPayment; // kreditga olinadigan summa
+  let monthlyPayment;
+  let totalPay;
+
+  if (annualRate === 0) {
+    // Foizsiz: shunchaki teng bo'lib to'lanadi
+    monthlyPayment = loanAmount / months;
+    totalPay = loanAmount;
+  } else {
+    // Annuitet formulasi (banklardagi standart hisob)
+    const monthlyRate = annualRate / 100 / 12;
+    monthlyPayment = (loanAmount * monthlyRate * Math.pow(1 + monthlyRate, months)) / (Math.pow(1 + monthlyRate, months) - 1);
+    totalPay = monthlyPayment * months;
+  }
+
+  const overpay = totalPay - loanAmount; // umumiy ustama (foiz)
+
+  const fmt = (n) => Math.round(n).toLocaleString("en-US");
+
+  let resultText =
+    `📊 <b>HISOB-KITOB NATIJASI</b>\n\n` +
+    `🚗 Moshina narxi: <b>${fmt(carPrice)}$</b>\n` +
+    `💵 Boshlang'ich to'lov: <b>${fmt(downPayment)}$</b>\n` +
+    `🏦 Kreditga olinadigan: <b>${fmt(loanAmount)}$</b>\n` +
+    `📅 Muddat: <b>${months} oy</b>\n` +
+    `📈 Yillik foiz: <b>${annualRate}%</b>\n\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `💰 <b>OYLIK TO'LOV: ${fmt(monthlyPayment)}$</b>\n\n`;
+
+  if (annualRate > 0) {
+    resultText += `💸 Umumiy ustama (foiz): <b>${fmt(overpay)}$</b>\n`;
+    resultText += `🧾 Jami to'lanadigan summa: <b>${fmt(totalPay + downPayment)}$</b>\n\n`;
+  } else {
+    resultText += `✅ <b>Foizsiz!</b> Ortiqcha to'lov yo'q.\n\n`;
+  }
+
+  resultText += `<i>⚠️ Bu taxminiy hisob. Aniq shartlarni bank yoki sotuvchi bilan aniqlashtiring.</i>`;
+
+  await ctx.reply(resultText, { parse_mode: "HTML", reply_markup: mainMenu });
+}
+bot.use(createConversation(creditCalcConversation));
+/**
  * ✅ АДМИН ТАСДИҚЛАШИ (Каналга юбориш)
  */
 bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
@@ -2851,6 +2962,10 @@ bot.hears("🎁 Bepul VIP (UP)", async (ctx) => {
 bot.hears("🧮 Mashina narxini aniqlash", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
   await ctx.conversation.enter("evaluateCarConversation");
+});
+bot.hears("💳 Bo'lib to'lashni hisoblash", async (ctx) => {
+  if (!(await isSubscribed(ctx))) return askForSub(ctx);
+  await ctx.conversation.enter("creditCalcConversation");
 });
 // =========================================================================
 // 🏆 150,000 SO'MLIK KONKURS TIZIMI
