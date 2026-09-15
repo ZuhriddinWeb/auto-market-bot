@@ -7,7 +7,8 @@ const axios = require("axios");
 const fs = require("fs");
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const path = require("path");
-
+process.env.FONTCONFIG_PATH = path.join(__dirname, "fonts");
+process.env.FONTCONFIG_FILE = path.join(__dirname, "fonts", "fonts.conf");
 const bot = new Bot(process.env.BOT_TOKEN);
 const ADMIN_ID = Number(process.env.ADMIN_ID);
 const CHANNEL_ID = process.env.CHANNEL_ID.startsWith("@")
@@ -416,38 +417,28 @@ async function createPriceChart(title, labels, values) {
   const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
   const areaPath = `${linePath} L ${points[points.length - 1].x} ${padding + chartH} L ${points[0].x} ${padding + chartH} Z`;
 
+  const FONT = "DejaVu Sans, Arial, sans-serif";
+
   const dots = points.map(p =>
     `<circle cx="${p.x}" cy="${p.y}" r="8" fill="#00b894" stroke="#fff" stroke-width="3"/>
-     <text x="${p.x}" y="${p.y - 20}" font-size="26" font-weight="bold" fill="#2d3436" text-anchor="middle">$${p.val.toLocaleString("en-US")}</text>`
+     <text x="${p.x}" y="${p.y - 20}" font-family="${FONT}" font-size="26" font-weight="bold" fill="#2d3436" text-anchor="middle">$${p.val.toLocaleString("en-US")}</text>`
   ).join("");
 
   const xLabels = points.map(p =>
-    `<text x="${p.x}" y="${height - padding + 40}" font-size="24" fill="#636e72" text-anchor="middle">${p.label}</text>`
+    `<text x="${p.x}" y="${height - padding + 40}" font-family="${FONT}" font-size="24" fill="#636e72" text-anchor="middle">${p.label}</text>`
   ).join("");
-
-  const fontB64 = getFontBase64();
-  const fontStyle = fontB64
-    ? `<style>
-         @font-face {
-           font-family: 'ChartFont';
-           src: url('data:font/ttf;base64,${fontB64}') format('truetype');
-         }
-         text { font-family: 'ChartFont'; }
-       </style>`
-    : `<style>text { font-family: sans-serif; }</style>`;
 
   const svg = `
   <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
     <defs>
-      ${fontStyle}
       <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="#00b894" stop-opacity="0.35"/>
         <stop offset="100%" stop-color="#00b894" stop-opacity="0"/>
       </linearGradient>
     </defs>
     <rect width="${width}" height="${height}" fill="#ffffff"/>
-    <text x="${width / 2}" y="55" font-size="40" font-weight="bold" fill="#2d3436" text-anchor="middle">${title}</text>
-    <text x="${width / 2}" y="95" font-size="24" fill="#00b894" text-anchor="middle">@engarzonidamoshina | Narx dinamikasi</text>
+    <text x="${width / 2}" y="55" font-family="${FONT}" font-size="40" font-weight="bold" fill="#2d3436" text-anchor="middle">${title}</text>
+    <text x="${width / 2}" y="95" font-family="${FONT}" font-size="24" fill="#00b894" text-anchor="middle">@engarzonidamoshina | Narx dinamikasi</text>
     <path d="${areaPath}" fill="url(#grad)"/>
     <path d="${linePath}" fill="none" stroke="#00b894" stroke-width="5" stroke-linejoin="round"/>
     ${dots}
