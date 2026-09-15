@@ -305,7 +305,7 @@ async function deleteMsgs(ctx, msgIds) {
 // Watermark kesh
 let cachedWatermarkText = null; 
 
-async function createCollage(photoUrls) {
+async function createCollage(photoUrls, badgeInfo = null) {
   const buffers = await Promise.all(
     photoUrls.map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
   );
@@ -357,7 +357,24 @@ async function createCollage(photoUrls) {
   if (cachedWatermarkText) {
     composites.push({ input: cachedWatermarkText, top: rectY, left: 0 });
   }
+    // ================= NARX LENTASI (BURCHAKKA) =================
+  if (badgeInfo && badgeInfo.text) {
+    const FONT = "DejaVu Sans, Arial, sans-serif";
+    // Matn uzunligiga qarab lenta kengligini hisoblaymiz (har harf ~22px)
+    const textLen = badgeInfo.text.length;
+    const bandWidth = Math.min(textLen * 22 + 60, canvasWidth); // juda uzun bo'lmasligi uchun cheklaymiz
+    const bandHeight = 70;
+    const bandTop = 30; // yuqoridan 30px past
 
+    const badgeSvg = `
+      <svg width="${canvasWidth}" height="${canvasHeight}" xmlns="http://www.w3.org/2000/svg">
+        <rect x="${canvasWidth - bandWidth}" y="${bandTop}" width="${bandWidth}" height="${bandHeight}" fill="${badgeInfo.color}" rx="8" ry="8"/>
+        <text x="${canvasWidth - bandWidth / 2}" y="${bandTop + bandHeight / 2 + 12}" font-family="${FONT}" font-size="34" font-weight="bold" fill="#ffffff" text-anchor="middle">${badgeInfo.text}</text>
+      </svg>`;
+
+    composites.push({ input: Buffer.from(badgeSvg), top: 0, left: 0 });
+  }
+  // ===========================================================
   const collagePath = path.join(__dirname, `collage_${Date.now()}.jpg`);
   
   await sharp({
@@ -369,15 +386,7 @@ async function createCollage(photoUrls) {
 
   return collagePath;
 }
-// ==============================================================
-// 📈 NARX DINAMIKASI GRAFIGINI RASM QILIB YASASH
-// ==============================================================
-// ==============================================================
-// 📈 NARX DINAMIKASI GRAFIGINI RASM QILIB YASASH
-// ==============================================================
-// ==============================================================
-// 📈 NARX DINAMIKASI GRAFIGINI RASM QILIB YASASH
-// ==============================================================
+
 let cachedFontBase64 = null;
 
 function getFontBase64() {
@@ -570,6 +579,49 @@ async function getPriceBadge(carDetails, priceRaw, year = null) {
   } catch (e) {
     console.error("Badge hisoblashda xato:", e.message);
     return "";
+  }
+}
+// ==============================================================
+// 🎨 RASM UCHUN NARX LENTASI MA'LUMOTINI HISOBLASH
+// ==============================================================
+async function getPriceBadgeForImage(carDetails, priceRaw, year = null) {
+  try {
+    const numericPrice = parseInt(String(priceRaw).replace(/\D/g, "")) || 0;
+    if (numericPrice <= 0) return null;
+
+    const parts = carDetails.trim().split(" ");
+    const modelKey = parts.length > 1 ? parts.slice(1).join(" ") : carDetails;
+
+    let sql = "SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice, COUNT(*) as cnt FROM ads WHERE carDetails LIKE ? AND status = 'active'";
+    const params = [`%${modelKey}%`];
+
+    if (year) {
+      sql += " AND CAST(year AS UNSIGNED) BETWEEN ? AND ?";
+      params.push(parseInt(year) - 2, parseInt(year) + 2);
+    }
+
+    const [rows] = await db.execute(sql, params);
+    const avgPrice = rows[0].avgPrice;
+    const cnt = rows[0].cnt;
+
+    // Ishonchli hisob uchun kamida 3 ta o'xshash e'lon kerak
+    if (!avgPrice || cnt < 3) return null;
+
+    const diffPercent = Math.round(((numericPrice - avgPrice) / avgPrice) * 100);
+
+    if (diffPercent <= -5) {
+      // Yashil lenta — arzon
+      return { text: `🔥 BOZORDAN ${Math.abs(diffPercent)}% ARZON`, color: "#27ae60" };
+    } else if (diffPercent >= 10) {
+      // Qizil lenta — qimmat (xohlasangiz buni ko'rsatmasa ham bo'ladi)
+      return { text: `BOZORDAN ${diffPercent}% QIMMAT`, color: "#e74c3c" };
+    } else {
+      // Kulrang lenta — o'rtacha
+      return { text: `BOZOR NARXIDA`, color: "#7f8c8d" };
+    }
+  } catch (e) {
+    console.error("Rasm lentasi hisobida xato:", e.message);
+    return null;
   }
 }
 /**
@@ -2032,7 +2084,8 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
         return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
       })
     );
-    const collagePath = await createCollage(photoUrls);
+        const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year);
+    const collagePath = await createCollage(photoUrls, badgeInfo);
 
     let caption =
       `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
@@ -2150,7 +2203,8 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
         return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
       })
     );
-    const collagePath = await createCollage(photoUrls);
+        const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year);
+    const collagePath = await createCollage(photoUrls, badgeInfo);
 
     // ================= MATN TEPASIGA QAYNOQ NARX QO'SHILDI =================
     let caption =
