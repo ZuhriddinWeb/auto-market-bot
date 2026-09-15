@@ -374,18 +374,24 @@ async function createCollage(photoUrls) {
 // ==============================================================
 // 📈 NARX DINAMIKASI GRAFIGINI RASM QILIB YASASH
 // ==============================================================
-let cachedFontBase64 = null; // Shriftni bir marta o'qib, keshda saqlaymiz
+// ==============================================================
+// 📈 NARX DINAMIKASI GRAFIGINI RASM QILIB YASASH
+// ==============================================================
+let cachedFontBase64 = null;
 
 function getFontBase64() {
-  if (cachedFontBase64) return cachedFontBase64;
+  if (cachedFontBase64 !== null) return cachedFontBase64;
   try {
     const fontPath = path.join(__dirname, "fonts", "ChartFont.ttf");
     const fontData = fs.readFileSync(fontPath);
     cachedFontBase64 = fontData.toString("base64");
+    console.log("✅ Shrift muvaffaqiyatli o'qildi. Hajmi:", fontData.length, "bayt");
     return cachedFontBase64;
   } catch (e) {
-    console.error("⚠️ Shrift fayli topilmadi (fonts/ChartFont.ttf):", e.message);
-    return null;
+    console.error("⚠️ SHRIFT TOPILMADI! Yo'l:", path.join(__dirname, "fonts", "ChartFont.ttf"));
+    console.error("Xato:", e.message);
+    cachedFontBase64 = ""; // qayta urinmaslik uchun
+    return "";
   }
 }
 
@@ -412,14 +418,13 @@ async function createPriceChart(title, labels, values) {
 
   const dots = points.map(p =>
     `<circle cx="${p.x}" cy="${p.y}" r="8" fill="#00b894" stroke="#fff" stroke-width="3"/>
-     <text x="${p.x}" y="${p.y - 20}" font-family="ChartFont" font-size="26" font-weight="bold" fill="#2d3436" text-anchor="middle">$${p.val.toLocaleString("en-US")}</text>`
+     <text x="${p.x}" y="${p.y - 20}" font-size="26" font-weight="bold" fill="#2d3436" text-anchor="middle">$${p.val.toLocaleString("en-US")}</text>`
   ).join("");
 
   const xLabels = points.map(p =>
-    `<text x="${p.x}" y="${height - padding + 40}" font-family="ChartFont" font-size="24" fill="#636e72" text-anchor="middle">${p.label}</text>`
+    `<text x="${p.x}" y="${height - padding + 40}" font-size="24" fill="#636e72" text-anchor="middle">${p.label}</text>`
   ).join("");
 
-  // Shriftni SVG ichiga base64 orqali singdiramiz
   const fontB64 = getFontBase64();
   const fontStyle = fontB64
     ? `<style>
@@ -427,9 +432,9 @@ async function createPriceChart(title, labels, values) {
            font-family: 'ChartFont';
            src: url('data:font/ttf;base64,${fontB64}') format('truetype');
          }
-         text { font-family: 'ChartFont', Arial, sans-serif; }
+         text { font-family: 'ChartFont'; }
        </style>`
-    : `<style>text { font-family: Arial, sans-serif; }</style>`;
+    : `<style>text { font-family: sans-serif; }</style>`;
 
   const svg = `
   <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
@@ -441,8 +446,8 @@ async function createPriceChart(title, labels, values) {
       </linearGradient>
     </defs>
     <rect width="${width}" height="${height}" fill="#ffffff"/>
-    <text x="${width / 2}" y="55" font-family="ChartFont" font-size="40" font-weight="bold" fill="#2d3436" text-anchor="middle">${title}</text>
-    <text x="${width / 2}" y="95" font-family="ChartFont" font-size="24" fill="#00b894" text-anchor="middle">@engarzonidamoshina | Narx dinamikasi</text>
+    <text x="${width / 2}" y="55" font-size="40" font-weight="bold" fill="#2d3436" text-anchor="middle">${title}</text>
+    <text x="${width / 2}" y="95" font-size="24" fill="#00b894" text-anchor="middle">@engarzonidamoshina | Narx dinamikasi</text>
     <path d="${areaPath}" fill="url(#grad)"/>
     <path d="${linePath}" fill="none" stroke="#00b894" stroke-width="5" stroke-linejoin="round"/>
     ${dots}
