@@ -115,6 +115,8 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE users ADD COLUMN contest_score INT DEFAULT 0",
       "ALTER TABLE users ADD COLUMN referred_by VARCHAR(50) DEFAULT NULL",
       "ALTER TABLE users ADD COLUMN is_referral_counted INT DEFAULT 0",
+      "ALTER TABLE ads ADD COLUMN nasiya VARCHAR(255) DEFAULT NULL",
+      "ALTER TABLE ad_edits ADD COLUMN nasiya VARCHAR(255) DEFAULT NULL",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -1352,6 +1354,7 @@ async function createAdConversation(conversation, ctx) {
       ad.photos = existingAd.photoId.split(",");
       ad.history = existingAd.history;
       ad.barter = existingAd.barter;
+       ad.nasiya = existingAd.nasiya;
       ad.videoId = existingAd.videoId;
       ad.urgent = false; // Tahrirlashda avvaliga false bo'ladi
       
@@ -1655,33 +1658,74 @@ else if (step === "MODEL") {
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
         
-        // ================= O'ZGARISH: URGENT qadamiga o'tamiz =================
-        step = isEditing ? "PREVIEW" : "URGENT"; 
+        // ================= O'ZGARISH: NASIYA qadamiga o'tamiz =================
+        step = isEditing ? "PREVIEW" : "NASIYA"; 
       }
 
-      // ================= YANGI QADAM: URGENT (SHOSHILINCH) =================
-      else if (step === "URGENT") {
+      // ================= YANGI QADAM: NASIYA (BO'LIB TO'LASH) =================
+      else if (step === "NASIYA") {
         const kb = new InlineKeyboard()
-          .text("🚨 Ha, shoshilinch", "urg:yes")
-          .text("Oddiy sotuv", "urg:no").row()
+          .text("✅ Ha, nasiyaga beraman", "nas:yes")
+          .text("Yo'q, faqat naqd", "nas:no").row()
           .text("🔙 Orqaga", "back_BARTER").text("❌ Bekor", "cancel_ad");
-          
-        msgPrompt = await ctx.reply("⚡️ <b>Sotuv shoshilinchmi?</b>\n\n<i>Agar moshinani bozor narxidan arzonroq va tezroq sotmoqchi bo'lsangiz «Ha, shoshilinch» ni tanlang. E'loningiz kanalga maxsus maqomda joylanadi!</i>", { reply_markup: kb, parse_mode: "HTML" });
+
+        msgPrompt = await ctx.reply(
+          "💳 <b>Moshinani nasiyaga (bo'lib to'lash) berasizmi?</b>\n\n" +
+          "<i>Agar xaridor pulni bo'lib-bo'lib to'lashiga rozi bo'lsangiz «Ha» ni tanlang. " +
+          "Bu e'loningizga xaridorlarni ko'proq jalb qiladi!</i>",
+          { reply_markup: kb, parse_mode: "HTML" }
+        );
         chatToClean.push(msgPrompt.message_id);
-        
+
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
-        
+
         if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_BARTER") { step = "BARTER"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
-        ad.urgent = res.callbackQuery?.data === "urg:yes";
-        await safeAnswerCbq(res);
-        await deleteMsgs(ctx, chatToClean);
-        step = isEditing ? "PREVIEW" : "MEDIA";
+        // Agar "Ha" tanlansa, qo'shimcha shartlarni so'raymiz (ixtiyoriy)
+        if (res.callbackQuery?.data === "nas:yes") {
+          await safeAnswerCbq(res);
+          await deleteMsgs(ctx, chatToClean);
+
+          const kb2 = new InlineKeyboard()
+            .text("Shartsiz (kelishilади)", "nasterm:skip").row()
+            .text("🔙 Orqaga", "back_BARTER").text("❌ Bekor", "cancel_ad");
+
+          msgPrompt = await ctx.reply(
+            "📝 <b>Nasiya shartlaringizni yozing:</b>\n\n" +
+            "<i>Masalan: «50% oldindan, qolgani 6 oyga bo'lib» yoki «Boshlang'ich 5000$, oyiga 500$». " +
+            "Agar shartni keyin kelishmoqchi bo'lsangiz, pastdagi tugmani bosing.</i>",
+            { reply_markup: kb2, parse_mode: "HTML" }
+          );
+          chatToClean.push(msgPrompt.message_id);
+
+          const res2 = await conversation.waitFor(["callback_query:data", "message:text"]);
+          if (res2.message) chatToClean.push(res2.message.message_id);
+
+          if (res2.message?.text && cancelTexts.includes(res2.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+          if (res2.callbackQuery?.data === "cancel_ad") break;
+          if (res2.callbackQuery?.data === "back_BARTER") { step = "BARTER"; await safeAnswerCbq(res2); await deleteMsgs(ctx, chatToClean); continue; }
+
+          if (res2.callbackQuery?.data === "nasterm:skip") {
+            ad.nasiya = "Bor (shartlari kelishiladi)";
+          } else {
+            ad.nasiya = res2.message.text;
+          }
+          await safeAnswerCbq(res2);
+          await deleteMsgs(ctx, chatToClean);
+        } else {
+          // "Yo'q" tanlandi
+          ad.nasiya = "Yo'q";
+          await safeAnswerCbq(res);
+          await deleteMsgs(ctx, chatToClean);
+        }
+
+        step = isEditing ? "PREVIEW" : "URGENT";
       }
+      // =========================================================================
       // =========================================================================
 
       else if (step === "MEDIA") {
@@ -1779,7 +1823,7 @@ else if (step === "PREVIEW") {
 
         if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 <b>Tarixi:</b> ${ad.history}\n`;
         if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 <b>Barter:</b> ${ad.barter}\n`;
-
+                if (ad.nasiya && ad.nasiya !== "Yo'q") caption += `💳 <b>Nasiya:</b> ${ad.nasiya}\n`;
         caption += `💰 <b>Narxi:</b> ${formatNum(ad.price)}$${priceBadge}\n☎️ <b>Tel:</b> +${ad.phone}\n🚩 <b>Viloyat:</b> ${ad.region}`;
         if (ad.videoId) caption += `\n🎥 <i>(Ushbu e'londa video-obzor mavjud!)</i>`;
 
@@ -1830,8 +1874,8 @@ if (action === "submit_ad") {
             let urgentTextEdit = ad.urgent ? "\n\n🚨 <b>Diqqat: Foydalanuvchi buni SHOSHILINCH sotmoqchi!</b>" : "";
             
             const [result] = await db.execute(
-              `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-              [updateAdId, ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.videoId || null]
+              `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+              [updateAdId, ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.videoId || null]
             );
             const editId = result.insertId; 
             
@@ -1854,8 +1898,8 @@ if (action === "submit_ad") {
 
           // 1. Avval bazaga saqlaymiz va adId ni aniqlaymiz
           const [result] = await db.execute(
-            `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.videoId || null]
+            `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.videoId || null]
           );
           const adId = result.insertId; 
 
@@ -2236,8 +2280,11 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
     if (ad.history && ad.history !== "Ko'rsatilmagan") {
       caption += `🛠 Tarixi: ${ad.history}\n`;
     }
-    if (ad.barter && ad.barter !== "Yo'q") {
+if (ad.barter && ad.barter !== "Yo'q") {
       caption += `🔄 Barter: ${ad.barter}\n`;
+    }
+    if (ad.nasiya && ad.nasiya !== "Yo'q") {
+      caption += `💳 Nasiya (bo'lib to'lash): ${ad.nasiya}\n`;
     }
 
         const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year);
@@ -2359,6 +2406,9 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
     }
     if (ad.barter && ad.barter !== "Yo'q") {
       caption += `🔄 Barter: ${ad.barter}\n`;
+    }
+    if (ad.nasiya && ad.nasiya !== "Yo'q") {
+      caption += `💳 Nasiya (bo'lib to'lash): ${ad.nasiya}\n`;
     }
 
         const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year);
@@ -3341,7 +3391,9 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
   if (editData.barter && editData.barter !== "Йўқ" && editData.barter !== "Yo'q") {
     newCaption += `🔄 Barter: ${editData.barter}\n`;
   }
-
+    if (editData.nasiya && editData.nasiya !== "Yo'q") {
+    newCaption += `💳 Nasiya (bo'lib to'lash): ${editData.nasiya}\n`;
+  }
   newCaption += `💰 Narxi: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n` +
     `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
 
