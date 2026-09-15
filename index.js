@@ -235,7 +235,8 @@ bot.use(conversations());
 const mainMenu = new Keyboard()
   .text("📝 E'lon berish").text("🔍 Mashina qidirish").row()
   .text("📂 Mening e'lonlarim").text("🎁 Bepul VIP (UP)").row()
-  .text("🧮 Mashina narxini aniqlash").text("💳 Bo'lib to'lashni hisoblash").row()
+  .text("🧮 Mashina narxini aniqlash").row()
+  .text("💳 Bo'lib to'lashni hisoblash").row()
   .text("🔔 Obunalarim").row()
   // .text("🏆 150.000 so'm Yutib oling!").resized()
   .placeholder("Tugmalarni ochish uchun shu yerni bosing 🎛🎛👉");
@@ -2073,13 +2074,38 @@ bot.use(createConversation(evaluateCarConversation));
 /**
  * ✅ AVTOKREDIT / BO'LIB TO'LASH KALKULYATORI
  */
+/**
+ * ✅ AVTOKREDIT / BO'LIB TO'LASH KALKULYATORI (2 VALYUTA: $ va so'm)
+ */
 async function creditCalcConversation(conversation, ctx) {
   const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim", "🎁 Bepul VIP (UP)", "🧮 Mashina narxini aniqlash", "💳 Bo'lib to'lashni hisoblash", "🔔 Obunalarim"];
 
+  // ============ 0. VALYUTANI TANLASH ============
+  const curKb = new InlineKeyboard()
+    .text("💵 Dollar ($)", "cur:usd")
+    .text("🇺🇿 So'm (UZS)", "cur:uzs");
   await ctx.reply(
     "💳 <b>Bo'lib to'lash (Avtokredit) kalkulyatori</b>\n\n" +
-    "Moshinani bo'lib to'lab olsangiz, oyiga qancha to'lashingizni hisoblab beraman.\n\n" +
-    "1️⃣ Avval <b>moshina narxini</b> kiriting ($):\n<i>(Masalan: 12000)</i>",
+    "Avval qaysi <b>valyutada</b> hisoblaymiz?",
+    { parse_mode: "HTML", reply_markup: curKb }
+  );
+
+  const curRes = await conversation.waitFor(["callback_query:data", "message:text"]);
+  if (curRes.message?.text && cancelTexts.includes(curRes.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+
+  let currency = "usd"; // standart
+  if (curRes.callbackQuery?.data === "cur:uzs") currency = "uzs";
+  if (curRes.callbackQuery) await curRes.answerCallbackQuery();
+
+  // Valyutaga qarab belgi va misollarni tayyorlab qo'yamiz
+  const isUzs = currency === "uzs";
+  const sign = isUzs ? "so'm" : "$";
+  const examplePrice = isUzs ? "150 000 000" : "12000";
+  const exampleDown = isUzs ? "30 000 000" : "2000";
+
+  await ctx.reply(
+    `✅ Hisob-kitob <b>${isUzs ? "so'mda 🇺🇿" : "dollarda 💵"}</b> bo'ladi.\n\n` +
+    `1️⃣ Endi <b>moshina narxini</b> kiriting (${sign}):\n<i>(Masalan: ${examplePrice})</i>`,
     { parse_mode: "HTML", reply_markup: mainMenu }
   );
 
@@ -2091,8 +2117,8 @@ async function creditCalcConversation(conversation, ctx) {
 
   // 2. Boshlang'ich to'lov
   await ctx.reply(
-    "2️⃣ <b>Boshlang'ich to'lov</b> (dastlab naqd beradigan pulingiz) qancha ($)?\n\n" +
-    "<i>Agar boshlang'ich to'lov bo'lmasa 0 deb yozing.</i>",
+    `2️⃣ <b>Boshlang'ich to'lov</b> (dastlab naqd beradigan pulingiz) qancha (${sign})?\n\n` +
+    `<i>Agar boshlang'ich to'lov bo'lmasa 0 deb yozing. Masalan: ${exampleDown}</i>`,
     { parse_mode: "HTML" }
   );
   const downRes = await conversation.waitFor("message:text");
@@ -2133,44 +2159,47 @@ async function creditCalcConversation(conversation, ctx) {
     if (cancelTexts.includes(manualRate.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
     annualRate = parseFloat(manualRate.message.text.replace(",", ".").replace(/[^\d.]/g, "")) || 0;
   } else {
-    // Foydalanuvchi tugma o'rniga to'g'ridan-to'g'ri raqam yozgan bo'lsa
     if (cancelTexts.includes(rateRes.message?.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
     annualRate = parseFloat((rateRes.message?.text || "0").replace(",", ".").replace(/[^\d.]/g, "")) || 0;
   }
 
   // ============ HISOB-KITOB ============
-  const loanAmount = carPrice - downPayment; // kreditga olinadigan summa
+  const loanAmount = carPrice - downPayment;
   let monthlyPayment;
   let totalPay;
 
   if (annualRate === 0) {
-    // Foizsiz: shunchaki teng bo'lib to'lanadi
     monthlyPayment = loanAmount / months;
     totalPay = loanAmount;
   } else {
-    // Annuitet formulasi (banklardagi standart hisob)
     const monthlyRate = annualRate / 100 / 12;
     monthlyPayment = (loanAmount * monthlyRate * Math.pow(1 + monthlyRate, months)) / (Math.pow(1 + monthlyRate, months) - 1);
     totalPay = monthlyPayment * months;
   }
 
-  const overpay = totalPay - loanAmount; // umumiy ustama (foiz)
+  const overpay = totalPay - loanAmount;
 
-  const fmt = (n) => Math.round(n).toLocaleString("en-US");
+  // Valyutaga qarab formatlash: dollar -> vergul (12,000), so'm -> probel (12 000 000)
+  const fmt = (n) => {
+    const rounded = Math.round(n);
+    return isUzs
+      ? rounded.toLocaleString("ru-RU")   // 150 000 000
+      : rounded.toLocaleString("en-US");  // 150,000,000
+  };
 
   let resultText =
-    `📊 <b>HISOB-KITOB NATIJASI</b>\n\n` +
-    `🚗 Moshina narxi: <b>${fmt(carPrice)}$</b>\n` +
-    `💵 Boshlang'ich to'lov: <b>${fmt(downPayment)}$</b>\n` +
-    `🏦 Kreditga olinadigan: <b>${fmt(loanAmount)}$</b>\n` +
+    `📊 <b>HISOB-KITOB NATIJASI</b> ${isUzs ? "🇺🇿" : "💵"}\n\n` +
+    `🚗 Moshina narxi: <b>${fmt(carPrice)} ${sign}</b>\n` +
+    `💵 Boshlang'ich to'lov: <b>${fmt(downPayment)} ${sign}</b>\n` +
+    `🏦 Kreditga olinadigan: <b>${fmt(loanAmount)} ${sign}</b>\n` +
     `📅 Muddat: <b>${months} oy</b>\n` +
     `📈 Yillik foiz: <b>${annualRate}%</b>\n\n` +
     `━━━━━━━━━━━━━━━\n\n` +
-    `💰 <b>OYLIK TO'LOV: ${fmt(monthlyPayment)}$</b>\n\n`;
+    `💰 <b>OYLIK TO'LOV: ${fmt(monthlyPayment)} ${sign}</b>\n\n`;
 
   if (annualRate > 0) {
-    resultText += `💸 Umumiy ustama (foiz): <b>${fmt(overpay)}$</b>\n`;
-    resultText += `🧾 Jami to'lanadigan summa: <b>${fmt(totalPay + downPayment)}$</b>\n\n`;
+    resultText += `💸 Umumiy ustama (foiz): <b>${fmt(overpay)} ${sign}</b>\n`;
+    resultText += `🧾 Jami to'lanadigan summa: <b>${fmt(totalPay + downPayment)} ${sign}</b>\n\n`;
   } else {
     resultText += `✅ <b>Foizsiz!</b> Ortiqcha to'lov yo'q.\n\n`;
   }
