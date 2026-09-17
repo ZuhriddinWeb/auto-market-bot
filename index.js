@@ -3747,18 +3747,18 @@ async function sendDailyTop3() {
     const dateOptions = { day: 'numeric', month: 'long', timeZone: 'Asia/Tashkent' };
     const todayStr = new Intl.DateTimeFormat('uz-UZ', dateOptions).format(new Date());
 
-    const top5Ads = allAds.slice(0, 5);
-    const otherAds = allAds.slice(5);
+    const top5Ads = allAds.slice(0, 3);
+    const otherAds = allAds.slice(3);
     const channelUsername = process.env.CHANNEL_ID.replace("@", "");
 
     // 🌟 Sarlavha qismi (Zamonaviy ajratgich bilan)
     let text = `🗓 <b>${todayStr.toUpperCase()} | KUNLIK AVTO-BOZOR</b>\n`;
     text += `━━━━━━━━━━━━━━━━━━\n\n`;
     
-    text += `🏆 <b>ENG ARZON 5 TA TAKLIF:</b>\n\n`;
+    text += `🏆 <b>ENG ARZON 3 TA TAKLIF:</b>\n\n`;
     
     // 🥇 Top-5 lik (Narxlar code formatida, ya'ni kulrang fonda chiqadi)
-    const topEmojis = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"];
+    const topEmojis = ["🥇", "🥈", "🥉"];
     top5Ads.forEach((ad, index) => {
       const postLink = `https://t.me/${channelUsername}/${ad.channelMsgId}`;
       text += `${topEmojis[index]} <b><a href="${postLink}">${ad.carDetails.toUpperCase()}</a></b>\n`;
