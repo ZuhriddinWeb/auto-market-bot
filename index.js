@@ -4013,7 +4013,7 @@ setInterval(() => {
     const isSunday = dayString === 'Sunday';
 
     // 1. HAFTALIK ANALITIKA (Yakshanba kuni roppa-rosa soat 05:xx da)
-    if (isSunday && uzbHour === 5) {
+    if (isSunday && uzbHour === 10) {
         if (lastAnalyticsDate !== uzbDateStr) {
             lastAnalyticsDate = uzbDateStr;
             sendWeeklyAnalytics();
