@@ -2698,11 +2698,37 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
         await bot.api.sendMessage(ad.userId, `🎉 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz kanalda "SOTILDI" deb belgilandi.`, { parse_mode: "HTML" });
 
         // Avtomatik tabriknoma (Reklama) asosiy kanalga
+               // Moshina necha kunda sotilganini hisoblaymiz
+                // Moshina necha kunda sotilganini hisoblaymiz
+        let daysText = "o'z xaridorini topdi";
+        try {
+            const createdDate = new Date(ad.created_at);
+            const now = new Date();
+            const diffDays = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));
+
+            // FAQAT tez sotilgan (7 kungacha) moshinalar uchun kun sonini ko'rsatamiz.
+            // Uzoq turganlar uchun kun yozilmaydi (teskari taassurot bo'lmasligi uchun).
+            if (diffDays <= 0) {
+                daysText = "atigi <b>bugun</b> joylanib, bugunoq o'z xaridorini topdi";
+            } else if (diffDays === 1) {
+                daysText = "atigi <b>1 kunda</b> o'z xaridorini topdi";
+            } else if (diffDays <= 7) {
+                daysText = `atigi <b>${diffDays} kunda</b> o'z xaridorini topdi`;
+            } else {
+                // 7 kundan ko'p — son yozilmaydi, shunchaki "sotildi"
+                daysText = "o'z xaridorini topdi";
+            }
+        } catch (e) {
+            daysText = "o'z xaridorini topdi";
+        }
+        // Avtomatik tabriknoma (Reklama) asosiy kanalga
+               // Avtomatik tabriknoma (Reklama) asosiy kanalga
         const congratsText = 
-          `🎉 <b>TABRIKLAYMIZ!</b>\n\n` +
-          `Navbatdagi avtomobil ham kanalimiz va botimiz orqali juda tez o'z xaridorini topdi! Sotuvchi va oluvchiga barakasini bersin. 🤝\n\n` +
-          `🚘 <i>Siz ham moshinangizni qisqa fursatda, maklerlarsiz va mutlaqo BEPUL sotmoqchimisiz?</i>\n\n` +
-          `👇 <b>Unda hoziroq botimiz orqali e'lon joylang:</b>\n` +
+          `🎉 <b>YANA BITTA MOSHINA SOTILDI!</b>\n\n` +
+          `🚗 <b>${ad.carDetails}</b> — ${daysText}! 🤝\n\n` +
+          `Sotuvchini tabriklaymiz! Bizning botimiz orqali moshinalar <b>maklersiz, komissiyasiz va tez</b> sotilmoqda.\n\n` +
+          `🚘 <b>Sizda ham sotiladigan moshina bormi?</b>\n` +
+          `Uni bepul joylang — minglab xaridor kutmoqda! 👇\n` +
           `🤖 @arzonida_bot`;
 
         await bot.api.sendMessage(CHANNEL_ID, congratsText, {
@@ -3718,16 +3744,6 @@ async function sendTopSearched() {
 // =====================================================================
 // 🏆 HAR KUNLIK "TOP-3" AVTO-POST TIZIMI
 // =====================================================================
-// =====================================================================
-// 🏆 HAR KUNLIK "TOP-3" AVTO-POST TIZIMI
-// =====================================================================
-
-// =====================================================================
-// 🏆 HAR KUNLIK "ENG ARZON TOP-5" VA QOLGAN E'LONLAR (PRO DIZAYN)
-// =====================================================================
-// =====================================================================
-// 🏆 HAR KUNLIK "ENG ARZON TOP-5" VA QOLGAN E'LONLAR (PREMIUM DIZAYN)
-// =====================================================================
 async function sendDailyTop3() { 
   try {
     const [allAds] = await db.execute(`
@@ -3797,7 +3813,45 @@ async function sendDailyTop3() {
     console.error("Kunlik post yuborishda xatolik:", err);
   }
 }
+// =====================================================================
+// 📣 AVTOMATIK "E'LON BERING" CHAQIRIQ POSTI (Sotuvchilarni jalb qilish)
+// =====================================================================
+async function sendSellCallPost() {
+  try {
+    // Bir necha xil matn — bot har safar tasodifiy bittasini tanlaydi
+    const messages = [
+      `🚗 <b>Moshinangizni sotmoqchimisiz?</b>\n\n` +
+      `Bizning bot orqali <b>3 daqiqada</b> bepul e'lon bering va to'g'ridan-to'g'ri xaridor toping!\n\n` +
+      `✅ Maklersiz\n✅ Komissiyasiz\n✅ Mutlaqo BEPUL\n\n` +
+      `Minglab xaridor sizning moshinangizni kutmoqda 👇`,
 
+      `💰 <b>Eski moshinangiz turibdimi?</b>\n\n` +
+      `Uni bu yerda soting! Rasmini yuboring, bot o'zi chiroyli e'lon yasab, kanalga joylaydi.\n\n` +
+      `🔥 Xaridorlar har kuni shu yerdan moshina qidirmoqda. Navbatingizni o'tkazib yubormang! 👇`,
+
+      `📢 <b>SOTUVCHILAR UCHUN!</b>\n\n` +
+      `Moshinangizni tez va bepul sotishning eng oson yo'li — bizning botimiz.\n\n` +
+      `Bir necha bosishда e'loningiz tayyor. Vositachilarга ortiqcha pul to'lamang!\n\n` +
+      `👇 Hoziroq sinab ko'ring:`,
+
+      `🚘 <b>Moshina almashtirmoqchimisiz?</b>\n\n` +
+      `Avval eskisini soting! Bu yerда e'lon berish <b>bepul</b>, tez va oson.\n\n` +
+      `Sizga faqat rasm va narxni yuborish kifoya — qolganini bot bajaradi 👇`
+    ];
+
+    // Tasodifiy bitta matnni tanlaymiz
+    const text = messages[Math.floor(Math.random() * messages.length)];
+
+    const kb = new InlineKeyboard()
+      .url("➕ BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row()
+      .url("🧮 Moshinamni baholash", "https://t.me/arzonida_bot");
+
+    await bot.api.sendMessage(CHANNEL_ID, text, { parse_mode: "HTML", reply_markup: kb });
+    console.log("✅ 'E'lon bering' chaqiriq posti yuborildi!");
+  } catch (err) {
+    console.error("Chaqiriq posti xatosi:", err);
+  }
+}
 // =====================================================================
 // 🛠 ADMIN UCHUN MAXSUS TEST BUYRUG'I
 // =====================================================================
@@ -3818,6 +3872,12 @@ bot.command("test_chart", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   await ctx.reply("⏳ <i>Grafik yasalmoqda...</i>", { parse_mode: "HTML" });
   await sendPriceChartPost();
+  await ctx.reply("✅ <b>Tayyor! Kanalni tekshiring.</b>", { parse_mode: "HTML" });
+});
+bot.command("test_sellcall", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.reply("⏳ <i>Chaqiriq posti yuborilmoqda...</i>", { parse_mode: "HTML" });
+  await sendSellCallPost();
   await ctx.reply("✅ <b>Tayyor! Kanalni tekshiring.</b>", { parse_mode: "HTML" });
 });
 // ==============================================================
@@ -4002,6 +4062,8 @@ bot.callbackQuery(/^reject_bump:(\d+)/, async (ctx) => {
 let lastAnalyticsDate = null;
 let lastTop3Date = null; // Nomini to'g'rilab qo'ydik
 let lastAutoCleanDate = null;
+let lastSellCall13 = null;
+let lastSellCall19 = null;
 
 setInterval(() => {
     const now = new Date();
@@ -4036,6 +4098,21 @@ setInterval(() => {
             lastAutoCleanDate = uzbDateStr;
             runAutomations(); 
             console.log("✅ Avto-tozalash va maslahatchi xabarlari yuborildi!");
+        }
+    }
+        // 4. 📣 "E'LON BERING" CHAQIRIQ POSTI (Har kuni soat 13:00 da)
+    if (uzbHour === 13) {
+        if (lastSellCall13 !== uzbDateStr) {
+            lastSellCall13 = uzbDateStr;
+            sendSellCallPost();
+        }
+    }
+
+    // 5. 📣 "E'LON BERING" CHAQIRIQ POSTI (Har kuni soat 19:00 da)
+    if (uzbHour === 19) {
+        if (lastSellCall19 !== uzbDateStr) {
+            lastSellCall19 = uzbDateStr;
+            sendSellCallPost();
         }
     }
 
