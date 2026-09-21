@@ -117,6 +117,9 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE users ADD COLUMN is_referral_counted INT DEFAULT 0",
       "ALTER TABLE ads ADD COLUMN nasiya VARCHAR(255) DEFAULT NULL",
       "ALTER TABLE ad_edits ADD COLUMN nasiya VARCHAR(255) DEFAULT NULL",
+      "ALTER TABLE users ADD COLUMN is_dealer INT DEFAULT 0",
+      "ALTER TABLE users ADD COLUMN dealer_name VARCHAR(255) DEFAULT NULL",
+      "ALTER TABLE users ADD COLUMN dealer_phone VARCHAR(255) DEFAULT NULL",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -240,6 +243,7 @@ const mainMenu = new Keyboard()
   .text("🧮 Mashina narxini aniqlash").row()
   .text("💳 Bo'lib to'lashni hisoblash").row()
   .text("🔔 Obunalarim").row()
+  .text("🏢 Avtosalon bo'lish").row()
   // .text("🏆 150.000 so'm Yutib oling!").resized()
   .placeholder("Tugmalarni ochish uchun shu yerni bosing 🎛🎛👉");
 /**
@@ -2276,6 +2280,129 @@ async function creditCalcConversation(conversation, ctx) {
 }
 bot.use(createConversation(creditCalcConversation));
 /**
+ * ✅ DILER (AVTOSALON) BO'LISH SO'ROVI
+ */
+async function becomeDealerConversation(conversation, ctx) {
+  const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim", "🔔 Obunalarim"];
+
+  // Avval allaqachon diler emasligini tekshiramiz
+  const alreadyDealer = await conversation.external(async () => {
+    const [rows] = await db.execute("SELECT is_dealer FROM users WHERE id = ?", [ctx.from.id]);
+    return rows[0] && rows[0].is_dealer === 1;
+  });
+
+  if (alreadyDealer) {
+    return ctx.reply("✅ <b>Siz allaqachon tasdiqlangan avtosalonsiz!</b>\n\nSizga barcha diler imkoniyatlari ochiq.", { parse_mode: "HTML", reply_markup: mainMenu });
+  }
+
+  await ctx.reply(
+    "🏢 <b>AVTOSALON / DOIMIY SOTUVCHI BO'LISH</b>\n\n" +
+    "Agar siz doimiy ravishda moshina savdosi bilan shug'ullansangiz (avtosalon, diler yoki ko'p moshina sotuvchi), sizga maxsus imkoniyatlar beramiz:\n\n" +
+    "✅ E'lonlaringizda «Ishonchli sotuvchi» belgisi\n" +
+    "✅ Ko'proq e'lon berish imkoniyati (cheksiz)\n" +
+    "✅ Xaridorlar ishonchi yuqori bo'ladi\n\n" +
+    "<i>Hozircha bu xizmat mutlaqo BEPUL!</i>\n\n" +
+    "1️⃣ Avval <b>salon yoki biznesingiz nomini</b> yozing:\n<i>(Masalan: «Avto Lider» yoki «Samarqand Avto»)</i>\n\n" +
+    "Bekor qilish uchun pastdagi menyudan foydalaning.",
+    { parse_mode: "HTML", reply_markup: mainMenu }
+  );
+
+  // 1. Salon nomi
+  const nameRes = await conversation.waitFor("message:text");
+  if (cancelTexts.includes(nameRes.message.text)) return ctx.reply("❌ So'rov bekor qilindi.", { reply_markup: mainMenu });
+  const dealerName = nameRes.message.text.trim();
+  if (dealerName.length < 2) return ctx.reply("❗️ Nom juda qisqa. Qaytadan urinib ko'ring.", { reply_markup: mainMenu });
+
+  // 2. Telefon
+  await ctx.reply(
+    "2️⃣ Endi <b>bog'lanish uchun telefon raqamingizni</b> yozing:\n<i>(Masalan: 901234567)</i>",
+    { parse_mode: "HTML" }
+  );
+  const phoneRes = await conversation.waitFor("message:text");
+  if (cancelTexts.includes(phoneRes.message.text)) return ctx.reply("❌ So'rov bekor qilindi.", { reply_markup: mainMenu });
+  let dealerPhone = phoneRes.message.text.replace(/\D/g, "");
+  dealerPhone = dealerPhone.replace(/^(998)+/, "");
+  if (dealerPhone.length > 9) dealerPhone = dealerPhone.slice(-9);
+  if (dealerPhone.length < 9) return ctx.reply("❗️ To'g'ri raqam kiriting. (Masalan: 901234567)", { reply_markup: mainMenu });
+  dealerPhone = `998${dealerPhone}`;
+
+  // Ma'lumotlarni vaqtincha saqlaymiz (hali tasdiqlanmagan, is_dealer=0 qoladi)
+  await conversation.external(() =>
+    db.execute("UPDATE users SET dealer_name = ?, dealer_phone = ? WHERE id = ?", [dealerName, dealerPhone, ctx.from.id])
+  );
+
+  // Adminга so'rov yuboramiz
+  const usernameStr = ctx.from.username ? `@${ctx.from.username}` : "yo'q";
+  const adminText =
+    `🏢 <b>YANGI AVTOSALON SO'ROVI!</b>\n\n` +
+    `📛 <b>Salon nomi:</b> ${dealerName}\n` +
+    `☎️ <b>Telefon:</b> +${dealerPhone}\n` +
+    `👤 <b>Foydalanuvchi:</b> <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a> (${usernameStr})\n` +
+    `🆔 <b>ID:</b> <code>${ctx.from.id}</code>\n\n` +
+    `<i>Ushbu foydalanuvchini avtosalon sifatida tasdiqlaysizmi?</i>`;
+
+  await conversation.external(() =>
+    bot.api.sendMessage(ADMIN_ID, adminText, {
+      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard()
+        .text("✅ Tasdiqlash", `dealer_approve:${ctx.from.id}`)
+        .text("❌ Rad etish", `dealer_reject:${ctx.from.id}`)
+    })
+  );
+
+  await ctx.reply(
+    "✅ <b>So'rovingiz adminга yuborildi!</b>\n\n" +
+    "Tez orada ko'rib chiqamiz. Tasdiqlangач, sizга xabar beramiz va barcha diler imkoniyatlari ochiladi.",
+    { parse_mode: "HTML", reply_markup: mainMenu }
+  );
+}
+bot.use(createConversation(becomeDealerConversation));
+// ✅ Admin dilerni tasdiqlaganda
+bot.callbackQuery(/^dealer_approve:(\d+)/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const userId = ctx.match[1];
+
+  await db.execute("UPDATE users SET is_dealer = 1 WHERE id = ?", [userId]);
+
+  // Diler nomini olamiz (xabarда ko'rsatish uchun)
+  const [[u]] = await db.execute("SELECT dealer_name FROM users WHERE id = ?", [userId]);
+  const dealerName = u ? u.dealer_name : "Avtosalon";
+
+  await ctx.editMessageText(`✅ <b>${dealerName}</b> avtosalon sifatida tasdiqlandi!`, { parse_mode: "HTML" });
+
+  // Dilerга xursandchilик xabari
+  try {
+    await bot.api.sendMessage(userId,
+      `🎉 <b>TABRIKLAYMIZ!</b>\n\n` +
+      `Siz endi rasmiy <b>«${dealerName}»</b> avtosaloni sifatida tasdiqlandingiz!\n\n` +
+      `Endi sizga quyidagilar ochiq:\n` +
+      `✅ E'lonlaringizda «Ishonchli sotuvchi» belgisi chiqadi\n` +
+      `✅ Cheksiz e'lon berishingiz mumkin\n` +
+      `✅ Xaridorlar sizga ko'proq ishonadi\n\n` +
+      `Hoziroq e'lon berib ko'ring! 🚗`,
+      { parse_mode: "HTML", reply_markup: mainMenu }
+    );
+  } catch (e) {}
+});
+
+// ❌ Admin dilerni rad etganda
+bot.callbackQuery(/^dealer_reject:(\d+)/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const userId = ctx.match[1];
+
+  // Ma'lumotlarni tozalaymiz
+  await db.execute("UPDATE users SET is_dealer = 0, dealer_name = NULL, dealer_phone = NULL WHERE id = ?", [userId]);
+
+  await ctx.editMessageText("❌ <b>Avtosalon so'rovi rad etildi.</b>", { parse_mode: "HTML" });
+
+  try {
+    await bot.api.sendMessage(userId,
+      "❌ <b>Avtosalon so'rovingiz rad etildi.</b>\n\nAgar bu xato bo'lsa yoki savolingiz bo'lsa, admin bilan bog'laning: @uzdev75",
+      { parse_mode: "HTML" }
+    );
+  } catch (e) {}
+});
+/**
  * ✅ АДМИН ТАСДИҚЛАШИ (Каналга юбориш)
  */
 bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
@@ -2284,6 +2411,11 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
   const ad = rows[0];
 
   if (ad && ad.status === "pending") {
+        // E'lon egasи dilermi tekshiramiz
+    const [[dealerRow]] = await db.execute("SELECT is_dealer, dealer_name FROM users WHERE id = ?", [ad.userId]);
+    const dealerBadge = (dealerRow && dealerRow.is_dealer === 1)
+      ? `✅ <b>Ishonchli sotuvchi: ${dealerRow.dealer_name}</b>\n\n`
+      : "";
     const photos = ad.photoId.split(",");
     const photoUrls = await Promise.all(
       photos.map(async (id) => {
@@ -2294,7 +2426,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
         const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year);
     const collagePath = await createCollage(photoUrls, badgeInfo);
 
-    let caption =
+    let caption =dealerBadge +
       `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
       `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
       `⛽ Yoqilg'i: ${ad.fuel}\n`;
@@ -2407,6 +2539,11 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
   const ad = rows[0];
 
   if (ad && ad.status === "pending") {
+        // E'lon egasи dilermi tekshiramiz
+    const [[dealerRow]] = await db.execute("SELECT is_dealer, dealer_name FROM users WHERE id = ?", [ad.userId]);
+    const dealerBadge = (dealerRow && dealerRow.is_dealer === 1)
+      ? `✅ <b>Ishonchli sotuvchi: ${dealerRow.dealer_name}</b>\n\n`
+      : "";
     const photos = ad.photoId.split(",");
     const photoUrls = await Promise.all(
       photos.map(async (id) => {
@@ -2418,7 +2555,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
     const collagePath = await createCollage(photoUrls, badgeInfo);
 
     // ================= MATN TEPASIGA QAYNOQ NARX QO'SHILDI =================
-    let caption =
+    let caption =dealerBadge +
       `🔥 <b>QAYNOQ NARX!</b>\n\n` +
       `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
       `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
@@ -2918,14 +3055,20 @@ bot.hears("📝 E'lon berish", async (ctx) => {
       return ctx.reply("⏳ <b>Sizning oldingi e'loningiz hali adminlar tomonidan ko'rib chiqilmoqda.</b>\n\nIltimos, u tasdiqlanguncha yoki rad etilguncha kutib turing.", { parse_mode: "HTML" });
     }
 
-    // 3. Limit: Bir vaqtning o'zida nechta faol e'loni bo'lishi mumkinligi (masalan, 3 ta)
-    const [[activeAds]] = await db.execute(
-      "SELECT COUNT(*) as count FROM ads WHERE userId = ? AND status = 'active'",
-      [ctx.from.id]
-    );
-    
-    if (activeAds.count >= 3) {
-      return ctx.reply("❗️ <b>Sizda cheklov mavjud!</b>\n\nBir vaqtning o'zida eng ko'pi bilan <b>3 ta</b> faol e'loningiz bo'lishi mumkin. Yangi e'lon berish uchun '📂 Mening e'lonlarim' bo'limidan eskilarini 'Sotildi' deb belgilang.", { parse_mode: "HTML" });
+    // Diler ekanligini tekshiramiz — diler bo'lsa limit yo'q
+    const [[dealerCheck]] = await db.execute("SELECT is_dealer FROM users WHERE id = ?", [ctx.from.id]);
+    const isDealer = dealerCheck && dealerCheck.is_dealer === 1;
+
+    // 3. Limit: Diler bo'lmaganlar uchun 3 ta faol e'lon cheklovi
+    if (!isDealer) {
+      const [[activeAds]] = await db.execute(
+        "SELECT COUNT(*) as count FROM ads WHERE userId = ? AND status = 'active'",
+        [ctx.from.id]
+      );
+      
+      if (activeAds.count >= 3) {
+        return ctx.reply("❗️ <b>Sizda cheklov mavjud!</b>\n\nBir vaqtning o'zida eng ko'pi bilan <b>3 ta</b> faol e'loningiz bo'lishi mumkin. Yangi e'lon berish uchun '📂 Mening e'lonlarim' bo'limidan eskilarini 'Sotildi' deb belgilang.\n\n💡 <i>Doimiy sotuvchimisiz? «🏢 Avtosalon bo'lish» tugmasi orqali cheksiz e'lon bering!</i>", { parse_mode: "HTML" });
+      }
     }
   }
 if (ctx.session) ctx.session.editAdData = null;
@@ -3095,6 +3238,10 @@ bot.hears("🧮 Mashina narxini aniqlash", async (ctx) => {
 bot.hears("💳 Bo'lib to'lashni hisoblash", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
   await ctx.conversation.enter("creditCalcConversation");
+});
+bot.hears("🏢 Avtosalon bo'lish", async (ctx) => {
+  if (!(await isSubscribed(ctx))) return askForSub(ctx);
+  await ctx.conversation.enter("becomeDealerConversation");
 });
 // =========================================================================
 // 🏆 150,000 SO'MLIK KONKURS TIZIMI
