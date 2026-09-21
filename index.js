@@ -884,8 +884,8 @@ bot.command("up", async (ctx) => {
     const channelMarkup = new InlineKeyboard()
       .url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
       .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot")
-      .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
+      // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
     let newMsgId;
 
@@ -2315,7 +2315,8 @@ if (ad.barter && ad.barter !== "Yo'q") {
 
     const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
     .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
+      // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
     try {
       const msg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
@@ -2440,7 +2441,8 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
 
     const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
     .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
+      // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
     try {
       // 1. Asosiy kanalga rasm yuborish
@@ -3243,7 +3245,8 @@ async function editPriceConversation(conversation, ctx) {
 
     const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
     .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
+      // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
     // 1. Asosiy kanalni yangilash
     await ctx.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, {
@@ -3361,7 +3364,8 @@ bot.callbackQuery(/^free_up_req:(\d+)/, async (ctx) => {
     const channelMarkup = new InlineKeyboard()
       .url("👤 E'LON ADMINI", "https://t.me/uzdev75").row()
       .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
+      // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
     let newMsgId;
 
@@ -3447,7 +3451,8 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
 
   const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
   .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${oldAd.id}`).row()
-    .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+    .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
+    // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
   try {
     // 1. Asosiy kanaldagi rasm va matnni yangilash
@@ -3989,8 +3994,8 @@ bot.callbackQuery(/^approve_bump:(\d+)/, async (ctx) => {
         const channelMarkup = new InlineKeyboard()
           .url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
           .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-          .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot")
-          .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
+          .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
+          // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
 
         let newMsgId;
         let newSecMsgId = null;
