@@ -98,6 +98,20 @@ if (!fs.existsSync(collagesDir)) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+        await db.execute(`
+      CREATE TABLE IF NOT EXISTS salon_ads (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        userId BIGINT,
+        salonName VARCHAR(255),
+        adText TEXT,
+        mediaType VARCHAR(20),
+        mediaId TEXT,
+        location VARCHAR(500),
+        phone VARCHAR(255),
+        status VARCHAR(20) DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   const alterQueries = [
       "ALTER TABLE ads ADD COLUMN history TEXT DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
@@ -123,6 +137,7 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE users ADD COLUMN dealer_paused INT DEFAULT 0",
       "ALTER TABLE ads ADD COLUMN dealer_offer TEXT DEFAULT NULL",
       "ALTER TABLE ad_edits ADD COLUMN dealer_offer TEXT DEFAULT NULL",
+      "ALTER TABLE salon_ads ADD COLUMN channelMsgId VARCHAR(50) DEFAULT NULL",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -246,7 +261,7 @@ const mainMenu = new Keyboard()
   .text("🧮 Mashina narxini aniqlash").row()
   .text("💳 Bo'lib to'lashni hisoblash").row()
   .text("🔔 Obunalarim").row()
-  .text("🏢 Avtosalon bo'lish").row()
+  .text("🏢 Avtosalon bo'lish").text("📢 Salon reklamasi").row()
   // .text("🏆 150.000 so'm Yutib oling!").resized()
   .placeholder("Tugmalarni ochish uchun shu yerni bosing 🎛🎛👉");
 /**
@@ -680,6 +695,7 @@ const adminMenu = new InlineKeyboard()
   .text("📢 Rassilka", "admin_broadcast")
   .text("🏆 Konkurs (Top-10)", "admin_top").row()
   .text("🏢 Avtosalonlar", "admin_dealers").row()
+  .text("📢 Reklamalar", "admin_salon_ads").row()
   .text("🚗 Kunlik TOP-5 yuborish", "admin_test_top5")
   .text("📈 Haftalik Analitika", "admin_test_analytics").row()
   .text("🔎 Top qidiruvlar", "admin_topsearch")
@@ -753,7 +769,110 @@ bot.callbackQuery("admin_dealers", async (ctx) => {
 
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb, disable_web_page_preview: true });
 });
+// 📢 SALON REKLAMALARI RO'YXATI
+bot.callbackQuery("admin_salon_ads", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.answerCallbackQuery("⏳ Reklamalar yuklanmoqda...").catch(()=>{});
 
+  // Faqat faol (kanalda turgan) reklamalarni olamiz
+  const [ads] = await db.execute(
+    "SELECT id, salonName, location, created_at FROM salon_ads WHERE status = 'active' ORDER BY created_at DESC LIMIT 20"
+  );
+
+  if (ads.length === 0) {
+    return ctx.editMessageText("📭 <b>Hozircha faol salon reklamalari yo'q.</b>", {
+      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_back")
+    });
+  }
+
+  let text = `📢 <b>FAOL SALON REKLAMALARI (${ads.length} ta):</b>\n\n`;
+  const kb = new InlineKeyboard();
+
+  ads.forEach((a, i) => {
+    // Sanani chiroyli ko'rsatamiz
+    const dateStr = new Intl.DateTimeFormat('uz-UZ', { day: 'numeric', month: 'short', timeZone: 'Asia/Tashkent' }).format(new Date(a.created_at));
+    text += `${i + 1}. <b>${a.salonName}</b>\n📍 ${a.location} | 🗓 ${dateStr}\n\n`;
+    kb.text(`${i + 1}. ${a.salonName}`, `salon_ad_manage:${a.id}`).row();
+  });
+
+  kb.text("🔙 Orqaga", "admin_back");
+  text += `👇 <i>Boshqarmoqchi bo'lgan reklamani tanlang:</i>`;
+
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
+});
+
+// 📢 BITTA REKLAMANI BOSHQARISH
+bot.callbackQuery(/^salon_ad_manage:(\d+)/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const salonAdId = ctx.match[1];
+
+  const [[a]] = await db.execute("SELECT * FROM salon_ads WHERE id = ?", [salonAdId]);
+  if (!a) return ctx.answerCallbackQuery({ text: "Reklama topilmadi.", show_alert: true });
+
+  const dateStr = new Intl.DateTimeFormat('uz-UZ', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent' }).format(new Date(a.created_at));
+
+  const text =
+    `📢 <b>${a.salonName}</b>\n\n` +
+    `${a.adText}\n\n` +
+    `📍 <b>Manzil:</b> ${a.location}\n` +
+    `📞 <b>Tel:</b> ${a.phone}\n` +
+    `🗓 <b>Joylangan:</b> ${dateStr}\n` +
+    `👤 <a href="tg://user?id=${a.userId}">Egasi profili</a>\n\n` +
+    `👇 <i>Amalni tanlang:</i>`;
+
+  const kb = new InlineKeyboard()
+    .text("🗑 Kanaldan o'chirish", `salon_ad_delete:${a.id}`).row()
+    .text("🔙 Ro'yxatga qaytish", "admin_salon_ads");
+
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
+});
+
+// 🗑 REKLAMANI O'CHIRISH (tasdiq so'raymiz)
+bot.callbackQuery(/^salon_ad_delete:(\d+)/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const salonAdId = ctx.match[1];
+
+  const [[a]] = await db.execute("SELECT salonName FROM salon_ads WHERE id = ?", [salonAdId]);
+  const name = a ? a.salonName : "reklama";
+
+  await ctx.editMessageText(
+    `⚠️ <b>${name}</b> reklamasini kanaldan o'chirmoqchimisiz?\n\n<i>Reklama post kanaldan butunlay o'chiriladi.</i>`,
+    {
+      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard()
+        .text("✅ Ha, o'chirish", `salon_ad_delete_confirm:${salonAdId}`)
+        .text("🔙 Bekor qilish", `salon_ad_manage:${salonAdId}`)
+    }
+  );
+});
+
+// 🗑 O'CHIRISHNI TASDIQLASH
+bot.callbackQuery(/^salon_ad_delete_confirm:(\d+)/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const salonAdId = ctx.match[1];
+
+  const [[a]] = await db.execute("SELECT salonName, channelMsgId FROM salon_ads WHERE id = ?", [salonAdId]);
+  if (!a) return ctx.answerCallbackQuery({ text: "Reklama topilmadi.", show_alert: true });
+
+  // Kanaldan xabarni o'chiramiz
+  if (a.channelMsgId) {
+    try {
+      await bot.api.deleteMessage(CHANNEL_ID, a.channelMsgId);
+    } catch (e) {
+      console.error("Reklamani kanaldan o'chirishda xato:", e.message);
+    }
+  }
+
+  // Bazada holatini 'deleted' qilamiz
+  await db.execute("UPDATE salon_ads SET status = 'deleted' WHERE id = ?", [salonAdId]);
+
+  await ctx.answerCallbackQuery({ text: "🗑 Reklama o'chirildi." });
+  await ctx.editMessageText(`🗑 <b>${a.salonName}</b> reklamasi kanaldan o'chirildi.`, {
+    parse_mode: "HTML",
+    reply_markup: new InlineKeyboard().text("🔙 Ro'yxatga qaytish", "admin_salon_ads")
+  });
+});
 // 🏢 BITTA SALONNI BOSHQARISH (menyu)
 bot.callbackQuery(/^dealer_manage:(\d+)/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
@@ -2566,6 +2685,203 @@ async function becomeDealerConversation(conversation, ctx) {
   );
 }
 bot.use(createConversation(becomeDealerConversation));
+/**
+ * ✅ SALON REKLAMASI BERISH (faqat dilerlar uchun)
+ */
+async function salonAdConversation(conversation, ctx) {
+  const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim", "🔔 Obunalarim"];
+
+  // Diler ekanligini va kunlik limitni tekshiramiz
+  const checkData = await conversation.external(async () => {
+    const [uRows] = await db.execute("SELECT is_dealer, dealer_paused, dealer_name, dealer_phone FROM users WHERE id = ?", [ctx.from.id]);
+    const user = uRows[0];
+    // Bugun nechta reklama berganini sanaymiz
+    const [cRows] = await db.execute(
+      "SELECT COUNT(*) as count FROM salon_ads WHERE userId = ? AND DATE(created_at) = CURDATE() AND status != 'rejected'",
+      [ctx.from.id]
+    );
+    return { user, todayCount: cRows[0].count };
+  });
+
+  const isDealer = checkData.user && checkData.user.is_dealer === 1 && checkData.user.dealer_paused !== 1;
+
+  if (!isDealer) {
+    return ctx.reply(
+      "❌ <b>Bu bo'lim faqat tasdiqlangan avtosalonlar uchun.</b>\n\nAgar siz doimiy sotuvchi bo'lsangiz, «🏢 Avtosalon bo'lish» tugmasi orqali ariza qoldiring.",
+      { parse_mode: "HTML", reply_markup: mainMenu }
+    );
+  }
+
+  // Kunlik limit: 2 ta
+  if (checkData.todayCount >= 2) {
+    return ctx.reply(
+      "⏳ <b>Bugungi reklama limitingiz tugadi.</b>\n\nBir kunda eng ko'pi bilan <b>2 ta</b> salon reklamasi bera olasiz. Ertaga qaytadan urinib ko'ring.",
+      { parse_mode: "HTML", reply_markup: mainMenu }
+    );
+  }
+
+  await ctx.reply(
+    "📢 <b>SALON REKLAMASI BERISH</b>\n\n" +
+    "Saloningiz, aksiya yoki maxsus takliflaringiz haqida reklama post joylang!\n\n" +
+    "1️⃣ Avval <b>reklama matnini</b> yozing:\n" +
+    "<i>(Aksiya, kredit shartlari, bonuslar va boshqalar haqida to'liq yozing. Masalan: «🔥 Kia Sportage 60 oygacha 0% foizli bo'lib to'lash! Boshlang'ich 25%, oyiga 2 300 000 so'mdan.»)</i>\n\n" +
+    "Bekor qilish uchun pastdagi menyudan foydalaning.",
+    { parse_mode: "HTML", reply_markup: mainMenu }
+  );
+
+  // 1. Reklama matni
+  const textRes = await conversation.waitFor("message:text");
+  if (cancelTexts.includes(textRes.message.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+  const adText = textRes.message.text;
+  if (adText.length < 10) return ctx.reply("❗️ Matn juda qisqa. Qaytadan urinib ko'ring.", { reply_markup: mainMenu });
+
+  // 2. Video yoki rasm
+  await ctx.reply(
+    "2️⃣ Endi <b>reklama video yoki rasmini</b> yuboring:\n<i>(Video yuborsangiz yaxshiroq — ko'proq e'tibor tortadi. 1 ta video yoki 1 ta rasm)</i>",
+    { parse_mode: "HTML" }
+  );
+  const mediaRes = await conversation.waitFor(["message:video", "message:photo", "message:text"]);
+  if (mediaRes.message?.text && cancelTexts.includes(mediaRes.message.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+
+  let mediaType, mediaId;
+  if (mediaRes.message?.video) {
+    mediaType = "video";
+    mediaId = mediaRes.message.video.file_id;
+  } else if (mediaRes.message?.photo) {
+    mediaType = "photo";
+    const photoArr = mediaRes.message.photo;
+    mediaId = photoArr[photoArr.length - 1].file_id;
+  } else {
+    return ctx.reply("❗️ Iltimos, video yoki rasm yuboring.", { reply_markup: mainMenu });
+  }
+
+  // 3. Manzil (matn bilan)
+  await ctx.reply(
+    "3️⃣ <b>Salon manzilini</b> yozing:\n<i>(Masalan: «Toshkent sh., Chilonzor tumani, Bunyodkor ko'chasi 12-uy» yoki «Samarqand, Gazli shossesi, 1-uy»)</i>",
+    { parse_mode: "HTML" }
+  );
+  const locRes = await conversation.waitFor("message:text");
+  if (cancelTexts.includes(locRes.message.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+  const location = locRes.message.text.trim();
+
+  // 4. Telefon (salon telefoni bor, lekin yangisini kiritish imkoniyati)
+  const kbPhone = new InlineKeyboard().text(`✅ Saqlangan raqam: +${checkData.user.dealer_phone}`, "phone_saved");
+  await ctx.reply(
+    "4️⃣ <b>Bog'lanish uchun telefon raqami:</b>\n\n" +
+    "Saqlangan raqamingizni ishlatasizmi yoki yangisini kiritasizmi?\n" +
+    "<i>(Yangi raqam kiritish uchun shunchaki yozing, yoki bir nechta raqamni vergul bilan yozing)</i>",
+    { parse_mode: "HTML", reply_markup: kbPhone }
+  );
+
+  const phoneRes = await conversation.waitFor(["callback_query:data", "message:text"]);
+  let phone;
+  if (phoneRes.callbackQuery?.data === "phone_saved") {
+    await phoneRes.answerCallbackQuery();
+    phone = `+${checkData.user.dealer_phone}`;
+  } else {
+    if (cancelTexts.includes(phoneRes.message?.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+    phone = phoneRes.message.text.trim();
+  }
+
+  // Bazaga saqlaymiz (pending holatda)
+  const saveResult = await conversation.external(() =>
+    db.execute(
+      "INSERT INTO salon_ads (userId, salonName, adText, mediaType, mediaId, location, phone, status) VALUES (?,?,?,?,?,?,?,'pending')",
+      [ctx.from.id, checkData.user.dealer_name, adText, mediaType, mediaId, location, phone]
+    )
+  );
+  const salonAdId = saveResult[0].insertId;
+
+  // Adminга tasdiqlashga yuboramiz
+  const adminCaption =
+    `📢 <b>YANGI SALON REKLAMASI!</b>\n\n` +
+    `🏢 <b>Salon:</b> ${checkData.user.dealer_name}\n\n` +
+    `${adText}\n\n` +
+    `📍 <b>Manzil:</b> ${location}\n` +
+    `📞 <b>Tel:</b> ${phone}\n\n` +
+    `👤 <a href="tg://user?id=${ctx.from.id}">Profil</a> | 🆔 <code>${ctx.from.id}</code>`;
+
+  await conversation.external(async () => {
+    const adminKb = new InlineKeyboard()
+      .text("✅ Tasdiqlash", `salon_approve:${salonAdId}`)
+      .text("❌ Rad etish", `salon_reject:${salonAdId}`);
+    if (mediaType === "video") {
+      await bot.api.sendVideo(ADMIN_ID, mediaId, { caption: adminCaption, parse_mode: "HTML", reply_markup: adminKb });
+    } else {
+      await bot.api.sendPhoto(ADMIN_ID, mediaId, { caption: adminCaption, parse_mode: "HTML", reply_markup: adminKb });
+    }
+  });
+
+  await ctx.reply(
+    "✅ <b>Reklamangiz adminга yuborildi!</b>\n\nTekshiruvdan so'ng kanalga joylanadi. Odatda bu tez amalga oshadi.",
+    { parse_mode: "HTML", reply_markup: mainMenu }
+  );
+}
+bot.use(createConversation(salonAdConversation));
+// ✅ Admin salon reklamasini tasdiqlaganda — kanalga joylaydi
+bot.callbackQuery(/^salon_approve:(\d+)/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const salonAdId = ctx.match[1];
+
+  const [[sa]] = await db.execute("SELECT * FROM salon_ads WHERE id = ?", [salonAdId]);
+  if (!sa || sa.status !== 'pending') {
+    return ctx.answerCallbackQuery({ text: "Bu reklama allaqachon ko'rib chiqilgan.", show_alert: true });
+  }
+
+  await ctx.answerCallbackQuery("⏳ Kanalga joylanmoqda...").catch(()=>{});
+
+  // Kanalga chiqadigan chiroyli post
+  const channelCaption =
+    `📢 <b>REKLAMA | ${sa.salonName.toUpperCase()}</b>\n` +
+    `━━━━━━━━━━━━━━━━━━\n\n` +
+    `${sa.adText}\n\n` +
+    `📍 <b>Manzil:</b> ${sa.location}\n` +
+    `📞 <b>Bog'lanish:</b> ${sa.phone}\n\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `🚗 <i>Ishonchli avtosalon | @engarzonidamoshina</i>`;
+
+  const channelKb = new InlineKeyboard()
+    .url("🤖 O'z e'loningizni bering", "https://t.me/arzonida_bot").row()
+    .url("📢 Kanalimiz", "https://t.me/engarzonidamoshina");
+
+  try {
+    let sentMsg;
+    if (sa.mediaType === "video") {
+      sentMsg = await bot.api.sendVideo(CHANNEL_ID, sa.mediaId, { caption: channelCaption, parse_mode: "HTML", reply_markup: channelKb });
+    } else {
+      sentMsg = await bot.api.sendPhoto(CHANNEL_ID, sa.mediaId, { caption: channelCaption, parse_mode: "HTML", reply_markup: channelKb });
+    }
+
+    await db.execute("UPDATE salon_ads SET status = 'active', channelMsgId = ? WHERE id = ?", [sentMsg.message_id, salonAdId]);
+
+    await ctx.editMessageCaption({ caption: "✅ <b>Reklama kanalga joylandi!</b>", parse_mode: "HTML" });
+
+    // Dilerga xabar
+    try {
+      await bot.api.sendMessage(sa.userId, `🎉 <b>Reklamangiz kanalga joylandi!</b>\n\nSalon reklamangiz muvaffaqiyatli e'lon qilindi.\n\nKanalni ko'rish: https://t.me/engarzonidamoshina`, { parse_mode: "HTML" });
+    } catch (e) {}
+
+  } catch (e) {
+    console.error("Salon reklamasini kanalga yuborishda xato:", e);
+    await ctx.reply("❌ Xatolik: Reklamani kanalga joylab bo'lmadi.");
+  }
+});
+
+// ❌ Admin salon reklamasini rad etganda
+bot.callbackQuery(/^salon_reject:(\d+)/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const salonAdId = ctx.match[1];
+
+  const [[sa]] = await db.execute("SELECT * FROM salon_ads WHERE id = ?", [salonAdId]);
+  if (!sa) return ctx.answerCallbackQuery({ text: "Reklama topilmadi.", show_alert: true });
+
+  await db.execute("UPDATE salon_ads SET status = 'rejected' WHERE id = ?", [salonAdId]);
+  await ctx.editMessageCaption({ caption: "❌ <b>Reklama rad etildi.</b>", parse_mode: "HTML" });
+
+  try {
+    await bot.api.sendMessage(sa.userId, "❌ <b>Salon reklamangiz rad etildi.</b>\n\nReklama qoidalarga mos kelmadi. Savol bo'lsa: @uzdev75", { parse_mode: "HTML" });
+  } catch (e) {}
+});
 // ✅ Admin dilerni tasdiqlaganda
 bot.callbackQuery(/^dealer_approve:(\d+)/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
@@ -3455,6 +3771,10 @@ bot.hears("💳 Bo'lib to'lashni hisoblash", async (ctx) => {
 bot.hears("🏢 Avtosalon bo'lish", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
   await ctx.conversation.enter("becomeDealerConversation");
+});
+bot.hears("📢 Salon reklamasi", async (ctx) => {
+  if (!(await isSubscribed(ctx))) return askForSub(ctx);
+  await ctx.conversation.enter("salonAdConversation");
 });
 // =========================================================================
 // 🏆 150,000 SO'MLIK KONKURS TIZIMI
