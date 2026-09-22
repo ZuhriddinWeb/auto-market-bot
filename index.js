@@ -120,7 +120,9 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE users ADD COLUMN is_dealer INT DEFAULT 0",
       "ALTER TABLE users ADD COLUMN dealer_name VARCHAR(255) DEFAULT NULL",
       "ALTER TABLE users ADD COLUMN dealer_phone VARCHAR(255) DEFAULT NULL",
-            "ALTER TABLE users ADD COLUMN dealer_paused INT DEFAULT 0",
+      "ALTER TABLE users ADD COLUMN dealer_paused INT DEFAULT 0",
+      "ALTER TABLE ads ADD COLUMN dealer_offer TEXT DEFAULT NULL",
+      "ALTER TABLE ad_edits ADD COLUMN dealer_offer TEXT DEFAULT NULL",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -1497,6 +1499,11 @@ bot.use(createConversation(searchCarConversation));
 async function createAdConversation(conversation, ctx) {
   const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim"];
   const ad = { photos: [], urgent: false }; // urgent (shoshilinch) holati qo'shildi
+    // Foydalanuvchi diler (va to'xtatilmagan) ekanligini tekshiramiz
+  const isDealerUser = await conversation.external(async () => {
+    const [rows] = await db.execute("SELECT is_dealer, dealer_paused FROM users WHERE id = ?", [ctx.from.id]);
+    return rows[0] && rows[0].is_dealer === 1 && rows[0].dealer_paused !== 1;
+  });
   let isFullUpdate = false; 
   let updateAdId = null;
   let step = "BRAND"; 
@@ -1531,6 +1538,7 @@ async function createAdConversation(conversation, ctx) {
       ad.history = existingAd.history;
       ad.barter = existingAd.barter;
        ad.nasiya = existingAd.nasiya;
+       ad.dealer_offer = existingAd.dealer_offer;
       ad.videoId = existingAd.videoId;
       ad.urgent = false; // Tahrirlashda avvaliga false bo'ladi
       
@@ -1899,6 +1907,34 @@ else if (step === "MODEL") {
           await deleteMsgs(ctx, chatToClean);
         }
 
+        step = isEditing ? "PREVIEW" : (isDealerUser ? "OFFER" : "URGENT");
+      }
+      else if (step === "OFFER") {
+        const kb = new InlineKeyboard()
+          .text("O'tkazib yuborish", "offer_skip").row()
+          .text("🔙 Orqaga", "back_NASIYA").text("❌ Bekor", "cancel_ad");
+
+        msgPrompt = await ctx.reply(
+          "🎁 <b>MAXSUS TAKLIFLARINGIZ (faqat avtosalonlar uchun):</b>\n\n" +
+          "<i>Aksiya, past foizli kredit, sovg'a yoki boshqa maxsus shartlaringiz bo'lsa yozing. Masalan:\n\n" +
+          "«🔥 Aksiya: 12 oygacha 0% foizli bo'lib to'lash! 🎁 Sovg'aga to'liq bak yoqilg'i va sug'urta!»\n\n" +
+          "Bu taklif e'loningizda alohida ajralib turadi va xaridorlarni ko'proq jalb qiladi.</i>\n\n" +
+          "Agar maxsus taklif bo'lmasa «O'tkazib yuborish» ni bosing.",
+          { reply_markup: kb, parse_mode: "HTML" }
+        );
+        chatToClean.push(msgPrompt.message_id);
+
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_NASIYA") { step = "NASIYA"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+
+        ad.dealer_offer = res.callbackQuery?.data === "offer_skip" ? null : res.message.text;
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
         step = isEditing ? "PREVIEW" : "URGENT";
       }
        else if (step === "URGENT") {
@@ -1916,7 +1952,7 @@ else if (step === "MODEL") {
         if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
-        if (res.callbackQuery?.data === "back_NASIYA") { step = "NASIYA"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+                if (res.callbackQuery?.data === "back_NASIYA") { step = isDealerUser ? "OFFER" : "NASIYA"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
         ad.urgent = res.callbackQuery?.data === "urg:yes";
         await safeAnswerCbq(res);
@@ -2022,6 +2058,7 @@ else if (step === "PREVIEW") {
         if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 <b>Tarixi:</b> ${ad.history}\n`;
         if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 <b>Barter:</b> ${ad.barter}\n`;
                 if (ad.nasiya && ad.nasiya !== "Yo'q") caption += `💳 <b>Nasiya:</b> ${ad.nasiya}\n`;
+                        if (ad.dealer_offer) caption += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
         caption += `💰 <b>Narxi:</b> ${formatNum(ad.price)}$${priceBadge}\n☎️ <b>Tel:</b> +${ad.phone}\n🚩 <b>Viloyat:</b> ${ad.region}`;
         if (ad.videoId) caption += `\n🎥 <i>(Ushbu e'londa video-obzor mavjud!)</i>`;
 
@@ -2072,8 +2109,8 @@ if (action === "submit_ad") {
             let urgentTextEdit = ad.urgent ? "\n\n🚨 <b>Diqqat: Foydalanuvchi buni SHOSHILINCH sotmoqchi!</b>" : "";
             
             const [result] = await db.execute(
-              `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-              [updateAdId, ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.videoId || null]
+              `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, dealer_offer, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+              [updateAdId, ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.dealer_offer || null, ad.videoId || null]
             );
             const editId = result.insertId; 
             
@@ -2096,8 +2133,8 @@ if (action === "submit_ad") {
 
           // 1. Avval bazaga saqlaymiz va adId ni aniqlaymiz
           const [result] = await db.execute(
-            `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.videoId || null]
+            `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, dealer_offer, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.dealer_offer || null, ad.videoId || null]
           );
           const adId = result.insertId; 
 
@@ -2612,7 +2649,9 @@ if (ad.barter && ad.barter !== "Yo'q") {
     if (ad.nasiya && ad.nasiya !== "Yo'q") {
       caption += `💳 Nasiya (bo'lib to'lash): ${ad.nasiya}\n`;
     }
-
+    if (ad.dealer_offer) {
+      caption += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
+    }
         const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year);
     caption += `💰 Narxi: ${formatNum(ad.price)}$${badge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
@@ -2742,7 +2781,9 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
     if (ad.nasiya && ad.nasiya !== "Yo'q") {
       caption += `💳 Nasiya (bo'lib to'lash): ${ad.nasiya}\n`;
     }
-
+    if (ad.dealer_offer) {
+      caption += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
+    }
         const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year);
     caption += `💰 Narxi: ${formatNum(ad.price)}$${badge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
