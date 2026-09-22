@@ -4196,7 +4196,7 @@ async function sendSellCallPost() {
 
       `📢 <b>SOTUVCHILAR UCHUN!</b>\n\n` +
       `Moshinangizni tez va bepul sotishning eng oson yo'li — bizning botimiz.\n\n` +
-      `Bir necha bosishда e'loningiz tayyor. Vositachilarга ortiqcha pul to'lamang!\n\n` +
+      `Bir necha bosishда e'loningiz tayyor. Vositachilargа ortiqcha pul to'lamang!\n\n` +
       `👇 Hoziroq sinab ko'ring:`,
 
       `🚘 <b>Moshina almashtirmoqchimisiz?</b>\n\n` +
