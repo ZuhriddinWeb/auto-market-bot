@@ -1561,9 +1561,15 @@ async function searchCarConversation(conversation, ctx) {
       if(filtered.length === 0) {
          await ctx.reply(`📭 ${priceText} bo'lgan <b>${brand === "Boshqa" ? model : `${brand} ${model}`}</b> topilmadi.`, {parse_mode: "HTML", reply_markup: mainMenu});
       } else {
-         await ctx.reply(`✅ <b>Topildi: ${filtered.length} ta e'lon! (${priceText})</b>\nEng so'nggi e'lonlar:`, {parse_mode: "HTML", reply_markup: mainMenu});
+                          // Eng arzondan boshlab saralaymiz va birinchi 5 tasini olamiz
+         const sortedResults = [...filtered].sort((a, b) => {
+             const priceA = parseInt(a.price.replace(/\D/g, "")) || 0;
+             const priceB = parseInt(b.price.replace(/\D/g, "")) || 0;
+             return priceA - priceB;
+         });
+         const resultsToSend = sortedResults.slice(0, 5); // Eng arzon 5 ta
 
-         const resultsToSend = filtered.slice(-3);
+         await ctx.reply(`✅ <b>Topildi: ${filtered.length} ta e'lon! (${priceText})</b>\n\n${filtered.length > 5 ? `Quyida eng so'nggi <b>5 tasini</b> ko'rsatamiz. Barchasini ko'rish uchun kanalimizga o'ting 👇` : "Mana ular:"}`, {parse_mode: "HTML", reply_markup: mainMenu});
          for (const ad of resultsToSend) {
              try {
                 if (ad.channelMsgId) {
@@ -3613,10 +3619,14 @@ bot.hears("🔍 Mashina qidirish", async (ctx) => {
 // 📂 MENING E'LONLARIM (20 TALIK PAGINATSIYA VA RO'YXAT)
 // ==============================================================
 async function sendMyAdsPage(ctx, page = 1) {
-  const [ads] = await db.execute("SELECT * FROM ads WHERE userId = ? AND status = 'active' ORDER BY created_at DESC", [ctx.from.id]);
+  // Faol VA sotilgan e'lonlarni birga olamiz (eng yangisi tepada)
+  const [ads] = await db.execute(
+    "SELECT * FROM ads WHERE userId = ? AND status IN ('active', 'sold') ORDER BY created_at DESC",
+    [ctx.from.id]
+  );
   
   if (ads.length === 0) {
-    const text = "📭 <b>Sizda hozirda faol e'lonlar yo'q.</b>";
+    const text = "📭 <b>Sizda hozirda e'lonlar yo'q.</b>";
     return ctx.callbackQuery ? ctx.editMessageText(text, { parse_mode: "HTML" }) : ctx.reply(text, { parse_mode: "HTML" });
   }
 
@@ -3629,30 +3639,42 @@ async function sendMyAdsPage(ctx, page = 1) {
   const endIndex = startIndex + PER_PAGE;
   const currentAds = ads.slice(startIndex, endIndex);
 
-  let text = `📂 <b>Sizning faol e'lonlaringiz</b>\nJami: <b>${ads.length} ta</b> | Sahifa: <b>${page}/${totalPages}</b>\n\n`;
+  // Faol va sotilganlar sonini alohida sanaymiz
+  const activeCount = ads.filter(a => a.status === 'active').length;
+  const soldCount = ads.filter(a => a.status === 'sold').length;
+
+  let text = `📂 <b>Sizning e'lonlaringiz</b>\n`;
+  text += `🟢 Faol: <b>${activeCount} ta</b> | ✅ Sotilgan: <b>${soldCount} ta</b>\n`;
+  text += `📄 Sahifa: <b>${page}/${totalPages}</b>\n\n`;
+
   const kb = new InlineKeyboard();
   
-  // 20 ta e'lonni ro'yxat qilib yozamiz
   currentAds.forEach((ad, index) => {
     const adNum = startIndex + index + 1;
-    text += `<b>${adNum}.</b> ${ad.carDetails} — <b>${formatNum(ad.price)}$</b>\n`;
-    
-    // Tugmalarni 5 tadan qilib bir qatorga taxlaymiz
-    kb.text(`${adNum}`, `manage_ad:${ad.id}`);
-    if ((index + 1) % 5 === 0) kb.row(); 
+    // Sotilgan bo'lsa ✅ belgi va nomi chizib qo'yiladi, faol bo'lsa oddiy
+    if (ad.status === 'sold') {
+      text += `<b>${adNum}.</b> ✅ <s>${ad.carDetails}</s> — <s>${formatNum(ad.price)}$</s> <i>(Sotilgan)</i>\n<code>ID: ${ad.id}</code>\n\n`;
+      // Sotilganlar uchun tugma qo'ymaymiz (boshqarib bo'lmaydi)
+    } else {
+      text += `<b>${adNum}.</b> 🟢 ${ad.carDetails} — <b>${formatNum(ad.price)}$</b>\n<code>ID: ${ad.id}</code>\n\n`;
+      // Faqat faol e'lonlar uchun boshqaruv tugmasi
+      kb.text(`${adNum}`, `manage_ad:${ad.id}`);
+      if (kb.inline_keyboard[kb.inline_keyboard.length - 1]?.length >= 5) kb.row();
+    }
   });
+
+  // Oxirgi tugmalar qatorini yopamiz (agar to'liq bo'lmasa)
+  if (kb.inline_keyboard.length > 0 && kb.inline_keyboard[kb.inline_keyboard.length - 1].length > 0 && kb.inline_keyboard[kb.inline_keyboard.length - 1].length < 5) {
+    kb.row();
+  }
 
   // Paginatsiya (Oldingi / Keyingi) tugmalari
   const navRow = [];
   if (page > 1) navRow.push(InlineKeyboard.text("⬅️ Oldingi", `myads_page:${page - 1}`));
   if (page < totalPages) navRow.push(InlineKeyboard.text("Keyingi ➡️", `myads_page:${page + 1}`));
-  
-  if (navRow.length > 0) {
-    if (currentAds.length % 5 !== 0) kb.row(); // Yangi qatorga tushirish uchun
-    kb.row(...navRow);
-  }
+  if (navRow.length > 0) kb.row(...navRow);
 
-  text += `\n👇 <i>Boshqarmoqchi bo'lgan e'loningiz raqamini tanlang:</i>`;
+  text += `👇 <i>Boshqarmoqchi bo'lgan faol e'loningiz raqamini tanlang (faqat 🟢 faollar boshqariladi):</i>`;
 
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
