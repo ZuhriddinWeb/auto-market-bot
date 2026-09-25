@@ -1568,7 +1568,7 @@ async function searchCarConversation(conversation, ctx) {
              return priceA - priceB;
          });
 
-         const PER_PAGE = 5;
+         const PER_PAGE = 8;
          const totalPages = Math.ceil(sortedResults.length / PER_PAGE);
          let currentPage = 1;
 
