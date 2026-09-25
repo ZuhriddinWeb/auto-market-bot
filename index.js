@@ -2766,7 +2766,7 @@ async function becomeDealerConversation(conversation, ctx) {
 
   await ctx.reply(
     "✅ <b>So'rovingiz adminга yuborildi!</b>\n\n" +
-    "Tez orada ko'rib chiqamiz. Tasdiqlangач, sizга xabar beramiz va barcha diler imkoniyatlari ochiladi.",
+    "Tez orada ko'rib chiqamiz. Tasdiqlangаch, sizга xabar beramiz va barcha diler imkoniyatlari ochiladi.",
     { parse_mode: "HTML", reply_markup: mainMenu }
   );
 }
