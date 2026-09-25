@@ -1475,8 +1475,8 @@ async function searchCarConversation(conversation, ctx) {
               const res = await conversation.waitFor(["callback_query:data", "message:text"]);
               if (res.message) chatToClean.push(res.message.message_id);
 
-              if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ Qidiruv bekor qilindi.", { reply_markup: mainMenu }); }
-              if (res.callbackQuery?.data === "cancel_search") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ Qidiruv bekor qilindi.", { reply_markup: mainMenu }); }
+              if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Qidiruv to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu }); }
+              if (res.callbackQuery?.data === "cancel_search") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Qidiruv to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu }); }
 
               brand = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
               await safeAnswerCbq(res);
@@ -1500,8 +1500,8 @@ async function searchCarConversation(conversation, ctx) {
               const res = await conversation.waitFor(["callback_query:data", "message:text"]);
               if (res.message) chatToClean.push(res.message.message_id);
 
-              if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ Qidiruv bekor qilindi.", { reply_markup: mainMenu }); }
-              if (res.callbackQuery?.data === "cancel_search") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ Qidiruv bekor qilindi.", { reply_markup: mainMenu }); }
+              if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Qidiruv to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu }); }
+              if (res.callbackQuery?.data === "cancel_search") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Qidiruv to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu }); }
               if (res.callbackQuery?.data === "back_to_brand") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); step = "BRAND"; continue; }
 
               model = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
@@ -1795,7 +1795,7 @@ async function createAdConversation(conversation, ctx) {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
         
         if (res.callbackQuery?.data === "cancel_ad") break;
         ad.brand = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
@@ -1821,7 +1821,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_BRAND") { step = "BRAND"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -1841,7 +1841,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_MODEL") { step = "MODEL"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -1861,7 +1861,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_YEAR") { step = "YEAR"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -1879,7 +1879,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_PROBEG") { step = "PROBEG"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -1897,7 +1897,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_PAINT") { step = "PAINT"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -1915,7 +1915,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_COLOR") { step = "COLOR"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -1933,7 +1933,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_TRANS") { step = "TRANS"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -1951,7 +1951,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_FUEL") { step = "FUEL"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -1972,7 +1972,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text", "message:contact"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_PRICE") { step = "PRICE"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -1997,7 +1997,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_PHONE") { step = "PHONE"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -2020,7 +2020,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_REGION") { step = "REGION"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -2038,7 +2038,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_HISTORY") { step = "HISTORY"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -2069,7 +2069,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
 
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_BARTER") { step = "BARTER"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -2094,7 +2094,7 @@ else if (step === "MODEL") {
           const res2 = await conversation.waitFor(["callback_query:data", "message:text"]);
           if (res2.message) chatToClean.push(res2.message.message_id);
 
-          if (res2.message?.text && cancelTexts.includes(res2.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+          if (res2.message?.text && cancelTexts.includes(res2.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
           if (res2.callbackQuery?.data === "cancel_ad") break;
           if (res2.callbackQuery?.data === "back_BARTER") { step = "BARTER"; await safeAnswerCbq(res2); await deleteMsgs(ctx, chatToClean); continue; }
 
@@ -2132,7 +2132,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
 
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_NASIYA") { step = "NASIYA"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -2154,7 +2154,7 @@ else if (step === "MODEL") {
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
 
-        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" }); }
+        if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
 
         if (res.callbackQuery?.data === "cancel_ad") break;
                 if (res.callbackQuery?.data === "back_NASIYA") { step = isDealerUser ? "OFFER" : "NASIYA"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
@@ -2182,7 +2182,7 @@ else if (step === "MODEL") {
           if (res.message?.text) {
               if (cancelTexts.includes(res.message.text)) {
                   await deleteMsgs(ctx, chatToClean);
-                  return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" });
+                 return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" });
               }
               continue;
           }
@@ -2290,7 +2290,7 @@ else if (step === "PREVIEW") {
             if (res.message?.text) {
                 if (cancelTexts.includes(res.message.text)) {
                     await ctx.api.deleteMessage(ctx.chat.id, previewMsg.message_id).catch(()=>{});
-                    return ctx.reply("❌ <b>Jarayon to'xtatildi.</b> Bosh menyudasiz.", { reply_markup: mainMenu, parse_mode: "HTML" });
+                   return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" });
                 }
                 await ctx.api.deleteMessage(ctx.chat.id, res.message.message_id).catch(()=>{});
                 continue; 
@@ -2575,7 +2575,7 @@ async function creditCalcConversation(conversation, ctx) {
   );
 
   const curRes = await conversation.waitFor(["callback_query:data", "message:text"]);
-  if (curRes.message?.text && cancelTexts.includes(curRes.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+  if (curRes.message?.text && cancelTexts.includes(curRes.message.text)) return ctx.reply("❌ <b>Hisoblash to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
 
   let currency = "usd"; // standart
   if (curRes.callbackQuery?.data === "cur:uzs") currency = "uzs";
@@ -2595,7 +2595,7 @@ async function creditCalcConversation(conversation, ctx) {
 
   // 1. Moshina narxi
   const priceRes = await conversation.waitFor("message:text");
-  if (cancelTexts.includes(priceRes.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+  if (cancelTexts.includes(priceRes.message.text)) return ctx.reply("❌ <b>Hisoblash to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
   const carPrice = parseInt(priceRes.message.text.replace(/\D/g, "")) || 0;
   if (carPrice <= 0) return ctx.reply("❗️ Xato narx kiritildi. Qaytadan urinib ko'ring.", { reply_markup: mainMenu });
 
@@ -2606,7 +2606,7 @@ async function creditCalcConversation(conversation, ctx) {
     { parse_mode: "HTML" }
   );
   const downRes = await conversation.waitFor("message:text");
-  if (cancelTexts.includes(downRes.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+  if (cancelTexts.includes(downRes.message.text)) return ctx.reply("❌ <b>Hisoblash to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
   let downPayment = parseInt(downRes.message.text.replace(/\D/g, "")) || 0;
   if (downPayment >= carPrice) return ctx.reply("❗️ Boshlang'ich to'lov moshina narxidan kam bo'lishi kerak.", { reply_markup: mainMenu });
 
@@ -2616,7 +2616,7 @@ async function creditCalcConversation(conversation, ctx) {
     { parse_mode: "HTML" }
   );
   const monthRes = await conversation.waitFor("message:text");
-  if (cancelTexts.includes(monthRes.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+  if (cancelTexts.includes(monthRes.message.text)) return ctx.reply("❌ <b>Hisoblash to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
   const months = parseInt(monthRes.message.text.replace(/\D/g, "")) || 0;
   if (months <= 0 || months > 120) return ctx.reply("❗️ Oy soni 1 dan 120 gacha bo'lishi kerak.", { reply_markup: mainMenu });
 
@@ -2640,10 +2640,10 @@ async function creditCalcConversation(conversation, ctx) {
     await rateRes.answerCallbackQuery();
     await ctx.reply("✍️ <b>Yillik foizni raqamda yozing:</b>\n<i>(Masalan: 24)</i>", { parse_mode: "HTML" });
     const manualRate = await conversation.waitFor("message:text");
-    if (cancelTexts.includes(manualRate.message.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+    if (cancelTexts.includes(manualRate.message.text)) return ctx.reply("❌ <b>Hisoblash to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
     annualRate = parseFloat(manualRate.message.text.replace(",", ".").replace(/[^\d.]/g, "")) || 0;
   } else {
-    if (cancelTexts.includes(rateRes.message?.text)) return ctx.reply("❌ Hisoblash bekor qilindi.", { reply_markup: mainMenu });
+    if (cancelTexts.includes(rateRes.message?.text))return ctx.reply("❌ <b>Hisoblash to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
     annualRate = parseFloat((rateRes.message?.text || "0").replace(",", ".").replace(/[^\d.]/g, "")) || 0;
   }
 
@@ -2723,7 +2723,7 @@ async function becomeDealerConversation(conversation, ctx) {
 
   // 1. Salon nomi
   const nameRes = await conversation.waitFor("message:text");
-  if (cancelTexts.includes(nameRes.message.text)) return ctx.reply("❌ So'rov bekor qilindi.", { reply_markup: mainMenu });
+  if (cancelTexts.includes(nameRes.message.text)) return ctx.reply("❌ <b>So'rov to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
   const dealerName = nameRes.message.text.trim();
   if (dealerName.length < 2) return ctx.reply("❗️ Nom juda qisqa. Qaytadan urinib ko'ring.", { reply_markup: mainMenu });
 
@@ -2733,7 +2733,7 @@ async function becomeDealerConversation(conversation, ctx) {
     { parse_mode: "HTML" }
   );
   const phoneRes = await conversation.waitFor("message:text");
-  if (cancelTexts.includes(phoneRes.message.text)) return ctx.reply("❌ So'rov bekor qilindi.", { reply_markup: mainMenu });
+  if (cancelTexts.includes(phoneRes.message.text)) return ctx.reply("❌ <b>So'rov to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
   let dealerPhone = phoneRes.message.text.replace(/\D/g, "");
   dealerPhone = dealerPhone.replace(/^(998)+/, "");
   if (dealerPhone.length > 9) dealerPhone = dealerPhone.slice(-9);
@@ -2817,7 +2817,7 @@ async function salonAdConversation(conversation, ctx) {
 
   // 1. Reklama matni
   const textRes = await conversation.waitFor("message:text");
-  if (cancelTexts.includes(textRes.message.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+  if (cancelTexts.includes(textRes.message.text)) return ctx.reply("❌ <b>Reklama berish to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
   const adText = textRes.message.text;
   if (adText.length < 10) return ctx.reply("❗️ Matn juda qisqa. Qaytadan urinib ko'ring.", { reply_markup: mainMenu });
 
@@ -2827,7 +2827,7 @@ async function salonAdConversation(conversation, ctx) {
     { parse_mode: "HTML" }
   );
   const mediaRes = await conversation.waitFor(["message:video", "message:photo", "message:text"]);
-  if (mediaRes.message?.text && cancelTexts.includes(mediaRes.message.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+  if (mediaRes.message?.text && cancelTexts.includes(mediaRes.message.text)) return ctx.reply("❌ <b>Reklama berish to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
 
   let mediaType, mediaId;
   if (mediaRes.message?.video) {
@@ -2847,7 +2847,7 @@ async function salonAdConversation(conversation, ctx) {
     { parse_mode: "HTML" }
   );
   const locRes = await conversation.waitFor("message:text");
-  if (cancelTexts.includes(locRes.message.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+  if (cancelTexts.includes(locRes.message.text)) return ctx.reply("❌ <b>Reklama berish to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
   const location = locRes.message.text.trim();
 
   // 4. Telefon (salon telefoni bor, lekin yangisini kiritish imkoniyati)
