@@ -1558,28 +1558,108 @@ async function searchCarConversation(conversation, ctx) {
 
       let priceText = minPrice > 0 ? `<b>${minPrice}$ - ${maxPrice}$</b> oraliq` : `<b>${maxPrice}$</b> gacha`;
 
-      if(filtered.length === 0) {
+            if(filtered.length === 0) {
          await ctx.reply(`📭 ${priceText} bo'lgan <b>${brand === "Boshqa" ? model : `${brand} ${model}`}</b> topilmadi.`, {parse_mode: "HTML", reply_markup: mainMenu});
       } else {
-                          // Eng arzondan boshlab saralaymiz va birinchi 5 tasini olamiz
+         // Eng arzondan boshlab saralaymiz
          const sortedResults = [...filtered].sort((a, b) => {
              const priceA = parseInt(a.price.replace(/\D/g, "")) || 0;
              const priceB = parseInt(b.price.replace(/\D/g, "")) || 0;
              return priceA - priceB;
          });
-         const resultsToSend = sortedResults.slice(0, 5); // Eng arzon 5 ta
 
-         await ctx.reply(`✅ <b>Topildi: ${filtered.length} ta e'lon! (${priceText})</b>\n\n${filtered.length > 5 ? `Quyida eng so'nggi <b>5 tasini</b> ko'rsatamiz. Barchasini ko'rish uchun kanalimizga o'ting 👇` : "Mana ular:"}`, {parse_mode: "HTML", reply_markup: mainMenu});
-         for (const ad of resultsToSend) {
-             try {
-                if (ad.channelMsgId) {
-                   await ctx.api.copyMessage(ctx.chat.id, CHANNEL_ID, ad.channelMsgId);
-                } else {
-                   const caption = `🚗 <b>${ad.carDetails}</b>\n📅 Yili: ${ad.year}\n👣 Probeg: ${ad.probeg}\n💰 Narxi: ${ad.price}$\n☎️ Tel: +${ad.phone}`;
-                   const photos = ad.photoId.split(",");
-                   await ctx.replyWithPhoto(photos[0], {caption: caption, parse_mode: "HTML"});
-                }
-             } catch(e) { console.error("Qidiruv xabarini yuborishda xatolik:", e.message); }
+         const PER_PAGE = 5;
+         const totalPages = Math.ceil(sortedResults.length / PER_PAGE);
+         let currentPage = 1;
+
+         // Sahifani chizadigan ichki yordamchi funksiya
+         const buildPageKeyboard = (page) => {
+             const startIndex = (page - 1) * PER_PAGE;
+             const pageAds = sortedResults.slice(startIndex, startIndex + PER_PAGE);
+
+             let listText = `✅ <b>Topildi: ${filtered.length} ta e'lon!</b> (${priceText})\n`;
+             listText += `📄 Sahifa: <b>${page}/${totalPages}</b> | 🔽 Eng arzondan tartiblangan\n\n`;
+
+             const kb = new InlineKeyboard();
+             pageAds.forEach((ad, i) => {
+                 const num = startIndex + i + 1;
+                 listText += `<b>${num}.</b> 🚗 ${ad.carDetails} — <b>${formatNum(ad.price)}$</b>\n`;
+                 listText += `📅 ${ad.year} | 👣 ${formatNum(ad.probeg)} km\n\n`;
+                 kb.text(`${num}`, `sr_view:${ad.id}`);
+                 if ((i + 1) % 5 === 0) kb.row();
+             });
+
+             // Tugmalar qatorini yopamiz
+             if (pageAds.length % 5 !== 0) kb.row();
+
+             // Oldingi / Keyingi tugmalari
+             const navRow = [];
+             if (page > 1) navRow.push(InlineKeyboard.text("⬅️ Oldingi", "sr_prev"));
+             if (page < totalPages) navRow.push(InlineKeyboard.text("Keyingi ➡️", "sr_next"));
+             if (navRow.length > 0) kb.row(...navRow);
+
+             kb.row().text("✅ Qidiruvni yakunlash", "sr_done");
+
+             listText += `👇 <i>To'liq ko'rish uchun moshina raqamini bosing:</i>`;
+             return { listText, kb };
+         };
+
+         // Birinchi sahifani chiqaramiz
+         let { listText, kb } = buildPageKeyboard(currentPage);
+         const listMsg = await ctx.reply(listText, { parse_mode: "HTML", reply_markup: kb });
+
+         // Paginatsiya sikli — foydalanuvchi tugma bosishini kutamiz
+         let browsing = true;
+         while (browsing) {
+             const navRes = await conversation.waitFor(["callback_query:data", "message:text"]);
+
+             // Agar menyu tugmasi bosilsa yoki matn yozsa — chiqamiz
+             if (navRes.message?.text) {
+                 if (cancelTexts.includes(navRes.message.text)) {
+                     await ctx.api.deleteMessage(ctx.chat.id, listMsg.message_id).catch(()=>{});
+                     return ctx.reply("❌ Qidiruv yakunlandi.", { reply_markup: mainMenu });
+                 }
+                 continue; // boshqa matnni e'tiborsiz qoldiramiz
+             }
+
+             const data = navRes.callbackQuery?.data;
+             await safeAnswerCbq(navRes);
+
+             if (data === "sr_next") {
+                 currentPage++;
+                 ({ listText, kb } = buildPageKeyboard(currentPage));
+                 await ctx.api.editMessageText(ctx.chat.id, listMsg.message_id, listText, { parse_mode: "HTML", reply_markup: kb }).catch(()=>{});
+             }
+             else if (data === "sr_prev") {
+                 currentPage--;
+                 ({ listText, kb } = buildPageKeyboard(currentPage));
+                 await ctx.api.editMessageText(ctx.chat.id, listMsg.message_id, listText, { parse_mode: "HTML", reply_markup: kb }).catch(()=>{});
+             }
+             else if (data === "sr_done") {
+                 await ctx.api.deleteMessage(ctx.chat.id, listMsg.message_id).catch(()=>{});
+                 browsing = false; // sikldan chiqamiz
+             }
+             else if (data && data.startsWith("sr_view:")) {
+                 // Foydalanuvchi bitta e'lonni tanladi — uni to'liq (kanaldagi post) chiqaramiz
+                 const viewId = data.split(":")[1];
+                 const chosenAd = sortedResults.find(a => String(a.id) === String(viewId));
+                 if (chosenAd) {
+                     try {
+                         if (chosenAd.channelMsgId) {
+                             await ctx.api.copyMessage(ctx.chat.id, CHANNEL_ID, chosenAd.channelMsgId);
+                         } else {
+                             const caption = `🚗 <b>${chosenAd.carDetails}</b>\n📅 Yili: ${chosenAd.year}\n👣 Probeg: ${formatNum(chosenAd.probeg)} km\n💰 Narxi: ${formatNum(chosenAd.price)}$\n☎️ Tel: +${chosenAd.phone}`;
+                             const photos = chosenAd.photoId.split(",");
+                             await ctx.replyWithPhoto(photos[0], { caption, parse_mode: "HTML" });
+                         }
+                     } catch (e) { console.error("E'lonni ko'rsatishda xato:", e.message); }
+                 }
+                 // Ro'yxatni pastga qayta chiqaramiz (yangi xabar sifatida), eskisini o'chiramiz
+                 await ctx.api.deleteMessage(ctx.chat.id, listMsg.message_id).catch(()=>{});
+                 ({ listText, kb } = buildPageKeyboard(currentPage));
+                 const newListMsg = await ctx.reply(listText, { parse_mode: "HTML", reply_markup: kb });
+                 listMsg.message_id = newListMsg.message_id;
+             }
          }
       }
 
