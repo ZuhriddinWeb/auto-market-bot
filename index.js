@@ -11,6 +11,10 @@ process.env.FONTCONFIG_PATH = path.join(__dirname, "fonts");
 process.env.FONTCONFIG_FILE = path.join(__dirname, "fonts", "fonts.conf");
 const bot = new Bot(process.env.BOT_TOKEN);
 const ADMIN_ID = Number(process.env.ADMIN_ID);
+// VIP xizmat sozlamalari (osongina o'zgartiring)
+const VIP_PRICE = "25000"; // so'mda
+const VIP_CARD = "9860 0466 2632 6469"; // O'z kartangizni yozing
+const VIP_CARD_NAME = "Zuhriddin Mustafoyev"; // Karta egasi
 const CHANNEL_ID = process.env.CHANNEL_ID.startsWith("@")
   ? process.env.CHANNEL_ID
   : `@${process.env.CHANNEL_ID}`;
@@ -112,6 +116,16 @@ if (!fs.existsSync(collagesDir)) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+            await db.execute(`
+      CREATE TABLE IF NOT EXISTS vip_requests (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        userId BIGINT,
+        adId BIGINT,
+        screenshotId TEXT,
+        status VARCHAR(20) DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   const alterQueries = [
       "ALTER TABLE ads ADD COLUMN history TEXT DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN barter VARCHAR(255) DEFAULT NULL",
@@ -138,6 +152,7 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE ads ADD COLUMN dealer_offer TEXT DEFAULT NULL",
       "ALTER TABLE ad_edits ADD COLUMN dealer_offer TEXT DEFAULT NULL",
       "ALTER TABLE salon_ads ADD COLUMN channelMsgId VARCHAR(50) DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN last_bumped TIMESTAMP DEFAULT NULL",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -1100,7 +1115,16 @@ bot.callbackQuery("admin_help", async (ctx) => {
     `✅ <b>Foydalanuvchini blokdan ochish:</b>\n<code>/unban [Foydalanuvchi_ID]</code>\n\n` +
     `🚀 <b>E'lonni qo'lda UP qilish (Tepaga ko'tarish):</b>\n<code>/up [E'lon_ID]</code>\n\n` +
     `✉️ <b>G'olibga yoki uzerga xabar yuborish:</b>\n<code>/xabar [Foydalanuvchi_ID] [Sizning matningiz]</code>\n\n` +
-    `🔄 <b>Konkurs ballarini nollash (Yangi hafta uchun):</b>\n<code>/reset_contest</code>`;
+    `🔄 <b>Konkurs ballarini nollash (Yangi hafta uchun):</b>\n<code>/reset_contest</code>\n\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `🧪 <b>TEST BUYRUQLARI (kanalga post yuboradi):</b>\n\n` +
+    `📊 <b>Kunlik TOP post:</b>\n<code>/test_top3</code>\n\n` +
+    `🔎 <b>Top qidiruvlar:</b>\n<code>/test_topsearch</code>\n\n` +
+    `📈 <b>Narx grafigi:</b>\n<code>/test_chart</code>\n\n` +
+    `📊 <b>Haftalik analitika:</b>\n<code>/test_analytics</code>\n\n` +
+    `📣 <b>"E'lon bering" chaqiriq posti:</b>\n<code>/test_sellcall</code>\n\n` +
+    `🆕 <b>1-3 kunlik yangi e'lon ko'tarish:</b>\n<code>/test_newbump</code>\n\n` +
+    `🚀 <b>15 kunlik UP testi:</b>\n<code>/test_up</code>`;
     
   await ctx.editMessageText(helpText, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_back") });
 });
@@ -3791,7 +3815,7 @@ bot.callbackQuery(/^manage_ad:(\d+)/, async (ctx) => {
     .text("💰 Sotildi", `sold_req:${ad.id}`)
     .text("📉 Narxni tushirish", `edit_price:${ad.id}`).row()
     .text("✏️ To'liq tahrirlash", `full_edit_req:${ad.id}`).row()
-    .text("🌟 VIP QILISH (50 ⭐️)", `buy_vip:${ad.id}`).row(); 
+    .text("🌟 VIP QILISH (Tepaga qadash)", `buy_vip:${ad.id}`).row();
 
   if (freeUps > 0) {
     kb.text(`🚀 BEPUL UP (${freeUps} ta bor)`, `free_up_req:${ad.id}`).row();
@@ -4334,28 +4358,158 @@ bot.callbackQuery(/^del_alert:(\d+)/, async (ctx) => {
 // ==============================================================
 bot.callbackQuery(/^buy_vip:(\d+)/, async (ctx) => {
     const adId = ctx.match[1];
-    
-    // ✅ Timeout xatosini yashiramiz (query is too old xatosi boshqa chiqmaydi)
-    await ctx.answerCallbackQuery().catch(() => {}); 
-    
-    try {
-        // Yangilangan Grammy versiyasi bo'yicha parametrlar
-        await ctx.api.sendInvoice(
-            ctx.from.id,
-            "🌟 VIP E'LON", // Sarlavha
-            "E'loningizni OLTIN maqomda kanalga joylaymiz va kanalning eng tepasiga qadab (Pin qilib) qo'yamiz!", // Ta'rif
-            `vip_${adId}`, // Payload
-            "XTR", // Valyuta
-            [{ label: "VIP Xizmat", amount: 50 }] // Narxi
-        );
-    } catch (err) {
-        console.error("Yulduzcha Invoys yuborishda xato:", err.message);
-        await ctx.reply("❌ To'lov tizimiga ulanishda vaqtinchalik nosozlik yuz berdi.");
-    }
+    await ctx.answerCallbackQuery().catch(() => {});
+
+    // E'lon egasi shu odammi tekshiramiz
+    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ? AND status = 'active'", [adId, ctx.from.id]);
+    const ad = rows[0];
+    if (!ad) return ctx.reply("❌ Bu e'lon faol emas yoki sizga tegishli emas.");
+
+    const text =
+        `🌟 <b>VIP E'LON XIZMATI</b>\n\n` +
+        `🚗 <b>${ad.carDetails}</b>\n\n` +
+        `VIP qilinganda e'loningiz:\n` +
+        `✅ Kanalning eng tepasiga qadaladi (Pin)\n` +
+        `✅ "🌟 VIP" belgisi bilan ajralib turadi\n` +
+        `✅ Ko'proq xaridor ko'radi\n\n` +
+        `💰 <b>Narxi: ${VIP_PRICE} so'm</b>\n\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `💳 <b>To'lov uchun karta:</b>\n` +
+        `<code>${VIP_CARD}</code>\n` +
+        `👤 ${VIP_CARD_NAME}\n` +
+        `━━━━━━━━━━━━━━━━━━\n\n` +
+        `📸 <b>To'lovni amalga oshirgach, chek (skrinshot)ni shu yerga rasm qilib yuboring.</b>\n` +
+        `Admin tekshirib, e'loningizni VIP qiladi.`;
+
+    // Foydalanuvchini "VIP skrinshot kutish" holatiga o'tkazamiz
+    if (ctx.session) ctx.session.waitingVipScreenshot = adId;
+
+    await ctx.reply(text, { parse_mode: "HTML" });
+});
+// 📸 VIP TO'LOV SKRINSHOTINI QABUL QILISH
+bot.on("message:photo", async (ctx, next) => {
+  // Agar foydalanuvchi VIP skrinshot kutish holatida bo'lmasa, o'tkazib yuboramiz
+  if (!ctx.session?.waitingVipScreenshot) return next();
+
+  const adId = ctx.session.waitingVipScreenshot;
+  ctx.session.waitingVipScreenshot = null; // holatni tozalaymiz
+
+  const photoArr = ctx.message.photo;
+  const screenshotId = photoArr[photoArr.length - 1].file_id;
+
+  // E'lonni tekshiramiz
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ? AND status = 'active'", [adId, ctx.from.id]);
+  const ad = rows[0];
+  if (!ad) return ctx.reply("❌ Bu e'lon faol emas yoki topilmadi.", { reply_markup: mainMenu });
+
+  // VIP so'rovini bazaga saqlaymiz
+  const [saveRes] = await db.execute(
+    "INSERT INTO vip_requests (userId, adId, screenshotId, status) VALUES (?,?,?,'pending')",
+    [ctx.from.id, adId, screenshotId]
+  );
+  const vipReqId = saveRes.insertId;
+
+  // Adminга skrinshot va tugmalar bilan yuboramiz
+  const usernameStr = ctx.from.username ? `@${ctx.from.username}` : "yo'q";
+  const adminCaption =
+    `🌟 <b>YANGI VIP TO'LOV SO'ROVI!</b>\n\n` +
+    `🚗 <b>Moshina:</b> ${ad.carDetails}\n` +
+    `🆔 <b>E'lon ID:</b> ${adId}\n` +
+    `💰 <b>Summa:</b> ${VIP_PRICE} so'm\n` +
+    `👤 <b>Foydalanuvchi:</b> <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a> (${usernameStr})\n\n` +
+    `<i>Chekni tekshiring va tasdiqlang yoki rad eting:</i>`;
+
+  await bot.api.sendPhoto(ADMIN_ID, screenshotId, {
+    caption: adminCaption,
+    parse_mode: "HTML",
+    reply_markup: new InlineKeyboard()
+      .text("✅ Tasdiqlash (VIP qilish)", `vip_approve:${vipReqId}`)
+      .text("❌ Rad etish", `vip_reject:${vipReqId}`)
+  });
+
+  await ctx.reply(
+    "✅ <b>Chekingiz adminга yuborildi!</b>\n\nTo'lov tekshirilgach, e'loningiz VIP qilinadi. Odatda bu tez amalga oshadi.",
+    { parse_mode: "HTML", reply_markup: mainMenu }
+  );
+});
+// ✅ Admin VIP to'lovni tasdiqlaganda — e'lonni VIP qiladi
+bot.callbackQuery(/^vip_approve:(\d+)/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const vipReqId = ctx.match[1];
+
+  const [[req]] = await db.execute("SELECT * FROM vip_requests WHERE id = ?", [vipReqId]);
+  if (!req || req.status !== 'pending') {
+    return ctx.answerCallbackQuery({ text: "Bu so'rov allaqachon ko'rib chiqilgan.", show_alert: true });
+  }
+
+  const [[ad]] = await db.execute("SELECT * FROM ads WHERE id = ? AND status = 'active'", [req.adId]);
+  if (!ad) {
+    await db.execute("UPDATE vip_requests SET status = 'rejected' WHERE id = ?", [vipReqId]);
+    return ctx.answerCallbackQuery({ text: "E'lon faol emas.", show_alert: true });
+  }
+
+  await ctx.answerCallbackQuery("⏳ VIP qilinmoqda...").catch(()=>{});
+
+  const channelMarkup = new InlineKeyboard()
+    .url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
+    .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
+    .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
+
+  let newMsgId;
+  try {
+    // Eski xabarni o'chirib, yangidan (VIP belgisi bilan) tashlaymiz
+    const newMsg = await bot.api.copyMessage(CHANNEL_ID, CHANNEL_ID, ad.channelMsgId, { reply_markup: channelMarkup });
+    newMsgId = newMsg.message_id;
+    await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(()=>{});
+
+    // VIP belgisi bilan matnni yangilaymiz
+    const vipCaption =
+      `🌟 <b>VIP E'LON!</b> 🌟\n\n` +
+      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
+      `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n` +
+      `💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
+      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
+
+    await bot.api.editMessageCaption(CHANNEL_ID, newMsgId, { caption: vipCaption, parse_mode: "HTML", reply_markup: channelMarkup }).catch(()=>{});
+    // Tepaga qadaymiz (pin)
+    await bot.api.pinChatMessage(CHANNEL_ID, newMsgId).catch(()=>{});
+
+    await db.execute("UPDATE ads SET channelMsgId = ? WHERE id = ?", [newMsgId, ad.id]);
+  } catch (e) {
+    console.error("VIP qilishda xato:", e);
+  }
+
+  await db.execute("UPDATE vip_requests SET status = 'approved' WHERE id = ?", [vipReqId]);
+  await ctx.editMessageCaption({ caption: "✅ <b>VIP tasdiqlandi va e'lon tepaga qadaldi!</b>", parse_mode: "HTML" });
+
+  // Foydalanuvchiga xabar
+  try {
+    await bot.api.sendMessage(req.userId,
+      `🎉 <b>To'lovingiz tasdiqlandi!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz VIP maqomida kanalning eng tepasiga qadab qo'yildi! 🌟`,
+      { parse_mode: "HTML" }
+    );
+  } catch (e) {}
 });
 
+// ❌ Admin VIP to'lovni rad etganda
+bot.callbackQuery(/^vip_reject:(\d+)/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const vipReqId = ctx.match[1];
+
+  const [[req]] = await db.execute("SELECT * FROM vip_requests WHERE id = ?", [vipReqId]);
+  if (!req) return ctx.answerCallbackQuery({ text: "So'rov topilmadi.", show_alert: true });
+
+  await db.execute("UPDATE vip_requests SET status = 'rejected' WHERE id = ?", [vipReqId]);
+  await ctx.editMessageCaption({ caption: "❌ <b>VIP to'lov rad etildi.</b>", parse_mode: "HTML" });
+
+  try {
+    await bot.api.sendMessage(req.userId,
+      "❌ <b>VIP to'lovingiz tasdiqlanmadi.</b>\n\nChek noto'g'ri yoki to'lov kelmadi. Savol bo'lsa admin bilan bog'laning: @uzdev75",
+      { parse_mode: "HTML" }
+    );
+  } catch (e) {}
+});
 // To'lovni tasdiqlash
-bot.on("pre_checkout_query", (ctx) => ctx.answerPreCheckoutQuery(true));
 
 // To'lov muvaffaqiyatli bo'lganda ishlovchi mantiq
 bot.on("message:successful_payment", async (ctx) => {
@@ -4667,17 +4821,66 @@ bot.command("test_sellcall", async (ctx) => {
   await sendSellCallPost();
   await ctx.reply("✅ <b>Tayyor! Kanalni tekshiring.</b>", { parse_mode: "HTML" });
 });
+bot.command("test_newbump", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.reply("⏳ <i>1-3 kunlik yangi e'lon ko'tarish taklifi yuborilmoqda...</i>", { parse_mode: "HTML" });
+  await runAutomations();
+  await ctx.reply("✅ <b>Tayyor!</b>\n\n<i>Agar hech kimga bormasa, demak 1-3 kunlik yangi e'lon yo'q (admin e'lonlari hisobga olinmaydi), yoki bugun allaqachon so'ralgan.</i>", { parse_mode: "HTML" });
+});
 // ==============================================================
 // 🤖 AVTO-TOZALASH VA AQLLI MASLAHATCHI TIZIMI (ADMIN ishtirok etmaydi)
 // ==============================================================
-// ==============================================================
-// 🤖 AVTO-ESLATMA VA TEPAGA KO'TARISH (UP) TIZIMI
-// ==============================================================
-// ==============================================================
-// 🤖 AVTO-ESLATMA VA TEPAGA KO'TARISH (UP) TIZIMI
+
 // ==============================================================
 async function runAutomations() {
   try {
+      // ================= 0. YANGI E'LONNI KO'TARISH (1-3 KUN) =================
+      // Yangi foydalanuvchilarning e'loni admin e'lonlari orasida pastda qolib
+      // ketmasligi uchun birinchi 3 kun har kuni "ko'tarasizmi?" deb so'raymiz
+      const [newAds] = await db.execute(
+          `SELECT id, userId, carDetails FROM ads 
+           WHERE status = 'active' AND userId != ? 
+             AND DATEDIFF(CURDATE(), DATE(created_at)) BETWEEN 1 AND 3
+             AND (last_bumped IS NULL OR DATE(last_bumped) != CURDATE())`,
+          [ADMIN_ID]
+      );
+
+      let newBumpText = "";   // Admin uchun hisobot yig'amiz
+      let newBumpCount = 0;
+
+      for (let ad of newAds) {
+          const text = 
+            `🆕 <b>E'loningiz yangi — uni tepaga ko'taraylikmi?</b>\n\n` +
+            `🚗 <b>${ad.carDetails}</b>\n\n` +
+            `Kanalimizda har kuni ko'plab yangi e'lonlar chiqadi va sizniki pastga tushib qolishi mumkin. ` +
+            `E'lonni tepaga ko'tarsangiz, uni <b>ko'proq xaridor ko'radi</b> va tezroq sotiladi!\n\n` +
+            `👇 Ko'tarishni istaysizmi?`;
+          
+          try {
+              await bot.api.sendMessage(ad.userId, text, {
+                  parse_mode: "HTML",
+                  reply_markup: new InlineKeyboard()
+                    .text("🚀 Ha, tepaga ko'tarish", `ask_bump:${ad.id}`).row()
+                    .text("✅ Allaqachon sotildi", `confirm_sold:${ad.id}`)
+              });
+              // Muvaffaqiyatli yuborilsa, admin hisobotiga qo'shamiz
+              newBumpText += `👤 <a href="tg://user?id=${ad.userId}">Profil</a> | 🚗 ${ad.carDetails} (ID: ${ad.id})\n`;
+              newBumpCount++;
+          } catch (err) {
+              // Bloklagan bo'lsa o'tkazib yuboramiz
+          }
+          // Bugun so'raganimizni belgilaymiz (qayta so'ramaslik uchun)
+          await db.execute("UPDATE ads SET last_bumped = CURRENT_TIMESTAMP WHERE id = ?", [ad.id]).catch(()=>{});
+          await delay(200);
+      }
+
+      // Adminга hisobot yuboramiz (agar kamida 1 kishiga xabar ketgan bo'lsa)
+      if (newBumpCount > 0) {
+          const adminReport = `📊 <b>YANGI E'LON KO'TARISH HISOBOTI (1-3 KUNLIK):</b>\n\nBugun jami <b>${newBumpCount} ta</b> yangi foydalanuvchiga e'lonini ko'tarish taklifi yuborildi:\n\n${newBumpText}`;
+          await bot.api.sendMessage(ADMIN_ID, adminReport, { parse_mode: "HTML" }).catch(()=>{});
+      }
+      // ======================================================================
+
       // 1. AQLLI MASLAHATCHI (5 KUNLIK)
       const [ads5] = await db.execute(
           "SELECT id, userId, carDetails FROM ads WHERE status = 'active' AND userId != ? AND DATEDIFF(CURDATE(), DATE(created_at)) = 5",
