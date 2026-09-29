@@ -3530,8 +3530,24 @@ bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
 // });
 
 bot.callbackQuery(/^sold_req:(\d+)/, async (ctx) => {
-  await ctx.answerCallbackQuery().catch(()=>{});
-  await ctx.conversation.enter("soldConversation");
+  const adId = ctx.match[1];
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  const ad = rows[0];
+
+  if (ad && ad.status === 'active') {
+      await bot.api.sendMessage(ADMIN_ID, `💰 <b>SOTILDI XABARI!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>`, {
+          reply_markup: new InlineKeyboard().text("✅ Tasdiqlash (Kanalda belgilash)", `confirm_sold:${adId}`), parse_mode: "HTML",
+      });
+      await ctx.answerCallbackQuery({ text: "So'rov adminga yuborildi." });
+      
+      try {
+          await ctx.editMessageText(`🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n\n⏳ <i>Sotildi deb belgilash bo'yicha so'rov adminga yuborildi...</i>`, { parse_mode: "HTML" });
+      } catch (e) {
+          // Tugma 2-marta bosilsa, xatolikni inkor qilamiz (message is not modified)
+      }
+  } else {
+      await ctx.answerCallbackQuery({ text: "Bu e'lon allaqachon yopilgan yoki topilmadi.", show_alert: true });
+  }
 });
 
 bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
@@ -3561,9 +3577,7 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
   
   if (ad && ad.status === 'active') {
       try {
-              // Agar real sotuv narxi bo'lsa, uni ko'rsatamiz; bo'lmasa e'londagi narxni
-       const displayPrice = ad.sold_price ? formatNum(ad.sold_price) : formatNum(ad.price);
-       const newCaption = `💰 <b>SOTILDI!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Sotildi: ${displayPrice} $</b>\n\n❌ <b>E'lon yopildi.</b>`;
+       const newCaption = `💰 <b>SOTILDI!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Narxi: ${formatNum(ad.price)} $</b>\n\n❌ <b>E'lon yopildi.</b>`;
         
         // 1. Asosiy kanalni yangilash
         await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, parse_mode: "HTML" });
@@ -3612,11 +3626,9 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
         }
         // Avtomatik tabriknoma (Reklama) asosiy kanalga
                // Avtomatik tabriknoma (Reklama) asosiy kanalga
-                // Real sotuv narxi bo'lsa, tabrikda ko'rsatamiz
-        const soldPriceText = ad.sold_price ? ` <b>${formatNum(ad.sold_price)}$ ga</b>` : "";
         const congratsText = 
           `🎉 <b>YANA BITTA MOSHINA SOTILDI!</b>\n\n` +
-          `🚗 <b>${ad.carDetails}</b> — ${daysText}${soldPriceText}! 🤝\n\n` +
+          `🚗 <b>${ad.carDetails}</b> — ${daysText}! 🤝\n\n` +
           `Sotuvchini tabriklaymiz! Bizning botimiz orqali moshinalar <b>maklersiz, komissiyasiz va tez</b> sotilmoqda.\n\n` +
           `🚘 <b>Sizda ham sotiladigan moshina bormi?</b>\n` +
           `Uni bepul joylang — minglab xaridor kutmoqda! 👇\n` +
@@ -4260,7 +4272,6 @@ bot.use(createConversation(editPriceConversation));
 /**
  * ✅ SOTILDI + SOTUV NARXINI SO'RASH JARAYONI
  */
-
 async function soldConversation(conversation, ctx) {
   const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim"];
   const cbData = ctx.callbackQuery?.data;
@@ -4274,13 +4285,13 @@ async function soldConversation(conversation, ctx) {
     return ctx.reply("❌ Bu e'lon faol emas yoki allaqachon yopilgan.", { reply_markup: mainMenu });
   }
 
-  // Real sotuv narxini so'raymiz (ixtiyoriy — o'tkazib yuborish mumkin)
+  // Narxni so'raymiz (ixtiyoriy — o'tkazib yuborish mumkin)
   const kb = new InlineKeyboard().text("⏭ O'tkazib yuborish", "sold_skip_price");
   await ctx.reply(
     `💰 <b>Moshinangiz qanchaga sotildi?</b>\n\n` +
     `🚗 <b>${ad.carDetails}</b>\n\n` +
     `<i>Real sotilgan narxni dollarda kiriting (masalan: 10500). ` +
-    `Bu boshqa sotuvchilarga bozor narxini bilishda yordam beradi!</i>\n\n` +
+    `Bu ma'lumot boshqa sotuvchilarga bozor narxini bilishda yordam beradi!</i>\n\n` +
     `Agar aytishni istamasangiz «O'tkazib yuborish» ni bosing.`,
     { parse_mode: "HTML", reply_markup: kb }
   );
@@ -4297,11 +4308,11 @@ async function soldConversation(conversation, ctx) {
       soldPrice = num;
     }
   } else if (res.callbackQuery?.data === "sold_skip_price") {
-    await res.answerCallbackQuery().catch(()=>{});
+    await res.answerCallbackQuery();
     soldPrice = null; // aytmadi
   }
 
-  // Real sotuv narxini bazaga saqlaymiz (agar aytgan bo'lsa)
+  // Sotuv narxini bazaga saqlaymiz (agar aytgan bo'lsa)
   if (soldPrice) {
     await conversation.external(() => db.execute("UPDATE ads SET sold_price = ? WHERE id = ?", [soldPrice, adId]));
   }
@@ -4319,7 +4330,7 @@ async function soldConversation(conversation, ctx) {
   );
 
   await ctx.reply(
-    "✅ <b>So'rovingiz adminga yuborildi!</b>\n\nAdmin tasdiqlagach, e'loningiz kanalda «Sotildi» deb belgilanadi. Xaridor topilishiga hissa qo'shganingiz uchun rahmat! 🤝",
+    "✅ <b>So'rovingiz adminга yuborildi!</b>\n\nAdmin tasdiqlagach, e'loningiz kanalda «Sotildi» deb belgilanadi. Xaridor topilishiga hissa qo'shganingiz uchun rahmat! 🤝",
     { parse_mode: "HTML", reply_markup: mainMenu }
   );
 }
