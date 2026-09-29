@@ -711,6 +711,7 @@ const adminMenu = new InlineKeyboard()
   .text("🏆 Konkurs (Top-10)", "admin_top").row()
   .text("🏢 Avtosalonlar", "admin_dealers").row()
   .text("📢 Reklamalar", "admin_salon_ads").row()
+  .text("🌟 VIP mijozlar", "admin_vip").row()
   .text("🚗 Kunlik TOP-5 yuborish", "admin_test_top5")
   .text("📈 Haftalik Analitika", "admin_test_analytics").row()
   .text("🔎 Top qidiruvlar", "admin_topsearch")
@@ -816,7 +817,110 @@ bot.callbackQuery("admin_salon_ads", async (ctx) => {
 
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
 });
+// 🌟 VIP MIJOZLAR RO'YXATI VA HISOBOT
+bot.callbackQuery("admin_vip", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.answerCallbackQuery("⏳ VIP mijozlar yuklanmoqda...").catch(()=>{});
 
+  try {
+    // 1. Umumiy hisob: jami tasdiqlangan VIP soni
+    const [[totalApproved]] = await db.execute("SELECT COUNT(*) as cnt FROM vip_requests WHERE status = 'approved'");
+    const [[totalPending]] = await db.execute("SELECT COUNT(*) as cnt FROM vip_requests WHERE status = 'pending'");
+    const [[totalRejected]] = await db.execute("SELECT COUNT(*) as cnt FROM vip_requests WHERE status = 'rejected'");
+
+    // 2. Jami daromad (tasdiqlangan VIP soni × narx)
+    // VIP_PRICE dan raqamni ajratib olamiz (masalan "25 000" -> 25000)
+    const priceNum = parseInt(VIP_PRICE.replace(/\D/g, "")) || 0;
+    const totalIncome = (totalApproved.cnt * priceNum).toLocaleString("ru-RU");
+
+    // 3. Eng ko'p VIP olgan mijozlar (foydalanuvchi bo'yicha guruhlab)
+    const [topClients] = await db.execute(`
+      SELECT v.userId, u.first_name, u.username, COUNT(*) as vipCount
+      FROM vip_requests v
+      LEFT JOIN users u ON v.userId = u.id
+      WHERE v.status = 'approved'
+      GROUP BY v.userId
+      ORDER BY vipCount DESC
+      LIMIT 15
+    `);
+
+    let text = `🌟 <b>VIP MIJOZLAR HISOBOTI</b>\n\n`;
+    text += `✅ Tasdiqlangan VIP: <b>${totalApproved.cnt} ta</b>\n`;
+    text += `⏳ Kutayotgan: <b>${totalPending.cnt} ta</b>\n`;
+    text += `❌ Rad etilgan: <b>${totalRejected.cnt} ta</b>\n`;
+    text += `💰 <b>Jami daromad: ~${totalIncome} so'm</b>\n`;
+    text += `<i>(${totalApproved.cnt} ta × ${VIP_PRICE} so'm)</i>\n\n`;
+    text += `━━━━━━━━━━━━━━━━━━\n`;
+    text += `👥 <b>ENG KO'P VIP OLGAN MIJOZLAR:</b>\n\n`;
+
+    if (topClients.length === 0) {
+      text += `<i>Hozircha tasdiqlangan VIP mijozlar yo'q.</i>`;
+    } else {
+      topClients.forEach((c, i) => {
+        const name = c.first_name || "Ismsiz";
+        const userLink = c.username ? `(${c.username})` : "";
+        text += `${i + 1}. <a href="tg://user?id=${c.userId}">${name}</a> ${userLink} — <b>${c.vipCount} ta VIP</b>\n`;
+      });
+    }
+
+    const kb = new InlineKeyboard()
+      .text("📋 Oxirgi VIP so'rovlari", "admin_vip_recent").row()
+      .text("🔙 Orqaga", "admin_back");
+
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb, disable_web_page_preview: true });
+  } catch (e) {
+    console.error("VIP hisobot xatosi:", e);
+    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true });
+  }
+});
+
+// 📋 OXIRGI VIP SO'ROVLARI (batafsil ro'yxat)
+bot.callbackQuery("admin_vip_recent", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.answerCallbackQuery().catch(()=>{});
+
+  try {
+    // Oxirgi 15 ta VIP so'rovi (e'lon nomi bilan)
+    const [rows] = await db.execute(`
+      SELECT v.id, v.userId, v.status, v.created_at, a.carDetails, u.first_name, u.username
+      FROM vip_requests v
+      LEFT JOIN ads a ON v.adId = a.id
+      LEFT JOIN users u ON v.userId = u.id
+      ORDER BY v.created_at DESC
+      LIMIT 15
+    `);
+
+    if (rows.length === 0) {
+      return ctx.editMessageText("📭 <b>Hozircha VIP so'rovlari yo'q.</b>", {
+        parse_mode: "HTML",
+        reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_vip")
+      });
+    }
+
+    let text = `📋 <b>OXIRGI VIP SO'ROVLARI:</b>\n\n`;
+    rows.forEach((r, i) => {
+      const name = r.first_name || "Ismsiz";
+      const car = r.carDetails || "E'lon o'chirilgan";
+      const dateStr = new Intl.DateTimeFormat('uz-UZ', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent' }).format(new Date(r.created_at));
+      // Holatga qarab belgi
+      let statusEmoji = "⏳";
+      if (r.status === "approved") statusEmoji = "✅";
+      else if (r.status === "rejected") statusEmoji = "❌";
+
+      text += `${statusEmoji} <b>${car}</b>\n`;
+      text += `👤 <a href="tg://user?id=${r.userId}">${name}</a> | 🗓 ${dateStr}\n\n`;
+    });
+
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_vip"),
+      disable_web_page_preview: true
+    });
+  } catch (e) {
+    console.error("VIP ro'yxat xatosi:", e);
+    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true });
+  }
+});
 // 📢 BITTA REKLAMANI BOSHQARISH
 bot.callbackQuery(/^salon_ad_manage:(\d+)/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
