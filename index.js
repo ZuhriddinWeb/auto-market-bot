@@ -153,6 +153,7 @@ if (!fs.existsSync(collagesDir)) {
       "ALTER TABLE ad_edits ADD COLUMN dealer_offer TEXT DEFAULT NULL",
       "ALTER TABLE salon_ads ADD COLUMN channelMsgId VARCHAR(50) DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN last_bumped TIMESTAMP DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN sold_price VARCHAR(255) DEFAULT NULL",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -3529,34 +3530,40 @@ bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
 // });
 
 bot.callbackQuery(/^sold_req:(\d+)/, async (ctx) => {
-  const adId = ctx.match[1];
-  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
-  const ad = rows[0];
-
-  if (ad && ad.status === 'active') {
-      await bot.api.sendMessage(ADMIN_ID, `💰 <b>SOTILDI XABARI!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>`, {
-          reply_markup: new InlineKeyboard().text("✅ Tasdiqlash (Kanalda belgilash)", `confirm_sold:${adId}`), parse_mode: "HTML",
-      });
-      await ctx.answerCallbackQuery({ text: "So'rov adminga yuborildi." });
-      
-      try {
-          await ctx.editMessageText(`🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n\n⏳ <i>Sotildi deb belgilash bo'yicha so'rov adminga yuborildi...</i>`, { parse_mode: "HTML" });
-      } catch (e) {
-          // Tugma 2-marta bosilsa, xatolikni inkor qilamiz (message is not modified)
-      }
-  } else {
-      await ctx.answerCallbackQuery({ text: "Bu e'lon allaqachon yopilgan yoki topilmadi.", show_alert: true });
-  }
+  await ctx.answerCallbackQuery().catch(()=>{});
+  await ctx.conversation.enter("soldConversation");
 });
 
 bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
+  // FAQAT ADMIN kanalda "sotildi" deb belgilay oladi!
+  if (ctx.from.id !== ADMIN_ID) {
+    // Agar oddiy foydalanuvchi bossa, uni sold_req (admin so'rovi) ga yo'naltiramiz
+    const adId = ctx.match[1];
+    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+    const ad = rows[0];
+    if (ad && ad.status === 'active') {
+      await bot.api.sendMessage(ADMIN_ID, `💰 <b>SOTILDI XABARI!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>`, {
+        reply_markup: new InlineKeyboard().text("✅ Tasdiqlash (Kanalda belgilash)", `confirm_sold:${adId}`), parse_mode: "HTML",
+      });
+      await ctx.answerCallbackQuery({ text: "✅ So'rov adminga yuborildi.", show_alert: true });
+      try {
+        await ctx.editMessageText(`🚗 <b>${ad.carDetails}</b>\n\n⏳ <i>«Sotildi» so'rovi adminga yuborildi. Admin tasdiqlagach, kanalda belgilanadi.</i>`, { parse_mode: "HTML" });
+      } catch (e) {}
+    } else {
+      await ctx.answerCallbackQuery({ text: "Bu e'lon allaqachon yopilgan.", show_alert: true });
+    }
+    return;
+  }
+
   const adId = ctx.match[1];
   const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
   const ad = rows[0];
   
   if (ad && ad.status === 'active') {
       try {
-       const newCaption = `💰 <b>SOTILDI!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Narxi: ${formatNum(ad.price)} $</b>\n\n❌ <b>E'lon yopildi.</b>`;
+              // Agar real sotuv narxi bo'lsa, uni ko'rsatamiz; bo'lmasa e'londagi narxni
+       const displayPrice = ad.sold_price ? formatNum(ad.sold_price) : formatNum(ad.price);
+       const newCaption = `💰 <b>SOTILDI!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Sotildi: ${displayPrice} $</b>\n\n❌ <b>E'lon yopildi.</b>`;
         
         // 1. Asosiy kanalni yangilash
         await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, parse_mode: "HTML" });
@@ -3605,9 +3612,11 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
         }
         // Avtomatik tabriknoma (Reklama) asosiy kanalga
                // Avtomatik tabriknoma (Reklama) asosiy kanalga
+                // Real sotuv narxi bo'lsa, tabrikda ko'rsatamiz
+        const soldPriceText = ad.sold_price ? ` <b>${formatNum(ad.sold_price)}$ ga</b>` : "";
         const congratsText = 
           `🎉 <b>YANA BITTA MOSHINA SOTILDI!</b>\n\n` +
-          `🚗 <b>${ad.carDetails}</b> — ${daysText}! 🤝\n\n` +
+          `🚗 <b>${ad.carDetails}</b> — ${daysText}${soldPriceText}! 🤝\n\n` +
           `Sotuvchini tabriklaymiz! Bizning botimiz orqali moshinalar <b>maklersiz, komissiyasiz va tez</b> sotilmoqda.\n\n` +
           `🚘 <b>Sizda ham sotiladigan moshina bormi?</b>\n` +
           `Uni bepul joylang — minglab xaridor kutmoqda! 👇\n` +
@@ -4248,7 +4257,72 @@ async function editPriceConversation(conversation, ctx) {
   }
 }
 bot.use(createConversation(editPriceConversation));
+/**
+ * ✅ SOTILDI + SOTUV NARXINI SO'RASH JARAYONI
+ */
+async function soldConversation(conversation, ctx) {
+  const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim"];
+  const cbData = ctx.callbackQuery?.data;
+  if (!cbData) return;
+  const adId = cbData.split(":")[1];
 
+  const [rows] = await conversation.external(() => db.execute("SELECT * FROM ads WHERE id = ?", [adId]));
+  const ad = rows[0];
+
+  if (!ad || ad.status !== 'active') {
+    return ctx.reply("❌ Bu e'lon faol emas yoki allaqachon yopilgan.", { reply_markup: mainMenu });
+  }
+
+  // Narxni so'raymiz (ixtiyoriy — o'tkazib yuborish mumkin)
+  const kb = new InlineKeyboard().text("⏭ O'tkazib yuborish", "sold_skip_price");
+  await ctx.reply(
+    `💰 <b>Moshinangiz qanchaga sotildi?</b>\n\n` +
+    `🚗 <b>${ad.carDetails}</b>\n\n` +
+    `<i>Real sotilgan narxni dollarda kiriting (masalan: 10500). ` +
+    `Bu ma'lumot boshqa sotuvchilarga bozor narxini bilishda yordam beradi!</i>\n\n` +
+    `Agar aytishni istamasangiz «O'tkazib yuborish» ni bosing.`,
+    { parse_mode: "HTML", reply_markup: kb }
+  );
+
+  const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+
+  let soldPrice = null;
+  if (res.message?.text) {
+    if (cancelTexts.includes(res.message.text)) {
+      return ctx.reply("❌ Amaliyot bekor qilindi.", { reply_markup: mainMenu });
+    }
+    const num = res.message.text.replace(/\D/g, "");
+    if (num && parseInt(num) >= 300 && parseInt(num) <= 500000) {
+      soldPrice = num;
+    }
+  } else if (res.callbackQuery?.data === "sold_skip_price") {
+    await res.answerCallbackQuery();
+    soldPrice = null; // aytmadi
+  }
+
+  // Sotuv narxini bazaga saqlaymiz (agar aytgan bo'lsa)
+  if (soldPrice) {
+    await conversation.external(() => db.execute("UPDATE ads SET sold_price = ? WHERE id = ?", [soldPrice, adId]));
+  }
+
+  // Adminга so'rov yuboramiz
+  const priceInfo = soldPrice ? `\n💰 <b>Sotuv narxi:</b> ${formatNum(soldPrice)}$` : `\n💰 <b>Sotuv narxi:</b> Aytilmadi`;
+  await conversation.external(() =>
+    bot.api.sendMessage(ADMIN_ID,
+      `💰 <b>SOTILDI XABARI!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>${priceInfo}\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>`,
+      {
+        reply_markup: new InlineKeyboard().text("✅ Tasdiqlash (Kanalda belgilash)", `confirm_sold:${adId}`),
+        parse_mode: "HTML"
+      }
+    )
+  );
+
+  await ctx.reply(
+    "✅ <b>So'rovingiz adminга yuborildi!</b>\n\nAdmin tasdiqlagach, e'loningiz kanalda «Sotildi» deb belgilanadi. Xaridor topilishiga hissa qo'shganingiz uchun rahmat! 🤝",
+    { parse_mode: "HTML", reply_markup: mainMenu }
+  );
+}
+bot.use(createConversation(soldConversation));
 // "Нархни тушириш" тугмаси босилганда ишлайдиган код
 bot.callbackQuery(/^edit_price:(\d+)/, async (ctx) => {
   await ctx.answerCallbackQuery();
