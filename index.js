@@ -4260,6 +4260,7 @@ bot.use(createConversation(editPriceConversation));
 /**
  * ✅ SOTILDI + SOTUV NARXINI SO'RASH JARAYONI
  */
+
 async function soldConversation(conversation, ctx) {
   const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim"];
   const cbData = ctx.callbackQuery?.data;
@@ -4273,13 +4274,13 @@ async function soldConversation(conversation, ctx) {
     return ctx.reply("❌ Bu e'lon faol emas yoki allaqachon yopilgan.", { reply_markup: mainMenu });
   }
 
-  // Narxni so'raymiz (ixtiyoriy — o'tkazib yuborish mumkin)
+  // Real sotuv narxini so'raymiz (ixtiyoriy — o'tkazib yuborish mumkin)
   const kb = new InlineKeyboard().text("⏭ O'tkazib yuborish", "sold_skip_price");
   await ctx.reply(
     `💰 <b>Moshinangiz qanchaga sotildi?</b>\n\n` +
     `🚗 <b>${ad.carDetails}</b>\n\n` +
     `<i>Real sotilgan narxni dollarda kiriting (masalan: 10500). ` +
-    `Bu ma'lumot boshqa sotuvchilarga bozor narxini bilishda yordam beradi!</i>\n\n` +
+    `Bu boshqa sotuvchilarga bozor narxini bilishda yordam beradi!</i>\n\n` +
     `Agar aytishni istamasangiz «O'tkazib yuborish» ni bosing.`,
     { parse_mode: "HTML", reply_markup: kb }
   );
@@ -4296,11 +4297,11 @@ async function soldConversation(conversation, ctx) {
       soldPrice = num;
     }
   } else if (res.callbackQuery?.data === "sold_skip_price") {
-    await res.answerCallbackQuery();
+    await res.answerCallbackQuery().catch(()=>{});
     soldPrice = null; // aytmadi
   }
 
-  // Sotuv narxini bazaga saqlaymiz (agar aytgan bo'lsa)
+  // Real sotuv narxini bazaga saqlaymiz (agar aytgan bo'lsa)
   if (soldPrice) {
     await conversation.external(() => db.execute("UPDATE ads SET sold_price = ? WHERE id = ?", [soldPrice, adId]));
   }
@@ -4318,7 +4319,7 @@ async function soldConversation(conversation, ctx) {
   );
 
   await ctx.reply(
-    "✅ <b>So'rovingiz adminга yuborildi!</b>\n\nAdmin tasdiqlagach, e'loningiz kanalda «Sotildi» deb belgilanadi. Xaridor topilishiga hissa qo'shganingiz uchun rahmat! 🤝",
+    "✅ <b>So'rovingiz adminga yuborildi!</b>\n\nAdmin tasdiqlagach, e'loningiz kanalda «Sotildi» deb belgilanadi. Xaridor topilishiga hissa qo'shganingiz uchun rahmat! 🤝",
     { parse_mode: "HTML", reply_markup: mainMenu }
   );
 }
