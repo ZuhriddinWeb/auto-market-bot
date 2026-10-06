@@ -1768,10 +1768,15 @@ async function searchCarConversation(conversation, ctx) {
                  await ctx.api.deleteMessage(ctx.chat.id, listMsg.message_id).catch(()=>{});
                  browsing = false; // sikldan chiqamiz
              }
-             else if (data && data.startsWith("sr_view:")) {
-                 // Foydalanuvchi bitta e'lonni tanladi — uni to'liq (kanaldagi post) chiqaramiz
+                          else if (data && data.startsWith("sr_view:")) {
+                 // Foydalanuvchi bitta e'lonni tanladi
                  const viewId = data.split(":")[1];
                  const chosenAd = sortedResults.find(a => String(a.id) === String(viewId));
+
+                 // 1. Avval eski ro'yxatni o'chiramiz (chalkashmaslik uchun)
+                 await ctx.api.deleteMessage(ctx.chat.id, listMsg.message_id).catch(()=>{});
+
+                 // 2. E'lonni (kanaldagi postni) chiqaramiz
                  if (chosenAd) {
                      try {
                          if (chosenAd.channelMsgId) {
@@ -1783,10 +1788,11 @@ async function searchCarConversation(conversation, ctx) {
                          }
                      } catch (e) { console.error("E'lonni ko'rsatishda xato:", e.message); }
                  }
-                 // Ro'yxatni pastga qayta chiqaramiz (yangi xabar sifatida), eskisini o'chiramiz
-                 await ctx.api.deleteMessage(ctx.chat.id, listMsg.message_id).catch(()=>{});
+
+                 // 3. Ro'yxatni ENG PASTGA qayta chiqaramiz + aniq ko'rsatma
                  ({ listText, kb } = buildPageKeyboard(currentPage));
-                 const newListMsg = await ctx.reply(listText, { parse_mode: "HTML", reply_markup: kb });
+                 const hintText = `⬆️ <b>E'lon yuqorida ochildi!</b> (rasmlar bilan)\n\n` + listText;
+                 const newListMsg = await ctx.reply(hintText, { parse_mode: "HTML", reply_markup: kb });
                  listMsg.message_id = newListMsg.message_id;
              }
          }
