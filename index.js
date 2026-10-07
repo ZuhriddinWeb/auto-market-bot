@@ -1734,70 +1734,94 @@ async function searchCarConversation(conversation, ctx) {
          };
 
          // Birinchi sahifani chiqaramiz
-         let { listText, kb } = buildPageKeyboard(currentPage);
-         const listMsg = await ctx.reply(listText, { parse_mode: "HTML", reply_markup: kb });
+                // ================= RO'YXAT VA E'LON KO'RISH =================
+         let listMsgId = null;   // ro'yxat xabari
+         let viewMsgId = null;   // hozir ochiq turgan e'lon xabari
+         const removeKb = { reply_markup: { inline_keyboard: [] } };
 
-         // Paginatsiya sikli — foydalanuvchi tugma bosishini kutamiz
+         // Ro'yxatni chat oxiriga chiqaradi
+         const showList = async () => {
+             const { listText, kb } = buildPageKeyboard(currentPage);
+             const m = await ctx.reply(listText, { parse_mode: "HTML", reply_markup: kb });
+             listMsgId = m.message_id;
+         };
+
+         // Bitta e'lonni o'z tugmalari bilan chiqaradi (tugmalar e'lonning o'zida turadi)
+         const showAd = async (index) => {
+             const chosenAd = sortedResults[index];
+             const navKb = new InlineKeyboard();
+             if (index > 0) navKb.text("⬅️ Oldingi", `sr_view:${sortedResults[index - 1].id}`);
+             if (index < sortedResults.length - 1) navKb.text("Keyingi ➡️", `sr_view:${sortedResults[index + 1].id}`);
+             navKb.row()
+                 .text(`📋 Ro'yxatga qaytish (${index + 1}/${sortedResults.length})`, "sr_list").row()
+                 .text("✅ Qidiruvni yakunlash", "sr_done");
+
+             if (chosenAd.channelMsgId) {
+                 try {
+                     const m = await ctx.api.copyMessage(ctx.chat.id, CHANNEL_ID, chosenAd.channelMsgId, { reply_markup: navKb });
+                     viewMsgId = m.message_id;
+                     return;
+                 } catch (e) {
+                     console.error("Kanaldan nusxa olib bo'lmadi:", e.message);
+                 }
+             }
+             // Zaxira: kanalda post topilmasa, rasm + qisqa ma'lumot
+             const caption = `🚗 <b>${chosenAd.carDetails}</b>\n📅 Yili: ${chosenAd.year}\n👣 Probeg: ${formatNum(chosenAd.probeg)} km\n💰 Narxi: ${formatNum(chosenAd.price)}$\n☎️ Tel: +${chosenAd.phone}`;
+             const photos = chosenAd.photoId.split(",");
+             const m = await ctx.replyWithPhoto(photos[0], { caption, parse_mode: "HTML", reply_markup: navKb });
+             viewMsgId = m.message_id;
+         };
+
+         await showList();
+
          let browsing = true;
          while (browsing) {
              const navRes = await conversation.waitFor(["callback_query:data", "message:text"]);
 
-             // Agar menyu tugmasi bosilsa yoki matn yozsa — chiqamiz
              if (navRes.message?.text) {
                  if (cancelTexts.includes(navRes.message.text)) {
-                     await ctx.api.deleteMessage(ctx.chat.id, listMsg.message_id).catch(()=>{});
+                     if (listMsgId) await ctx.api.deleteMessage(ctx.chat.id, listMsgId).catch(()=>{});
+                     if (viewMsgId) await ctx.api.editMessageReplyMarkup(ctx.chat.id, viewMsgId, removeKb).catch(()=>{});
                      return ctx.reply("❌ Qidiruv yakunlandi.", { reply_markup: mainMenu });
                  }
-                 continue; // boshqa matnni e'tiborsiz qoldiramiz
+                 continue;
              }
 
-             const data = navRes.callbackQuery?.data;
+             const data = navRes.callbackQuery?.data || "";
+             const pressedMsgId = navRes.callbackQuery?.message?.message_id;
              await safeAnswerCbq(navRes);
 
-             if (data === "sr_next") {
-                 currentPage++;
-                 ({ listText, kb } = buildPageKeyboard(currentPage));
-                 await ctx.api.editMessageText(ctx.chat.id, listMsg.message_id, listText, { parse_mode: "HTML", reply_markup: kb }).catch(()=>{});
+             if (data === "sr_next" || data === "sr_prev") {
+                 currentPage += (data === "sr_next") ? 1 : -1;
+                 currentPage = Math.min(Math.max(currentPage, 1), totalPages);
+                 const { listText, kb } = buildPageKeyboard(currentPage);
+                 await ctx.api.editMessageText(ctx.chat.id, pressedMsgId, listText, { parse_mode: "HTML", reply_markup: kb }).catch(()=>{});
+                 listMsgId = pressedMsgId;
              }
-             else if (data === "sr_prev") {
-                 currentPage--;
-                 ({ listText, kb } = buildPageKeyboard(currentPage));
-                 await ctx.api.editMessageText(ctx.chat.id, listMsg.message_id, listText, { parse_mode: "HTML", reply_markup: kb }).catch(()=>{});
+             else if (data.startsWith("sr_view:")) {
+                 const viewId = data.split(":")[1];
+                 const index = sortedResults.findIndex(a => String(a.id) === String(viewId));
+                 if (index === -1) continue;
+
+                 // Ro'yxatni va oldingi ochiq e'lonni olib tashlaymiz — ekranda faqat yangi e'lon qoladi
+                 if (listMsgId) { await ctx.api.deleteMessage(ctx.chat.id, listMsgId).catch(()=>{}); listMsgId = null; }
+                 if (viewMsgId) { await ctx.api.deleteMessage(ctx.chat.id, viewMsgId).catch(()=>{}); viewMsgId = null; }
+
+                 await showAd(index);
+                 currentPage = Math.floor(index / PER_PAGE) + 1; // ro'yxatga qaytganda shu sahifa ochilsin
+             }
+             else if (data === "sr_list") {
+                 // E'lon chatda qoladi (telefon raqami ko'rinib tursin), faqat tugmalari olib tashlanadi
+                 if (viewMsgId) { await ctx.api.editMessageReplyMarkup(ctx.chat.id, viewMsgId, removeKb).catch(()=>{}); viewMsgId = null; }
+                 await showList();
              }
              else if (data === "sr_done") {
-                 await ctx.api.deleteMessage(ctx.chat.id, listMsg.message_id).catch(()=>{});
-                 browsing = false; // sikldan chiqamiz
-             }
-                          else if (data && data.startsWith("sr_view:")) {
-                 // Foydalanuvchi bitta e'lonni tanladi
-                 const viewId = data.split(":")[1];
-                 const chosenAd = sortedResults.find(a => String(a.id) === String(viewId));
-
-                 // 1. Avval eski ro'yxatni o'chiramiz (chalkashmaslik uchun)
-                 await ctx.api.deleteMessage(ctx.chat.id, listMsg.message_id).catch(()=>{});
-
-                 // 2. E'lonni (kanaldagi postni) chiqaramiz
-                 if (chosenAd) {
-                     try {
-                         if (chosenAd.channelMsgId) {
-                             await ctx.api.copyMessage(ctx.chat.id, CHANNEL_ID, chosenAd.channelMsgId);
-                         } else {
-                             const caption = `🚗 <b>${chosenAd.carDetails}</b>\n📅 Yili: ${chosenAd.year}\n👣 Probeg: ${formatNum(chosenAd.probeg)} km\n💰 Narxi: ${formatNum(chosenAd.price)}$\n☎️ Tel: +${chosenAd.phone}`;
-                             const photos = chosenAd.photoId.split(",");
-                             await ctx.replyWithPhoto(photos[0], { caption, parse_mode: "HTML" });
-                         }
-                     } catch (e) { console.error("E'lonni ko'rsatishda xato:", e.message); }
-                 }
-
-                 // 3. Ro'yxatni ENG PASTGA qayta chiqaramiz + aniq ko'rsatma
-                 ({ listText, kb } = buildPageKeyboard(currentPage));
-                 const hintText = `⬆️ <b>E'lon yuqorida ochildi!</b> (rasmlar bilan)\n\n` + listText;
-                 const newListMsg = await ctx.reply(hintText, { parse_mode: "HTML", reply_markup: kb });
-                 listMsg.message_id = newListMsg.message_id;
+                 if (listMsgId) await ctx.api.deleteMessage(ctx.chat.id, listMsgId).catch(()=>{});
+                 if (viewMsgId) await ctx.api.editMessageReplyMarkup(ctx.chat.id, viewMsgId, removeKb).catch(()=>{});
+                 browsing = false;
              }
          }
       }
-
       // Obuna qismi
       const alertKb = new InlineKeyboard().text("🔔 Qidiruvga obuna bo'lish", `al_sub:${query.substring(0, 20)}:${maxPrice}`);
       await ctx.reply(`<i>Agar ushbu moshina bozorga chiqqanda darhol xabardor bo'lishni istasangiz, qo'ng'iroqchani bosing:</i>`, { parse_mode: "HTML", reply_markup: alertKb });
