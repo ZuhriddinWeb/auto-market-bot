@@ -4229,6 +4229,21 @@ bot.command("start", async (ctx) => {
     reply_markup: mainMenu, 
     parse_mode: "HTML",
   });
+    // Ilovani ochish tugmasi (Mini App) — har /start da
+  if (WEBAPP_URL) {
+    const appText =
+      `📱 <b>Endi ilova ham bor!</b>\n\n` +
+      `E'lonlarni ko'rish, saqlash va joylash — hammasi bitta ilovada, Telegram ichida. Hech narsa yuklab olish shart emas.\n\n` +
+      `🔍 Barcha e'lonlar rasmlari bilan, marka va narx bo'yicha filtr\n` +
+      `❤️ Saqlang — narxi tushsa, bot xabar beradi\n` +
+      `➕ E'lonni qulay forma orqali joylang\n` +
+      `📂 E'lonlaringizni boshqaring: sotildi, narx, tahrir, VIP\n\n` +
+      `👇 Ochish uchun pastdagi tugmani bosing. Keyin xabar yozish joyi yonidagi <b>«📱 Ilova»</b> tugmasidan ham ochasiz.`;
+    await ctx.reply(appText, {
+      parse_mode: "HTML",
+      reply_markup: new InlineKeyboard().webApp("📱 Ilovani ochish", `${WEBAPP_URL}/`),
+    }).catch((e) => console.error("Ilova xabarini yuborishda xato:", e.message));
+  }
 });
 
 bot.hears("📝 E'lon berish", async (ctx) => {
