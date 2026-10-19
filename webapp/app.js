@@ -124,6 +124,16 @@
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: "Server javobi noto'g'ri." }; }); })
       .catch(function () { return { ok: false, error: "Internet aloqasini tekshiring va qayta urinib ko'ring." }; });
   }
+  // Admin uchun log: faqat serverga bosilgan tugma haqida qisqa belgi yuboriladi (javob kutilmaydi)
+  function logEvent(event, data) {
+    try {
+      fetch("/api/track", {
+        method: "POST", keepalive: true,
+        headers: { "X-Telegram-Init-Data": tg ? tg.initData : "", "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ event: event }, data || {})),
+      }).catch(function () {});
+    } catch (e) {}
+  }
   function upload(kind, blob, onProgress) {
     return new Promise(function (resolve) {
       var xhr = new XMLHttpRequest();
@@ -539,11 +549,11 @@
 
       var actions = h("div", { class: "actions" });
       if (ad.status === "active" && ad.phone) {
-        actions.appendChild(h("a", { class: "btn", href: "tel:+" + digits(ad.phone) }, [icon("phone"), "Qo'ng'iroq qilish: " + fmtPhone(ad.phone)]));
-        actions.appendChild(h("button", { type: "button", class: "btn ghost", text: "Raqamdan nusxa olish", onclick: function () { copyText("+" + digits(ad.phone), "Raqam nusxalandi"); } }));
+        actions.appendChild(h("a", { class: "btn", href: "tel:+" + digits(ad.phone), onclick: function () { logEvent("call", { adId: ad.id }); } }, [icon("phone"), "Qo'ng'iroq qilish: " + fmtPhone(ad.phone)]));
+        actions.appendChild(h("button", { type: "button", class: "btn ghost", text: "Raqamdan nusxa olish", onclick: function () { copyText("+" + digits(ad.phone), "Raqam nusxalandi"); logEvent("copy_phone", { adId: ad.id }); } }));
       }
       if (ad.isOwner) actions.appendChild(h("button", { type: "button", class: "btn secondary", onclick: function () { go("/my/ad/" + ad.id); } }, [icon("edit"), "E'lonni boshqarish"]));
-      if (ad.channelUrl) actions.appendChild(h("button", { type: "button", class: "btn secondary", onclick: function () { openLink(ad.channelUrl); } }, [icon("eye"), ad.hasVideo ? "Kanalda ko'rish (video bilan)" : "Kanalda ko'rish"]));
+      if (ad.channelUrl) actions.appendChild(h("button", { type: "button", class: "btn secondary", onclick: function () { logEvent("channel", { adId: ad.id }); openLink(ad.channelUrl); } }, [icon("eye"), ad.hasVideo ? "Kanalda ko'rish (video bilan)" : "Kanalda ko'rish"]));
       app.appendChild(actions);
 
       function toggleFav() {
@@ -590,12 +600,14 @@
         limit: ["3 ta faol e'lon chegarasi", "Yangi e'lon berish uchun faol e'lonlaringizdan birini «Sotildi» deb belgilang."],
         banned: ["E'lon berish yopilgan", ""],
       }[me.code] || ["Hozircha e'lon berib bo'lmaydi", ""];
+      logEvent("form_blocked", { code: me.code });
       app.appendChild(messageScreen(why[0], why[1] || me.message || "", [
         h("button", { type: "button", class: "btn", text: "Mening e'lonlarim", onclick: function () { replaceTo("/my"); } }),
         h("button", { type: "button", class: "btn ghost", text: "Bozorga qaytish", onclick: function () { replaceTo("/"); } }),
       ], me.code === "pending" ? "KUTING" : null));
       return;
     }
+    if (!isEdit) logEvent("form_open");
     var refs = {};
     var S = {
       brandId: null, modelId: null, modelText: "", customModel: false, fullName: "",
@@ -1302,8 +1314,10 @@
     var out = h("div", { class: "result", "aria-live": "polite" });
     app.appendChild(out);
     function fmt(n) { var r = Math.round(n); return r.toLocaleString("en-US").replace(/,/g, " "); }
+    var lastCalc = null; // sahifadan chiqqanda oxirgi hisob logga yoziladi
     function calc() {
       out.innerHTML = "";
+      lastCalc = null;
       var price = Number(digits(st.price)), down = Number(digits(st.down)), months = Number(digits(st.months));
       var rate = parseFloat(String(st.rate).replace(",", ".").replace(/[^\d.]/g, "")) || 0;
       if (!price) { out.appendChild(h("p", { class: "lbl", text: "Narx, boshlang'ich to'lov va muddatni kiriting — natija shu yerda chiqadi." })); return; }
@@ -1321,8 +1335,10 @@
         : [["Ustama", "Yo'q, foizsiz"]]).forEach(function (row) { dl.appendChild(h("dt", { text: row[0] })); dl.appendChild(h("dd", { text: row[1] })); });
       out.appendChild(dl);
       out.appendChild(h("p", { class: "help", text: "Bu taxminiy hisob. Aniq shartlarni bank yoki sotuvchi bilan aniqlashtiring." }));
+      lastCalc = { cur: st.cur, price: price, down: down, months: months, rate: rate };
     }
     calc();
+    return function () { if (lastCalc) logEvent("credit", lastCalc); };
   }
 
   // ---------- Referal ----------
@@ -1345,7 +1361,7 @@
         h("div", { class: "copy-box" }, [h("code", { text: r.refLink }), h("button", { type: "button", text: "Nusxa", onclick: function () { copyText(r.refLink, "Havola nusxalandi"); } })]),
       ]));
       if (r.freeUps > 0) body.appendChild(h("div", { class: "actions" }, [h("button", { type: "button", class: "btn secondary", text: "Bonusni ishlatish: Mening e'lonlarim", onclick: function () { go("/my"); } })]));
-      setMain("Do'stlarga yuborish", function () { openLink(r.shareUrl); });
+      setMain("Do'stlarga yuborish", function () { logEvent("share_ref"); openLink(r.shareUrl); });
     });
   }
 
@@ -1523,13 +1539,16 @@
     app.innerHTML = "";
     app.appendChild(messageScreen(title, text, actions));
   }
+  var openLogged = false; // "Ilovani ochdi" logga faqat bir marta yozilsin
   function boot() {
     app.innerHTML = ""; app.appendChild(skeleton());
     if (!inTelegram) {
       gate("Ilovani Telegramda oching", "Bu sahifa @arzonida_bot ichida ishlaydi. Botga kiring va pastdagi «📱 Ilova» tugmasini bosing.");
       return;
     }
-    Promise.all([api("/api/catalog"), api("/api/me")]).then(function (res) {
+    var mePath = openLogged ? "/api/me" : "/api/me?open=1";
+    openLogged = true;
+    Promise.all([api("/api/catalog"), api(mePath)]).then(function (res) {
       var c = res[0], m = res[1];
       if (!c.ok || !m.ok) { gate("Ma'lumotni yuklab bo'lmadi", (m && m.error) || (c && c.error) || "Qayta urinib ko'ring.", [h("button", { type: "button", class: "btn", text: "Qayta urinish", onclick: boot })]); return; }
       catalog = c; me = m;

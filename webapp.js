@@ -118,7 +118,7 @@ function startWebApp(deps) {
     checkCanPostAd, submitNewAdToAdmin, sanitizeText, normalizePhone, parseAdPrice,
     requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
     estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
-    VIP_PRICE, VIP_CARD, VIP_CARD_NAME,
+    VIP_PRICE, VIP_CARD, VIP_CARD_NAME, logUserAction,
   } = deps;
 
   const PORT = Number(process.env.PORT) || 3000;
@@ -131,6 +131,8 @@ function startWebApp(deps) {
   const uploadCounters = new Map(); // userId -> [timestamps]
   const busy = new Set();           // bir vaqtda ikki marta yuborilmasligi uchun: "userId:amal"
   const photoCache = new Map();     // "adId:idx:w" -> Buffer (eng eskisi birinchi o'chiriladi)
+  const recentLogs = new Map();     // "userId|kalit" -> vaqt (bir xil amal logga qayta-qayta yozilmasin)
+  const trackCounters = new Map();  // userId -> [timestamps] (/api/track ni suiiste'mol qilmaslik uchun)
 
   setInterval(() => {
     const now = Date.now();
@@ -139,6 +141,8 @@ function startWebApp(deps) {
       const fresh = list.filter(t => now - t < UPLOAD_WINDOW_MS);
       if (fresh.length) uploadCounters.set(uid, fresh); else uploadCounters.delete(uid);
     }
+    for (const [k, t] of recentLogs) if (now - t > 30 * 60 * 1000) recentLogs.delete(k);
+    for (const [uid, list] of trackCounters) if (!list.some(t => now - t < 60 * 1000)) trackCounters.delete(uid);
   }, 10 * 60 * 1000).unref();
 
   // ---------- Yordamchilar ----------
@@ -147,6 +151,21 @@ function startWebApp(deps) {
   const photoList = (ad) => String(ad.photoId || "").split(",").filter(Boolean);
   const channelLink = (ad) => (ad.channelMsgId ? `${CHANNEL_URL}/${ad.channelMsgId}` : null);
   const digits = (s) => String(s ?? "").replace(/\D/g, "");
+  const spaced = (n) => String(digits(n) || "0").replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  const money = (n) => `${spaced(n)}$`;
+  const adLabel = (ad) => `#${ad.id} ${ad.carDetails}${ad.year ? `, ${ad.year}` : ""}${digits(ad.price) ? `, ${money(ad.price)}` : ""}`;
+
+  // Admin log-kanaliga (botdagi kuzatuv bilan bitta xabarga) "📱" belgisi bilan yozadi.
+  // dedupeKey — shu amal windowMs ichida takrorlansa, qayta yozilmaydi.
+  function logLine(user, text, dedupeKey = null, windowMs = 10 * 60 * 1000) {
+    if (!logUserAction || !text) return;
+    if (dedupeKey) {
+      const k = `${user.id}|${dedupeKey}`, now = Date.now(), t = recentLogs.get(k);
+      if (t && now - t < windowMs) return;
+      recentLogs.set(k, now);
+    }
+    logUserAction({ id: user.id, first_name: user.first_name, username: user.username }, `📱 ${text}`);
+  }
 
   async function once(key, fn) {
     if (busy.has(key)) return { ok: false, error: "Amal bajarilmoqda, biroz kuting..." };
@@ -231,10 +250,11 @@ function startWebApp(deps) {
     if (yearFrom) { where.push("CAST(year AS UNSIGNED) >= ?"); params.push(yearFrom); }
     if (yearTo) { where.push("CAST(year AS UNSIGNED) <= ?"); params.push(yearTo); }
     const opts = catalog.AD_OPTIONS;
-    const region = q.get("region"); if (region && opts.regions.includes(region)) { where.push("region = ?"); params.push(region); }
-    const trans = q.get("trans"); if (trans && opts.transmissions.includes(trans)) { where.push("transmission = ?"); params.push(trans); }
-    const fuel = q.get("fuel"); if (fuel && opts.fuels.includes(fuel)) { where.push("fuel = ?"); params.push(fuel); }
-    if (q.get("nasiya") === "1") where.push("nasiya IS NOT NULL AND nasiya <> 'Yo''q'");
+    const logParts = []; // admin log uchun qisqa tavsif
+    const region = q.get("region"); if (region && opts.regions.includes(region)) { where.push("region = ?"); params.push(region); logParts.push(region); }
+    const trans = q.get("trans"); if (trans && opts.transmissions.includes(trans)) { where.push("transmission = ?"); params.push(trans); logParts.push(trans); }
+    const fuel = q.get("fuel"); if (fuel && opts.fuels.includes(fuel)) { where.push("fuel = ?"); params.push(fuel); logParts.push(fuel); }
+    if (q.get("nasiya") === "1") { where.push("nasiya IS NOT NULL AND nasiya <> 'Yo''q'"); logParts.push("nasiyaga"); }
 
     const sorts = { new: "created_at DESC, id DESC", price_asc: "CAST(price AS UNSIGNED) ASC, id DESC", price_desc: "CAST(price AS UNSIGNED) DESC, id DESC" };
     const order = sorts[q.get("sort")] || sorts.new;
@@ -251,6 +271,19 @@ function startWebApp(deps) {
     // Qidiruv statistikasi (botdagi kabi): model tanlangan bo'lsa, faqat 1-sahifada
     if (modelId && page === 1 && modelName) {
       db.execute("INSERT INTO search_logs (query, model_id) VALUES (?, ?)", [modelName.toLowerCase(), modelId]).catch(() => {});
+    }
+    // Admin log: faqat 1-sahifa va biror filtr tanlangan bo'lsa (bo'sh bozorni ochish "Ilovani ochdi" da ko'rinadi)
+    if (page === 1) {
+      const head = [];
+      const mm = modelId ? catalog.modelById(modelId) : null;
+      if (mm) head.push(`${mm.brandName} ${mm.name}`);
+      else if (brandId && catalog.brandById(brandId)) head.push(catalog.brandById(brandId).name);
+      if (text) head.push(`"${text}"`);
+      if (minPrice || maxPrice) head.push(minPrice && maxPrice ? `${money(minPrice)}–${money(maxPrice)}` : minPrice ? `${money(minPrice)} dan` : `${money(maxPrice)} gacha`);
+      if (yearFrom || yearTo) head.push(yearFrom && yearTo ? `${yearFrom}–${yearTo} yil` : yearFrom ? `${yearFrom} yildan` : `${yearTo} yilgacha`);
+      const sortName = { price_asc: "arzonidan", price_desc: "qimmatidan" }[q.get("sort")];
+      const parts = head.concat(logParts, sortName ? [sortName] : []);
+      if (parts.length) logLine(user, `Qidirdi: ${parts.join(" · ")} → ${Number(cnt.total)} ta e'lon`, `search:${parts.join("|")}`, 2 * 60 * 1000);
     }
     sendJson(res, 200, {
       ok: true, total: Number(cnt.total), page, pages: Math.max(1, Math.ceil(Number(cnt.total) / PAGE_SIZE)),
@@ -269,6 +302,7 @@ function startWebApp(deps) {
     const [[saves]] = await db.execute("SELECT COUNT(*) AS cnt FROM favorites WHERE adId = ?", [ad.id]);
     const [badges, favs] = await Promise.all([priceBadges([ad]), favoriteSet(user.id, [Number(ad.id)])]);
     const photos = photoList(ad);
+    logLine(user, `E'lonni ko'rdi: ${adLabel(ad)}${ad.status === "sold" ? " (sotilgan)" : ""}`, `ad:${ad.id}`);
     sendJson(res, 200, {
       ok: true,
       ad: {
@@ -311,7 +345,7 @@ function startWebApp(deps) {
   }
 
   // ---------- Foydalanuvchi holati ----------
-  async function handleMe(req, res, user) {
+  async function handleMe(req, res, user, url) {
     await db.execute("INSERT IGNORE INTO users (id, first_name, username) VALUES (?, ?, ?)", [
       user.id, String(user.first_name || "").slice(0, 255), user.username ? `@${user.username}` : "",
     ]).catch(() => {});
@@ -326,6 +360,7 @@ function startWebApp(deps) {
     const check = subscribed ? await checkCanPostAd(user.id) : { ok: false, code: "not_subscribed", message: "Kanalimizga obuna bo'ling." };
     const [[u]] = await db.execute("SELECT is_dealer, dealer_paused, dealer_name, dealer_phone, free_ups FROM users WHERE id = ?", [user.id]);
     const [lastRows] = await db.execute("SELECT phone FROM ads WHERE userId = ? ORDER BY id DESC LIMIT 1", [user.id]);
+    if (url && url.searchParams.get("open") === "1") logLine(user, subscribed ? "Ilovani ochdi" : "Ilovani ochdi (kanalga obuna emas)", "open", 60 * 1000);
     sendJson(res, 200, {
       ok: true,
       user: { id: user.id, first_name: user.first_name || "" },
@@ -495,10 +530,6 @@ function startWebApp(deps) {
   function notifyUser(userId, html) {
     bot.api.sendMessage(userId, html, { parse_mode: "HTML", reply_markup: mainMenu }).catch(() => {});
   }
-  function logLine(user, text) {
-    const uname = user.username ? ` (@${user.username})` : "";
-    bot.api.sendMessage(LOG_CHANNEL_ID, `📱 <b>Mini App:</b> <a href="tg://user?id=${user.id}">${sanitizeText(user.first_name, 64) || "User"}</a>${uname} ${text}`, { parse_mode: "HTML" }).catch(() => {});
-  }
 
   // ---------- E'lon berish: POST /api/ads ----------
   async function handleSubmit(req, res, user) {
@@ -512,7 +543,7 @@ function startWebApp(deps) {
       built.tokens.forEach(t => uploads.delete(t));
       const carName = catalog.carName(built.ad.brand, built.ad.model);
       notifyUser(user.id, `✅ <b>E'loningiz adminga muvaffaqiyatli yuborildi!</b>\n\n🚗 ${carName}\n🆔 ID: ${adId}\n\nTekshiruvdan so'ng kanalga joylanadi.`);
-      logLine(user, `e'lon yubordi — ${carName} (ID: ${adId})`);
+      logLine(user, `E'lon yubordi: ${carName} (ID: ${adId})`);
       return { ok: true, adId };
     });
     sendJson(res, r.status || (r.ok ? 200 : 400), r);
@@ -528,6 +559,7 @@ function startWebApp(deps) {
     const [editRows] = await db.execute("SELECT oldAdId FROM ad_edits WHERE userId = ?", [user.id]);
     const editing = new Set(editRows.map(e => Number(e.oldAdId)));
     const badges = await priceBadges(rows.filter(r => r.status === "active"));
+    logLine(user, `Mening e'lonlarimni ochdi (${rows.length} ta)`, "my");
     sendJson(res, 200, {
       ok: true, freeUps: u?.free_ups || 0,
       items: rows.map(r => ({ ...card(r, badges, null), editPending: editing.has(Number(r.id)) })),
@@ -569,12 +601,12 @@ function startWebApp(deps) {
       const body = await readJson(req);
       if (action === "sold") {
         const out = await requestSoldToAdmin({ adId, userId: user.id, firstName: user.first_name, soldPrice: digits(body.price) || null });
-        if (out.ok) logLine(user, `«Sotildi» so'rovi yubordi (ID: ${adId}${out.soldPrice ? `, ${out.soldPrice}$` : ""})`);
+        if (out.ok) logLine(user, `«Sotildi» so'rovi yubordi (ID: ${adId}${out.soldPrice ? `, ${money(out.soldPrice)}` : ""})`);
         return out.ok ? { ok: true, soldPrice: out.soldPrice } : { ok: false, error: stripHtml(out.error) };
       }
       if (action === "price") {
         const out = await changeAdPrice({ adId, userId: user.id, newPrice: body.price });
-        if (out.ok) logLine(user, `narxni o'zgartirdi (ID: ${adId}): ${out.oldPrice}$ → ${out.newPrice}$`);
+        if (out.ok) logLine(user, `Narxni o'zgartirdi (ID: ${adId}): ${money(out.oldPrice)} → ${money(out.newPrice)}`);
         return out.ok ? { ok: true, newPrice: out.newPrice, dropped: out.dropped } : { ok: false, error: stripHtml(out.error) };
       }
       if (action === "edit") {
@@ -587,7 +619,7 @@ function startWebApp(deps) {
         if (!out.ok) return { ok: false, error: stripHtml(out.error) };
         built.tokens.forEach(t => uploads.delete(t));
         notifyUser(user.id, `✅ <b>Tahrirlangan e'lon adminga yuborildi!</b>\n\nTekshiruvdan so'ng kanaldagi e'lon yangilanadi.`);
-        logLine(user, `e'lonni tahrirladi (ID: ${adId})`);
+        logLine(user, `Tahrir yubordi (ID: ${adId})`);
         return { ok: true, editId: out.editId };
       }
       if (action === "vip") {
@@ -601,7 +633,7 @@ function startWebApp(deps) {
       }
       if (action === "up") {
         const out = await useFreeUp({ adId, userId: user.id });
-        if (out.ok) logLine(user, `bepul UP ishlatdi (ID: ${adId})`);
+        if (out.ok) logLine(user, `Bepul UP ishlatdi (ID: ${adId})`);
         return out.ok ? { ok: true, freeUpsLeft: out.freeUpsLeft } : { ok: false, error: stripHtml(out.error) };
       }
       return { ok: false, error: "Noma'lum amal." };
@@ -617,16 +649,20 @@ function startWebApp(deps) {
     );
     const badges = await priceBadges(rows.filter(r => r.status === "active"));
     const favs = new Set(rows.map(r => Number(r.id)));
+    logLine(user, `Saqlanganlarni ochdi (${rows.length} ta)`, "fav");
     sendJson(res, 200, { ok: true, items: rows.map(r => card(r, badges, favs)) });
   }
   async function handleFavoriteToggle(req, res, user, adId) {
     const body = await readJson(req);
+    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+    const ad = rows[0];
     if (body.on) {
-      const [rows] = await db.execute("SELECT id FROM ads WHERE id = ? AND status = 'active'", [adId]);
-      if (!rows[0]) return sendJson(res, 404, { ok: false, error: "E'lon faol emas." });
+      if (!ad || ad.status !== "active") return sendJson(res, 404, { ok: false, error: "E'lon faol emas." });
       await db.execute("INSERT IGNORE INTO favorites (userId, adId) VALUES (?, ?)", [user.id, adId]);
+      logLine(user, `Saqladi ❤️: ${adLabel(ad)}`);
     } else {
       await db.execute("DELETE FROM favorites WHERE userId = ? AND adId = ?", [user.id, adId]);
+      logLine(user, `Saqlanganlardan olib tashladi: ${ad ? adLabel(ad) : `#${adId}`}`);
     }
     sendJson(res, 200, { ok: true, isFav: !!body.on });
   }
@@ -634,14 +670,15 @@ function startWebApp(deps) {
   // ---------- Obunalar (qidiruv bo'yicha xabarnoma) ----------
   async function handleAlerts(req, res, user) {
     const [rows] = await db.execute("SELECT * FROM alerts WHERE userId = ? ORDER BY id DESC", [user.id]);
+    logLine(user, `Obunalarini ochdi (${rows.length} ta)`, "alerts");
     sendJson(res, 200, {
       ok: true,
-      items: rows.map(a => {
-        const m = a.model_id ? catalog.modelById(a.model_id) : null;
-        const title = m ? `${m.brandName} ${m.name}` : String(a.query || "").replace(/^./, c => c.toUpperCase());
-        return { id: a.id, title, maxPrice: a.maxPrice, modelId: a.model_id || null };
-      }),
+      items: rows.map(a => ({ id: a.id, title: alertTitle(a), maxPrice: a.maxPrice, modelId: a.model_id || null })),
     });
+  }
+  function alertTitle(a) {
+    const m = a.model_id ? catalog.modelById(a.model_id) : null;
+    return m ? `${m.brandName} ${m.name}` : String(a.query || "").replace(/^./, c => c.toUpperCase());
   }
   async function handleAlertCreate(req, res, user) {
     const body = await readJson(req);
@@ -652,10 +689,13 @@ function startWebApp(deps) {
     const [[cnt]] = await db.execute("SELECT COUNT(*) AS c FROM alerts WHERE userId = ?", [user.id]);
     if (Number(cnt.c) >= 20) return sendJson(res, 400, { ok: false, error: "Ko'pi bilan 20 ta obuna bo'lishi mumkin. Keraksizlarini o'chiring." });
     await db.execute("INSERT INTO alerts (userId, query, maxPrice, model_id) VALUES (?, ?, ?, ?)", [user.id, query, maxPrice, m ? m.id : null]);
+    logLine(user, `Obuna bo'ldi 🔔: ${alertTitle({ query, model_id: m ? m.id : null })}${maxPrice < 999999 ? `, ${money(maxPrice)} gacha` : ""}`);
     sendJson(res, 200, { ok: true });
   }
   async function handleAlertDelete(req, res, user, alertId) {
+    const [rows] = await db.execute("SELECT * FROM alerts WHERE id = ? AND userId = ?", [alertId, user.id]);
     await db.execute("DELETE FROM alerts WHERE id = ? AND userId = ?", [alertId, user.id]);
+    if (rows[0]) logLine(user, `Obunani o'chirdi: ${alertTitle(rows[0])}`);
     sendJson(res, 200, { ok: true });
   }
 
@@ -674,6 +714,7 @@ function startWebApp(deps) {
     const year = int(body.year);
     if (!year) return sendJson(res, 400, { ok: false, error: "Yilini tanlang." });
     const out = await estimateCarPrice({ modelId, model, year });
+    logLine(user, `Narx aniqladi: ${title}, ${year} → ${out.ok ? `${money(out.minPrice)}–${money(out.maxPrice)} (${out.count} ta e'lon)` : "ma'lumot topilmadi"}`);
     sendJson(res, 200, { ok: true, title, year, ...(out.ok ? { found: true, minPrice: out.minPrice, maxPrice: out.maxPrice, count: out.count } : { found: false }) });
   }
 
@@ -681,7 +722,7 @@ function startWebApp(deps) {
     const r = await once(`${user.id}:dealer`, async () => {
       const body = await readJson(req);
       const out = await submitDealerApplication({ userId: user.id, firstName: user.first_name, username: user.username, name: body.name, phone: body.phone });
-      if (out.ok) logLine(user, `avtosalon arizasi yubordi — ${out.dealerName}`);
+      if (out.ok) logLine(user, `Avtosalon arizasi yubordi: ${out.dealerName}`);
       return out.ok ? { ok: true } : { ok: false, code: out.code || null, error: stripHtml(out.error) };
     });
     sendJson(res, r.ok ? 200 : 400, r);
@@ -689,6 +730,7 @@ function startWebApp(deps) {
 
   async function handleSalonStatus(req, res, user) {
     const st = await getSalonAdStatus(user.id);
+    logLine(user, "Salon reklamasi bo'limini ochdi", "salon");
     sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dealerName: st.dealerName, dealerPhone: st.dealerPhone });
   }
   async function handleSalonSubmit(req, res, user) {
@@ -703,15 +745,52 @@ function startWebApp(deps) {
       if (!out.ok) return { ok: false, code: out.code || null, error: stripHtml(out.error) };
       uploads.delete(String(body.media));
       notifyUser(user.id, "✅ <b>Reklamangiz adminga yuborildi!</b>\n\nTekshiruvdan so'ng kanalga joylanadi.");
-      logLine(user, "salon reklamasi yubordi");
+      logLine(user, "Salon reklamasi yubordi");
       return { ok: true };
     });
     sendJson(res, r.ok ? 200 : 400, r);
   }
 
+  // ---------- Faqat ilova ichida bo'ladigan bosishlar (admin log uchun): POST /api/track ----------
+  async function handleTrack(req, res, user) {
+    const body = await readJson(req);
+    const now = Date.now();
+    const recent = (trackCounters.get(user.id) || []).filter(t => now - t < 60 * 1000);
+    if (recent.length >= 30) return sendJson(res, 200, { ok: true }); // daqiqasiga 30 tadan ortig'i yozilmaydi
+    recent.push(now);
+    trackCounters.set(user.id, recent);
+
+    const event = String(body.event || "");
+    const adId = int(body.adId);
+    let ad = null;
+    if (adId && ["call", "copy_phone", "channel"].includes(event)) {
+      const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+      ad = rows[0] || null;
+    }
+    const adText = ad ? adLabel(ad) : `#${adId}`;
+    let text = null, key = null, win = 10 * 60 * 1000;
+    if (event === "call" && adId) { text = `Qo'ng'iroq tugmasini bosdi 📞: ${adText}`; key = `call:${adId}`; win = 2 * 60 * 1000; }
+    else if (event === "copy_phone" && adId) { text = `Sotuvchi raqamini nusxaladi: ${adText}`; key = `copy:${adId}`; win = 2 * 60 * 1000; }
+    else if (event === "channel" && adId) { text = `Kanalda ko'rishni bosdi: ${adText}`; key = `channel:${adId}`; }
+    else if (event === "share_ref") { text = "Taklif havolasini ulashishni bosdi"; key = "share"; win = 60 * 1000; }
+    else if (event === "form_open") { text = "E'lon berish formasini ochdi"; key = "form"; win = 60 * 1000; }
+    else if (event === "form_blocked") {
+      const why = { pending: "oldingi e'loni tekshiruvda", limit: "3 ta faol e'lon chegarasi", banned: "bloklangan" }[body.code] || "ruxsat yo'q";
+      text = `E'lon berishga urindi — ${why}`; key = "form_blocked"; win = 60 * 1000;
+    } else if (event === "credit") {
+      const price = int(body.price), down = int(body.down), months = int(body.months);
+      const rate = Math.min(Math.max(parseFloat(body.rate) || 0, 0), 100);
+      const cur = (n) => (body.cur === "uzs" ? `${spaced(n)} so'm` : money(n));
+      if (price && months) text = `Kredit hisobladi: ${cur(price)}, boshlang'ich ${cur(down)}, ${months} oy, ${rate}%`;
+    }
+    if (text) logLine(user, text, key, win);
+    sendJson(res, 200, { ok: true });
+  }
+
   // ---------- Marshrutlar ----------
   const routes = [
-    ["GET", /^\/api\/me$/, (q, s, u) => handleMe(q, s, u)],
+    ["GET", /^\/api\/me$/, (q, s, u, m, url) => handleMe(q, s, u, url)],
+    ["POST", /^\/api\/track$/, (q, s, u) => handleTrack(q, s, u)],
     ["GET", /^\/api\/ads$/, (q, s, u, m, url) => handleSearch(q, s, u, url)],
     ["POST", /^\/api\/ads$/, (q, s, u) => handleSubmit(q, s, u)],
     ["GET", /^\/api\/ads\/(\d+)$/, (q, s, u, m) => handleAdDetail(q, s, u, int(m[1]))],
@@ -725,7 +804,7 @@ function startWebApp(deps) {
     ["POST", /^\/api\/alerts$/, (q, s, u) => handleAlertCreate(q, s, u)],
     ["DELETE", /^\/api\/alerts\/(\d+)$/, (q, s, u, m) => handleAlertDelete(q, s, u, int(m[1]))],
     ["POST", /^\/api\/evaluate$/, (q, s, u) => handleEvaluate(q, s, u)],
-    ["GET", /^\/api\/referral$/, async (q, s, u) => sendJson(s, 200, await getReferralInfo(u.id))],
+    ["GET", /^\/api\/referral$/, async (q, s, u) => { logLine(u, "Taklif (bepul UP) bo'limini ochdi", "ref"); sendJson(s, 200, await getReferralInfo(u.id)); }],
     ["POST", /^\/api\/dealer$/, (q, s, u) => handleDealer(q, s, u)],
     ["GET", /^\/api\/salon-ad$/, (q, s, u) => handleSalonStatus(q, s, u)],
     ["POST", /^\/api\/salon-ad$/, (q, s, u) => handleSalonSubmit(q, s, u)],

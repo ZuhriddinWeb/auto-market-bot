@@ -188,12 +188,105 @@ const LOG_CHANNEL_ID = "-1001742614612";
 
 // ==============================================================
 // 🕵️ USERLARNI JONLI KUZATISH (AQLLI TIZIM - SMART LOG)
+// Bot ham, Mini App ham shu yerga yozadi: har bir user uchun log-kanalda
+// bitta xabar, yangi amallar unga qator bo'lib qo'shiladi.
+// 15 daqiqa tanaffusdan keyin yangi xabar boshlanadi.
 // ==============================================================
+const USER_LOG_GAP_MS = 15 * 60 * 1000;   // shuncha jim tursa — yangi xabar
+const USER_LOG_MAX_LEN = 3500;            // Telegram xabar chegarasidan oldin yangisini boshlaymiz
+const USER_LOG_DELAY_MS = 2000;           // tez-tez amallarni 2 soniyada bitta tahrirga yig'amiz
+const userLogs = new Map();               // userId -> { from, msgId, text, gen, lastTime, timer, sending, dirty }
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function userLogHeader(from) {
+  const usernameStr = from.username ? ` (@${escapeHtml(from.username)})` : "";
+  return `👤 <b>User:</b> <a href="tg://user?id=${from.id}">${escapeHtml(from.first_name || "User")}</a>${usernameStr} (#u${from.id})`;
+}
+
+async function flushUserLog(entry) {
+  entry.timer = null;
+  entry.dirty = false;
+  entry.sending = true;
+  const gen = entry.gen;
+  const fullText = userLogHeader(entry.from) + entry.text;
+  const opts = { parse_mode: "HTML", link_preview_options: { is_disabled: true } };
+  let retryAfter = 0;
+  try {
+    if (entry.msgId) {
+      try {
+        // Eski xabarga yangi qatorlarni qo'shib tahrirlaymiz
+        await bot.api.editMessageText(LOG_CHANNEL_ID, entry.msgId, fullText, opts);
+      } catch (error) {
+        if (error.error_code === 429) throw error;
+        if (!/not modified/i.test(error.description || error.message || "")) {
+          // Xabar o'chirilgan bo'lsa — yangisini tashlaymiz
+          const msg = await bot.api.sendMessage(LOG_CHANNEL_ID, fullText, opts);
+          if (entry.gen === gen) entry.msgId = msg.message_id;
+        }
+      }
+    } else {
+      const msg = await bot.api.sendMessage(LOG_CHANNEL_ID, fullText, opts);
+      if (entry.gen === gen) entry.msgId = msg.message_id;
+    }
+  } catch (error) {
+    if (error.error_code === 429) {
+      // Telegram "sekinroq" desa — keyinroq qayta urinamiz, qatorlar yo'qolmaydi
+      retryAfter = ((error.parameters && error.parameters.retry_after) || 5) * 1000;
+      entry.dirty = true;
+    } else {
+      console.error("Log-kanalga yozishda xato:", error.description || error.message);
+    }
+  } finally {
+    entry.sending = false;
+    if (entry.dirty && !entry.timer) {
+      entry.dirty = false;
+      entry.timer = setTimeout(() => flushUserLog(entry), Math.max(USER_LOG_DELAY_MS, retryAfter));
+    }
+  }
+}
+
+// from — ctx.from yoki Mini App foydalanuvchisi ({ id, first_name, username })
+function logUserAction(from, action) {
+  if (!from || !from.id || Number(from.id) === ADMIN_ID || !action) return;
+  const now = Date.now();
+  let entry = userLogs.get(from.id);
+  if (!entry) {
+    entry = { from, msgId: null, text: "", gen: 0, lastTime: 0, timer: null, sending: false, dirty: false };
+    userLogs.set(from.id, entry);
+  }
+  entry.from = from;
+
+  const time = new Date(now).toLocaleTimeString("uz-UZ", { timeZone: "Asia/Tashkent", hour12: false, hour: "2-digit", minute: "2-digit" });
+  const logLine = `\n⏱ <code>${time}</code> | ${escapeHtml(String(action).slice(0, 500))}`;
+
+  // Uzoq tanaffus yoki xabar juda uzun bo'lsa — yangi xabar boshlaymiz
+  if ((entry.lastTime && now - entry.lastTime > USER_LOG_GAP_MS) || entry.text.length + logLine.length > USER_LOG_MAX_LEN) {
+    entry.text = "";
+    entry.msgId = null;
+    entry.gen++;
+  }
+  entry.lastTime = now;
+  entry.text += logLine;
+
+  if (entry.timer || entry.sending) { entry.dirty = true; return; }
+  entry.timer = setTimeout(() => flushUserLog(entry), USER_LOG_DELAY_MS);
+}
+
+// Xotirani tozalash: uzoq jim turganlarning yozuvini o'chiramiz
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, e] of userLogs) {
+    if (!e.timer && !e.sending && now - e.lastTime > USER_LOG_GAP_MS) userLogs.delete(id);
+  }
+}, 30 * 60 * 1000).unref();
 
 bot.use(async (ctx, next) => {
   if (ctx.from && ctx.from.id !== ADMIN_ID) {
     let action = "";
-    
+
     // User qaysi amalni bajarganini aniqlaymiz
     if (ctx.message?.text) {
         action = `📝 Yozdi: "${ctx.message.text}"`;
@@ -207,58 +300,14 @@ bot.use(async (ctx, next) => {
         action = `⭐️ VIP To'lov qildi!`;
     } else if (ctx.callbackQuery?.data) {
         action = `🔘 Tugma bosdi: [${ctx.callbackQuery.data}]`;
+    } else if (ctx.message?.web_app_data) {
+        action = `📱 Ilovadan ma'lumot yubordi`;
     }
 
-    if (action) {
-        const now = Date.now();
-        const time = new Date().toLocaleTimeString('uz-UZ', {timeZone: 'Asia/Tashkent', hour12: false, hour: '2-digit', minute:'2-digit'});
-        const logLine = `\n⏱ <code>${time}</code> | ${action}`;
-
-        // Agar foydalanuvchi 15 daqiqadan ko'p tanaffus qilgan bo'lsa, xabarni yangidan boshlaymiz
-        if (ctx.session.lastLogTime && (now - ctx.session.lastLogTime > 15 * 60 * 1000)) {
-            ctx.session.logMsgId = null;
-            ctx.session.logText = "";
-        }
-        ctx.session.lastLogTime = now;
-
-        // Xotirada log matnini yig'ib boramiz
-        if (!ctx.session.logText) ctx.session.logText = "";
-        ctx.session.logText += logLine;
-        
-        // Agar matn juda uzun bo'lib ketsa (Telegram limiti) tozalaymiz
-        if (ctx.session.logText.length > 3500) {
-            ctx.session.logText = logLine;
-            ctx.session.logMsgId = null;
-        }
-
-        // ================= YANGILANISH =================
-        // Username bor-yo'qligini tekshiramiz va unga @ qo'shamiz
-        const usernameStr = ctx.from.username ? ` (@${ctx.from.username})` : "";
-        
-        // Sarlavhaga username ni ham qo'shamiz
-        const header = `👤 <b>User:</b> <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>${usernameStr} (#u${ctx.from.id})`;
-        // ===============================================
-        
-        const fullText = header + ctx.session.logText;
-
-        try {
-            if (ctx.session.logMsgId) {
-                // Eski xabarga yangi qatorni qo'shib tahrirlaymiz
-                await bot.api.editMessageText(LOG_CHANNEL_ID, ctx.session.logMsgId, fullText, { parse_mode: "HTML" });
-            } else {
-                // Yangi xabar tashlaymiz va uning ID sini xotirada saqlab qolamiz
-                const msg = await bot.api.sendMessage(LOG_CHANNEL_ID, fullText, { parse_mode: "HTML" });
-                ctx.session.logMsgId = msg.message_id;
-            }
-        } catch (error) {
-            // Agar tahrirlashda xatolik bo'lsa (masalan log-kanaldagi xabarni o'zingiz o'chirib yuborgan bo'lsangiz)
-            const msg = await bot.api.sendMessage(LOG_CHANNEL_ID, fullText, { parse_mode: "HTML" }).catch(()=>{});
-            if (msg) ctx.session.logMsgId = msg.message_id;
-        }
-    }
+    if (action) logUserAction(ctx.from, action); // kutmaymiz — bot javobi sekinlashmasin
   }
-  
-  await next(); 
+
+  await next();
 });
 // 1. BLOKLANGANLARNI TEKSHIRISH
 bot.use(async (ctx, next) => {
@@ -4226,10 +4275,11 @@ bot.command("start", async (ctx) => {
     
 
   await ctx.reply(welcomeText, {
-    reply_markup: mainMenu, 
+    reply_markup: mainMenu,
     parse_mode: "HTML",
   });
-    // Ilovani ochish tugmasi (Mini App) — har /start da
+
+  // Ilovani ochish tugmasi (Mini App) — har /start da
   if (WEBAPP_URL) {
     const appText =
       `📱 <b>Endi ilova ham bor!</b>\n\n` +
@@ -5597,6 +5647,7 @@ dbReady.finally(async () => {
       checkCanPostAd, submitNewAdToAdmin, sanitizeText, normalizePhone, parseAdPrice,
       requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
       estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
+      logUserAction,
     });
   } catch (e) {
     console.error("❌ Mini App serverini ishga tushirib bo'lmadi:", e);
