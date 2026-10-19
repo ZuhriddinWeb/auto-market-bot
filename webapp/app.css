@@ -1,0 +1,287 @@
+:root {
+  /* Telegram mavzu ranglari (Telegram ichida avtomatik keladi; tashqarida — zaxira) */
+  --bg: var(--tg-theme-secondary-bg-color, #efeff4);
+  --section: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #ffffff));
+  --text: var(--tg-theme-text-color, #000000);
+  --hint: var(--tg-theme-hint-color, #8e8e93);
+  --link: var(--tg-theme-link-color, #2481cc);
+  --accent: var(--tg-theme-button-color, #2481cc);
+  --accent-text: var(--tg-theme-button-text-color, #ffffff);
+  --header-text: var(--tg-theme-section-header-text-color, var(--hint));
+  --danger: var(--tg-theme-destructive-text-color, #e53935);
+  --separator: rgba(142, 142, 147, 0.28);
+  --chip-bg: rgba(142, 142, 147, 0.14);
+  --good: #1f9d55;
+
+  /* Qo'lda yozilgan "SOTILADI" qog'ozi — har qanday mavzuda qog'oz bo'lib qoladi */
+  --paper: #fffefa;
+  --ink: #1c2333;
+  --marker-red: #d0262f;
+  --tape: rgba(233, 223, 175, 0.85);
+
+  --radius-section: 12px;
+  --radius-chip: 18px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --marker: "Permanent Marker", "Marker Felt", "Comic Sans MS", var(--font);
+  --tabbar-h: 58px;
+}
+@supports (color: color-mix(in srgb, red 50%, blue)) {
+  :root {
+    --separator: color-mix(in srgb, var(--hint) 28%, transparent);
+    --chip-bg: color-mix(in srgb, var(--hint) 14%, transparent);
+  }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 var(--font); }
+body { max-width: 640px; margin: 0 auto; }
+#app { padding: 12px 16px calc(28px + env(safe-area-inset-bottom)); min-height: 100vh; }
+body.has-tabbar #app { padding-bottom: calc(var(--tabbar-h) + 28px + env(safe-area-inset-bottom)); }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: var(--link); }
+h1.page { font-size: 24px; line-height: 1.2; margin: 8px 4px 4px; }
+.page-sub { color: var(--hint); font-size: 14px; margin: 0 4px 6px; }
+
+/* ---------- Pastki bo'limlar paneli ---------- */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+  background: var(--section); box-shadow: 0 -1px 0 var(--separator);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tabbar-in { max-width: 640px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); height: var(--tabbar-h); }
+.tab {
+  border: 0; background: none; color: var(--hint); display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; font-size: 11px; cursor: pointer; padding: 6px 0 4px;
+}
+.tab svg { width: 24px; height: 24px; }
+.tab[aria-current="page"] { color: var(--accent); }
+.tab.sell .dot { width: 34px; height: 26px; border-radius: 13px; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; }
+.tab.sell .dot svg { width: 20px; height: 20px; }
+.tab.sell { color: var(--text); }
+
+/* ---------- Bo'limlar (Telegram uslubida) ---------- */
+.group-title { color: var(--header-text); font-size: 14px; margin: 24px 16px 7px; }
+.group { background: var(--section); border-radius: var(--radius-section); overflow: hidden; }
+.field { padding: 12px 16px 14px; position: relative; }
+.group > .field + .field::before,
+.group > .slot + .field::before,
+.group > .field + .slot > .field::before,
+.list > * + *::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; height: 1px; background: var(--separator); }
+.label { display: block; font-size: 14px; color: var(--hint); margin-bottom: 8px; }
+.help { color: var(--hint); font-size: 13px; margin: 8px 0 0; }
+.error { color: var(--danger); font-size: 13px; margin: 8px 0 0; display: none; }
+.field.invalid .error { display: block; }
+.field.invalid .input { box-shadow: inset 0 0 0 1.5px var(--danger); }
+
+.input {
+  width: 100%; border: 0; border-radius: 10px; padding: 11px 12px;
+  background: var(--chip-bg); font-size: 16px; outline: none; appearance: none; -webkit-appearance: none;
+}
+.input:focus { box-shadow: inset 0 0 0 1.5px var(--accent); }
+textarea.input { min-height: 84px; resize: vertical; line-height: 1.4; }
+select.input {
+  background-image: linear-gradient(45deg, transparent 50%, var(--hint) 50%), linear-gradient(135deg, var(--hint) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 12px) 50%; background-size: 6px 6px; background-repeat: no-repeat; padding-right: 34px;
+}
+.input-suffix { position: relative; }
+.input-suffix .input { padding-right: 44px; }
+.input-suffix span { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--hint); pointer-events: none; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips.scroll { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 2px 16px; scroll-padding: 16px; }
+.chips.scroll::-webkit-scrollbar { display: none; }
+.chips.scroll .chip { flex: none; }
+.chip {
+  border: 0; border-radius: var(--radius-chip); padding: 8px 14px; background: var(--chip-bg);
+  font-size: 15px; cursor: pointer; line-height: 1.2; min-height: 36px; white-space: nowrap;
+}
+.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+.chip.dashed { background: transparent; box-shadow: inset 0 0 0 1px var(--separator); color: var(--link); }
+.chip.on-section { background: var(--section); }
+.chip.on-section[aria-pressed="true"] { background: var(--accent); }
+.field.invalid .chips { border-radius: 12px; box-shadow: 0 0 0 1.5px var(--danger); padding: 4px; margin: -4px; }
+
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
+.switch-row .txt { font-size: 16px; }
+.switch-row .sub { display: block; color: var(--hint); font-size: 13px; margin-top: 2px; }
+.switch { position: relative; width: 51px; height: 31px; flex: none; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.switch .track { position: absolute; inset: 0; border-radius: 16px; background: var(--chip-bg); transition: background .2s; }
+.switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,.25); transition: transform .2s; }
+.switch input:checked + .track { background: var(--accent); }
+.switch input:checked + .track::after { transform: translateX(20px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.reveal { margin-top: 12px; }
+
+/* ---------- Ro'yxat qatorlari (Telegram sozlamalari uslubida) ---------- */
+.list { background: var(--section); border-radius: var(--radius-section); overflow: hidden; }
+.list > * { position: relative; }
+.item {
+  display: flex; align-items: center; gap: 14px; width: 100%; padding: 12px 16px; border: 0; background: none;
+  text-align: left; cursor: pointer; min-height: 52px;
+}
+.item .ico { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: #fff; flex: none; font-size: 16px; }
+.item .ico svg { width: 18px; height: 18px; }
+.item .body { flex: 1; min-width: 0; }
+.item .t { font-size: 16px; }
+.item .s { display: block; color: var(--hint); font-size: 13px; margin-top: 1px; }
+.item .end { color: var(--hint); font-size: 15px; flex: none; }
+.item .chev { color: var(--hint); flex: none; }
+.item.danger .t { color: var(--danger); }
+.item:disabled { opacity: .5; cursor: default; }
+
+/* ---------- Bozor: filtrlar va kartochkalar ---------- */
+.search-head { position: sticky; top: 0; z-index: 3; background: var(--bg); margin: -12px -16px 0; padding: 10px 16px 8px; }
+.search-head .chips + .chips { margin-top: 8px; }
+.toolbar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.toolbar .count { flex: 1; color: var(--hint); font-size: 14px; }
+.tool {
+  border: 0; border-radius: 16px; background: var(--section); padding: 7px 12px; font-size: 14px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; min-height: 34px;
+}
+.tool svg { width: 16px; height: 16px; }
+.tool .n { background: var(--accent); color: var(--accent-text); border-radius: 9px; font-size: 12px; min-width: 18px; padding: 0 5px; text-align: center; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.card { background: var(--section); border-radius: 12px; overflow: hidden; cursor: pointer; position: relative; display: flex; flex-direction: column; border: 0; padding: 0; text-align: left; }
+.card .ph { position: relative; aspect-ratio: 4 / 3; background: var(--chip-bg); }
+.card .ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.card .cnt { position: absolute; left: 6px; bottom: 6px; background: rgba(0,0,0,.55); color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 8px; }
+.card .deal { position: absolute; left: 6px; top: 6px; background: var(--good); color: #fff; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 8px; }
+.card .info { padding: 8px 10px 10px; }
+.card .price { font-weight: 700; font-size: 17px; }
+.card .title { font-size: 14px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .meta { color: var(--hint); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.heart {
+  position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; border-radius: 50%; border: 0; padding: 0;
+  background: rgba(0,0,0,.42); color: #fff; display: grid; place-items: center; cursor: pointer;
+}
+.heart svg { width: 18px; height: 18px; }
+.heart[aria-pressed="true"] { color: #ff4d5e; background: rgba(255,255,255,.92); }
+.sold-veil { position: absolute; inset: 0; background: rgba(0,0,0,.35); display: grid; place-items: center; }
+.sold-veil span, .stamp {
+  font-family: var(--marker); color: var(--marker-red); background: rgba(255,254,250,.92);
+  border: 3px solid var(--marker-red); border-radius: 8px; padding: 2px 10px; transform: rotate(-6deg); font-size: 20px;
+}
+.more { margin: 14px 0 0; }
+.empty { text-align: center; color: var(--hint); padding: 40px 16px; }
+.empty b { display: block; color: var(--text); font-size: 17px; margin-bottom: 6px; }
+.empty .btn { margin-top: 16px; }
+
+/* ---------- E'lon sahifasi ---------- */
+.gallery { margin: -12px -16px 0; position: relative; background: #000; }
+.gallery .track { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
+.gallery .track::-webkit-scrollbar { display: none; }
+.gallery img { flex: none; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; scroll-snap-align: center; display: block; }
+.gallery .pos { position: absolute; right: 12px; bottom: 12px; background: rgba(0,0,0,.6); color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 10px; }
+.gallery .heart { top: 12px; right: 12px; width: 38px; height: 38px; }
+.gallery .sold-veil span { font-size: 34px; }
+.ad-head { padding: 14px 4px 4px; }
+.ad-price { font-size: 28px; font-weight: 800; line-height: 1.15; }
+.ad-price s { color: var(--hint); font-weight: 500; font-size: 18px; margin-left: 6px; }
+.ad-title { font-size: 18px; margin-top: 2px; }
+.badge { display: inline-block; font-size: 13px; font-weight: 600; padding: 3px 9px; border-radius: 10px; margin-top: 8px; }
+.badge.cheap { background: rgba(31,157,85,.14); color: var(--good); }
+.badge.market { background: var(--chip-bg); color: var(--hint); }
+.badge.trust { background: rgba(36,129,204,.12); color: var(--link); }
+.specs { display: grid; grid-template-columns: auto 1fr; gap: 0; }
+.specs dt, .specs dd { margin: 0; padding: 11px 0; border-top: 1px solid var(--separator); }
+.specs dt { color: var(--hint); padding-right: 16px; }
+.specs dd { text-align: right; }
+.specs dt:first-of-type, .specs dt:first-of-type + dd { border-top: 0; }
+.text-block { white-space: pre-wrap; overflow-wrap: anywhere; }
+.actions { display: grid; gap: 10px; margin-top: 18px; }
+.btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; border: 0; border-radius: 12px; padding: 14px; background: var(--accent); color: var(--accent-text); font-size: 16px; font-weight: 600; cursor: pointer; text-decoration: none; }
+.btn.secondary { background: var(--section); color: var(--link); }
+.btn.ghost { background: var(--chip-bg); color: var(--link); }
+.btn:disabled { opacity: .55; }
+.btn svg { width: 18px; height: 18px; }
+.fallback-main { position: fixed; left: 16px; right: 16px; bottom: calc(14px + env(safe-area-inset-bottom)); max-width: 608px; margin: 0 auto; z-index: 6; }
+
+/* ---------- Mening: bo'limlar almashtirgich ---------- */
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--chip-bg); border-radius: 10px; padding: 2px; margin: 4px 0 12px; }
+.seg button { border: 0; background: none; border-radius: 8px; padding: 7px 4px; font-size: 14px; cursor: pointer; color: var(--text); }
+.seg button[aria-selected="true"] { background: var(--section); box-shadow: 0 1px 3px rgba(0,0,0,.12); font-weight: 600; }
+.my-row { display: flex; gap: 12px; padding: 10px 16px; align-items: center; width: 100%; border: 0; background: none; text-align: left; cursor: pointer; }
+.my-row img, .my-row .noimg { width: 76px; height: 57px; border-radius: 8px; object-fit: cover; background: var(--chip-bg); flex: none; }
+.my-row .body { flex: 1; min-width: 0; }
+.my-row .t { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.my-row .p { font-weight: 700; }
+.pill { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 9px; margin-top: 3px; }
+.pill.active { background: rgba(31,157,85,.14); color: var(--good); }
+.pill.pending { background: rgba(240,160,0,.16); color: #b77900; }
+.pill.sold { background: var(--chip-bg); color: var(--hint); }
+.notice { background: var(--section); border-radius: 12px; padding: 12px 14px; font-size: 14px; margin-bottom: 12px; display: flex; gap: 10px; align-items: flex-start; }
+.notice b { display: block; }
+.notice .s { color: var(--hint); }
+
+/* ---------- Narx qog'ozi (e'lon formasi, baholash) ---------- */
+.sign-wrap { padding: 14px 6px 4px; }
+.sign {
+  position: relative; background: var(--paper); color: var(--ink);
+  border-radius: 3px; padding: 18px 20px 16px; transform: rotate(-1.2deg);
+  box-shadow: 0 1px 1px rgba(0,0,0,.08), 0 8px 20px -10px rgba(0,0,0,.35);
+}
+.sign::before, .sign::after { content: ""; position: absolute; top: -10px; width: 74px; height: 22px; background: var(--tape); }
+.sign::before { left: 18px; transform: rotate(-6deg); }
+.sign::after { right: 18px; transform: rotate(5deg); }
+.sign-title { font-family: var(--marker); color: var(--marker-red); font-size: 34px; line-height: 1; letter-spacing: .02em; margin: 0 0 8px; }
+.sign-car { font-family: var(--marker); font-size: 21px; line-height: 1.2; margin: 0; overflow-wrap: anywhere; }
+.sign-price { font-family: var(--marker); font-size: 30px; line-height: 1.15; margin: 6px 0 2px; }
+.sign-phone { font-family: var(--marker); font-size: 19px; margin: 0; letter-spacing: .02em; }
+.sign .empty-v { opacity: .32; }
+.sign-note { color: var(--hint); font-size: 13px; margin: 14px 4px 0; }
+
+/* ---------- Rasmlar (forma) ---------- */
+.photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.thumb, .add-tile { position: relative; aspect-ratio: 4 / 3; border-radius: 10px; overflow: hidden; }
+.thumb img, .thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb .main-tag { position: absolute; left: 6px; bottom: 6px; background: rgba(0,0,0,.6); color: #fff; font-size: 11px; padding: 2px 7px; border-radius: 8px; }
+.thumb .remove { position: absolute; top: 5px; right: 5px; width: 28px; height: 28px; border-radius: 50%; border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: 17px; line-height: 28px; padding: 0; cursor: pointer; }
+.thumb .veil { position: absolute; inset: 0; background: rgba(0,0,0,.45); display: grid; place-items: center; color: #fff; font-size: 13px; text-align: center; padding: 6px; border: 0; }
+.thumb .bar { position: absolute; left: 8px; right: 8px; bottom: 8px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.35); overflow: hidden; }
+.thumb .bar i { display: block; height: 100%; width: 0; background: #fff; transition: width .15s; }
+.thumb.oldvideo { background: var(--chip-bg); display: grid; place-items: center; color: var(--hint); font-size: 13px; text-align: center; padding: 8px; }
+.add-tile { border: 1.5px dashed var(--separator); background: transparent; color: var(--link); cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 13px; }
+.add-tile b { font-size: 26px; font-weight: 400; line-height: 1; }
+.file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* ---------- Xizmatlar ---------- */
+.result { background: var(--section); border-radius: 12px; padding: 18px 16px; margin-top: 16px; }
+.result .big { font-size: 30px; font-weight: 800; line-height: 1.15; }
+.result .lbl { color: var(--hint); font-size: 14px; }
+.result dl { margin: 14px 0 0; }
+.tag-price { font-family: var(--marker); font-size: 32px; color: var(--ink); background: var(--paper); display: inline-block; padding: 8px 18px; border-radius: 3px; transform: rotate(-1.5deg); box-shadow: 0 6px 16px -8px rgba(0,0,0,.4); margin: 6px 0 10px; }
+.stat-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.stat { background: var(--section); border-radius: 12px; padding: 14px; }
+.stat b { display: block; font-size: 28px; line-height: 1.1; }
+.stat span { color: var(--hint); font-size: 13px; }
+.progress { height: 8px; border-radius: 4px; background: var(--chip-bg); overflow: hidden; margin: 10px 0 6px; }
+.progress i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.copy-box { display: flex; gap: 8px; align-items: center; background: var(--chip-bg); border-radius: 10px; padding: 10px 12px; font-size: 15px; overflow-wrap: anywhere; }
+.copy-box code { flex: 1; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
+.copy-box button { border: 0; background: none; color: var(--link); font-weight: 600; cursor: pointer; flex: none; }
+.steps { margin: 0; padding-left: 22px; }
+.steps li { margin: 6px 0; }
+
+/* ---------- Pastdan chiquvchi oyna ---------- */
+.sheet-back { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
+.sheet { background: var(--bg); width: 100%; max-width: 640px; border-radius: 16px 16px 0 0; padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; }
+.sheet .grab { width: 36px; height: 5px; border-radius: 3px; background: var(--separator); margin: 0 auto 10px; }
+.sheet h2 { font-size: 18px; margin: 4px 4px 12px; }
+.sheet .actions { margin-top: 14px; position: sticky; bottom: calc(-16px - env(safe-area-inset-bottom)); background: var(--bg); padding: 10px 0 calc(16px + env(safe-area-inset-bottom)); margin-bottom: calc(-16px - env(safe-area-inset-bottom)); }
+
+/* ---------- Umumiy ---------- */
+.screen { min-height: 70vh; display: flex; flex-direction: column; justify-content: center; text-align: center; padding: 24px 8px; }
+.screen h1 { font-size: 22px; margin: 18px 0 8px; }
+.screen p { color: var(--hint); margin: 0 auto 22px; max-width: 34ch; }
+.screen .btn + .btn { margin-top: 10px; }
+.screen .stamp { align-self: center; font-size: 30px; }
+.skeleton { height: 150px; border-radius: 12px; background: var(--chip-bg); margin: 14px 0 0; }
+.toast {
+  position: fixed; left: 50%; top: 14px; transform: translate(-50%, -20px); opacity: 0;
+  background: rgba(0,0,0,.82); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px;
+  transition: opacity .2s, transform .2s; z-index: 30; max-width: calc(100% - 32px); text-align: center; pointer-events: none;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; } }

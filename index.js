@@ -19,13 +19,23 @@ const CHANNEL_ID = process.env.CHANNEL_ID.startsWith("@")
   ? process.env.CHANNEL_ID
   : `@${process.env.CHANNEL_ID}`;
 
+// 🚗 Marka/model katalogi (bazada, ID lar bilan) — bot va Mini App uchun bitta
+const catalog = require("./catalog");
+
+// 📱 MINI APP manzili. Railway'da "Generate Domain" qilinsa avtomatik aniqlanadi,
+// yoki Variables ga WEBAPP_URL=https://... deb qo'lda yozish mumkin.
+const WEBAPP_URL = (process.env.WEBAPP_URL ||
+  (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "")
+).replace(/\/+$/, "");
+
 const collagesDir = path.join(__dirname, "collages");
 if (!fs.existsSync(collagesDir)) {
   fs.mkdirSync(collagesDir, { recursive: true });
 }
 
 // БОТ ИШГА ТУШГАНДА ЖАДВАЛЛАРНИ АВТОМАТИК ЯРАТИШ
-(async () => {
+// (dbReady — bot faqat jadvallar va katalog tayyor bo'lgach ishga tushadi, faylning oxiriga qarang)
+const dbReady = (async () => {
   try {
     await db.execute(`
       CREATE TABLE IF NOT EXISTS users (
@@ -159,6 +169,14 @@ if (!fs.existsSync(collagesDir)) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
     }
     console.log("✅ Жадваллар текширилди (тайёр).");
+
+    // Katalog: car_brands / car_models jadvallari, ads.brand_id / ads.model_id ustunlari
+    // va eski e'lonlarni nomi bo'yicha ID ga avtomatik bog'lash
+    try {
+      await catalog.init(db);
+    } catch (e) {
+      console.error("❌ Katalogni yuklashda xatolik:", e);
+    }
   } catch (error) {
     console.error("❌ Жадвал яратишда хатолик:", error);
   }
@@ -593,8 +611,11 @@ async function getPriceBadge(carDetails, priceRaw, year = null) {
     const modelKey = parts.length > 1 ? parts.slice(1).join(" ") : carDetails;
 
     // Shu modeldagi boshqa faol e'lonlar o'rtacha narxini olamiz
-    let sql = "SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice, COUNT(*) as cnt FROM ads WHERE carDetails LIKE ? AND status = 'active'";
-    const params = [`%${modelKey}%`];
+    // (model ID bo'yicha — "Lexus RX" va "Exeed RX" aralashmaydi; ID siz eski e'lonlar nomi bo'yicha)
+    const { modelId } = catalog.matchCarDetails(carDetails);
+    const f = catalog.modelFilter(modelId, modelKey);
+    let sql = `SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice, COUNT(*) as cnt FROM ads WHERE ${f.sql} AND status = 'active' AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000`;
+    const params = [...f.params];
 
     // Agar yil berilgan bo'lsa, aniqroq bo'lishi uchun +/- 2 yil oralig'ini olamiz
     if (year) {
@@ -635,8 +656,10 @@ async function getPriceBadgeForImage(carDetails, priceRaw, year = null) {
     const parts = carDetails.trim().split(" ");
     const modelKey = parts.length > 1 ? parts.slice(1).join(" ") : carDetails;
 
-    let sql = "SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice, COUNT(*) as cnt FROM ads WHERE carDetails LIKE ? AND status = 'active'";
-    const params = [`%${modelKey}%`];
+    const { modelId } = catalog.matchCarDetails(carDetails);
+    const f = catalog.modelFilter(modelId, modelKey);
+    let sql = `SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice, COUNT(*) as cnt FROM ads WHERE ${f.sql} AND status = 'active' AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000`;
+    const params = [...f.params];
 
     if (year) {
       sql += " AND CAST(year AS UNSIGNED) BETWEEN ? AND ?";
@@ -666,6 +689,570 @@ async function getPriceBadgeForImage(carDetails, priceRaw, year = null) {
     console.error("Rasm lentasi hisobida xato:", e.message);
     return null;
   }
+}
+
+// ==============================================================
+// 🧩 E'LON BERISH — UMUMIY QOIDALAR
+// Bot (createAdConversation) ham, Mini App (webapp.js) ham shu
+// funksiyalardan foydalanadi: cheklovlar va admin xabari bitta joyda.
+// ==============================================================
+const AD_MIN_PRICE = 300;
+const AD_MAX_PRICE = 500000;
+
+// Telegram HTML ni buzadigan belgilarni almashtiramiz va uzunlikni cheklaymiz
+function sanitizeText(value, maxLen = 500) {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .replace(/</g, "‹").replace(/>/g, "›").replace(/&/g, "＆")
+    .trim()
+    .slice(0, maxLen);
+}
+
+// Matnni baytlar bo'yicha qisqartiradi (Telegram tugma ma'lumoti 64 baytdan oshmasligi kerak)
+function cutBytes(str, maxBytes) {
+  let out = "";
+  for (const ch of String(str || "")) {
+    if (Buffer.byteLength(out + ch) > maxBytes) break;
+    out += ch;
+  }
+  return out;
+}
+
+// Telefon: 901234567 / +998 90 123 45 67 / 998998901234567 -> 998901234567
+function normalizePhone(raw) {
+  let digits = String(raw || "").replace(/\D/g, "");
+  digits = digits.replace(/^(998)+/, "");
+  if (digits.length > 9) digits = digits.slice(-9);
+  return digits.length === 9 ? `998${digits}` : null;
+}
+
+// Narx: faqat raqam, 300$ dan 500 000$ gacha
+function parseAdPrice(raw) {
+  const num = parseInt(String(raw || "").replace(/\D/g, ""), 10);
+  if (!num) return { error: "❗️ Iltimos, narxni faqat raqamda kiriting (masalan: 8500)." };
+  if (num < AD_MIN_PRICE) return { error: "❗️ Narx juda past! Narxni dollarda kiriting (masalan: 8500)." };
+  if (num > AD_MAX_PRICE) return { error: "❗️ Narx juda baland! Iltimos, real narxni dollarda kiriting (masalan: 8500)." };
+  return { value: String(num) };
+}
+
+// Telegram fayl ID laridan yuklab olish havolalari (kollaj uchun)
+async function getPhotoUrls(fileIds) {
+  return Promise.all(fileIds.map(async (id) => {
+    const file = await bot.api.getFile(id);
+    return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+  }));
+}
+
+// Ko'rib chiqish va admin uchun e'lon matni (bot va Mini App bir xil ko'rinishda)
+function buildAdCaption(ad, priceBadge = "") {
+  const fullCarName = catalog.carName(ad.brand, ad.model);
+  let caption = "";
+  if (ad.urgent) caption += `🚨 <b>SHOSHILINCH SOTILADI!</b>\n\n`;
+  caption +=
+    `🚗 <b>Moshina:</b> ${fullCarName}\n` +
+    `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${formatNum(ad.probeg)} km\n` +
+    `💎 <b>Kraska:</b> ${ad.paint}\n🎨 <b>Rangi:</b> ${ad.color}\n` +
+    `⚙️ <b>Korobka:</b> ${ad.trans}\n⛽ <b>Yoqilg'i:</b> ${ad.fuel}\n`;
+  if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 <b>Tarixi:</b> ${ad.history}\n`;
+  if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 <b>Barter:</b> ${ad.barter}\n`;
+  if (ad.nasiya && ad.nasiya !== "Yo'q") caption += `💳 <b>Nasiya:</b> ${ad.nasiya}\n`;
+  if (ad.dealer_offer) caption += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
+  caption += `💰 <b>Narxi:</b> ${formatNum(ad.price)}$${priceBadge}\n☎️ <b>Tel:</b> +${ad.phone}\n🚩 <b>Viloyat:</b> ${ad.region}`;
+  if (ad.videoId) caption += `\n🎥 <i>(Ushbu e'londa video-obzor mavjud!)</i>`;
+  return caption;
+}
+
+// Ko'rib chiqish oynasi uchun narx tahlili (shu modelning o'rtacha narxiga solishtiradi)
+async function getPreviewPriceBadge(ad) {
+  try {
+    const numericPrice = parseInt(ad.price) || 0;
+    const f = catalog.modelFilter(ad.model_id, ad.model);
+    const [avgRows] = await db.execute(
+      `SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice FROM ads WHERE ${f.sql} AND status = 'active' AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000`,
+      f.params
+    );
+    const avgPrice = avgRows[0].avgPrice;
+    if (avgPrice && numericPrice < avgPrice * 0.95) return " 🔥 (Qaynoq narx)";
+    if (avgPrice && numericPrice > avgPrice * 1.1) return " 📈 (Bozordan biroz qimmat)";
+  } catch (e) {
+    console.error("Narx analitikasi xatosi:", e);
+  }
+  return "";
+}
+
+// Foydalanuvchi hozir e'lon bera oladimi? (blok, obuna, kutilayotgan e'lon, 3 ta limit)
+async function checkCanPostAd(userId) {
+  userId = Number(userId);
+  if (userId === ADMIN_ID) return { ok: true, isDealer: true, isAdmin: true };
+
+  const [banned] = await db.execute("SELECT userId FROM banned_users WHERE userId = ?", [userId]);
+  if (banned.length > 0) {
+    return { ok: false, code: "banned", message: "🚫 <b>Kechirasiz, siz botdan bloklangansiz.</b> Endi e'lon bera olmaysiz." };
+  }
+
+  let subscribed = false;
+  try {
+    const member = await bot.api.getChatMember(CHANNEL_ID, userId);
+    subscribed = ["creator", "administrator", "member"].includes(member.status);
+  } catch (e) {}
+  if (!subscribed) {
+    return { ok: false, code: "not_subscribed", message: "❌ <b>E'lon berish uchun kanalimizga obuna bo'ling!</b>" };
+  }
+
+  const [[pendingAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE userId = ? AND status = 'pending'", [userId]);
+  if (pendingAds.count > 0) {
+    return { ok: false, code: "pending", message: "⏳ <b>Sizning oldingi e'loningiz hali adminlar tomonidan ko'rib chiqilmoqda.</b>\n\nIltimos, u tasdiqlanguncha yoki rad etilguncha kutib turing." };
+  }
+
+  // Diler bo'lsa limit yo'q
+  const [[dealerCheck]] = await db.execute("SELECT is_dealer, dealer_paused FROM users WHERE id = ?", [userId]);
+  const isDealer = !!(dealerCheck && dealerCheck.is_dealer === 1 && dealerCheck.dealer_paused !== 1);
+
+  if (!isDealer) {
+    const [[activeAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE userId = ? AND status = 'active'", [userId]);
+    if (activeAds.count >= 3) {
+      return { ok: false, code: "limit", message: "❗️ <b>Sizda cheklov mavjud!</b>\n\nBir vaqtning o'zida eng ko'pi bilan <b>3 ta</b> faol e'loningiz bo'lishi mumkin. Yangi e'lon berish uchun '📂 Mening e'lonlarim' bo'limidan eskilarini 'Sotildi' deb belgilang.\n\n💡 <i>Doimiy sotuvchimisiz? «🏢 Avtosalon bo'lish» tugmasi orqali cheksiz e'lon bering!</i>" };
+    }
+  }
+  return { ok: true, isDealer };
+}
+
+// Saqlashdan oldin: ID lar to'liq bo'lmasa, to'liq nomdan aniqlashga harakat qilamiz
+function resolveAdIds(ad) {
+  if (!ad.model_id) {
+    const hit = catalog.matchCarDetails(catalog.carName(ad.brand, ad.model));
+    ad.brand_id = ad.brand_id || hit.brandId || null;
+    if (hit.modelId && (!ad.brand_id || hit.brandId === ad.brand_id)) ad.model_id = hit.modelId;
+  }
+  return ad;
+}
+
+// Yangi e'lonni bazaga (pending) yozadi va adminga tasdiqlash uchun yuboradi. adId qaytaradi.
+async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot" }) {
+  resolveAdIds(ad);
+  const fullCarName = catalog.carName(ad.brand, ad.model);
+  const priceBadge = await getPreviewPriceBadge(ad);
+
+  const [[pAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'pending'");
+  const [[pEdits]] = await db.execute("SELECT COUNT(*) as count FROM ad_edits");
+  const countText = `\n\n📦 <b>Tasdiq kutayotganlar soni: ${pAds.count + pEdits.count + 1} ta</b>`;
+
+  const [result] = await db.execute(
+    `INSERT INTO ads (userId, carDetails, brand_id, model_id, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, dealer_offer, videoId, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [userId, fullCarName, ad.brand_id || null, ad.model_id || null, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.dealer_offer || null, ad.videoId || null, source]
+  );
+  const adId = result.insertId;
+
+  const urgentText = ad.urgent ? "\n\n🚨 <b>DIQQAT: Ushbu e'lon foydalanuvchi tomonidan SHOSHILINCH (Qaynoq narx) deb belgilangan!</b>" : "";
+  const sourceText = source === "miniapp" ? "\n📱 <i>Mini App orqali yuborildi</i>" : "";
+  const userLink = `<a href="tg://user?id=${userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a>`;
+
+  const adminKb = new InlineKeyboard();
+  if (ad.urgent) {
+    adminKb.text("🔥 Qabul (Shoshilinch)", `approve_hot:${adId}`).text("❌ Rad etish", `reject:${adId}`).row()
+           .text("✅ Oddiy qabul qilish", `approve:${adId}`);
+  } else {
+    adminKb.text("✅ Qabul qilish", `approve:${adId}`).text("❌ Rad etish", `reject:${adId}`).row()
+           .text("🔥 Qaynoq narxda qabul qilish", `approve_hot:${adId}`);
+  }
+
+  // Rasm izohi 1024 belgidan oshmasligi kerak — oshsa faqat admin ko'radigan matnda "Tarixi" ni qisqartiramiz
+  const makeCaption = (a) => `🆔 <b>ID: ${adId}</b>\n\n${buildAdCaption(a, priceBadge)}\n\n👤 Foydalanuvchi: ${userLink}${countText}${urgentText}${sourceText}`;
+  let adminCaption = makeCaption(ad);
+  if (adminCaption.length > 1000 && ad.history && ad.history !== "Ko'rsatilmagan") {
+    const keep = Math.max(40, ad.history.length - (adminCaption.length - 1000) - 1);
+    adminCaption = makeCaption({ ...ad, history: ad.history.slice(0, keep) + "…" });
+  }
+
+  const photoUrls = await getPhotoUrls(ad.photos);
+  const adminCollage = await createCollage(photoUrls);
+  try {
+    const adminMsg = await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
+      caption: adminCaption, reply_markup: adminKb, parse_mode: "HTML",
+    });
+    if (ad.videoId) {
+      await bot.api.sendVideo(ADMIN_ID, ad.videoId, { reply_to_message_id: adminMsg.message_id })
+        .catch(e => console.error("Adminga video yuborishda xato:", e.message));
+    }
+  } finally {
+    if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
+  }
+  return adId;
+}
+
+// Obuna (alert) shu e'longa mos keladimi: model ID bo'yicha, ID bo'lmasa nomi bo'yicha
+function alertMatchesAd(alert, ad) {
+  if (alert.model_id && ad.model_id) return Number(alert.model_id) === Number(ad.model_id);
+  const q = String(alert.query || "").toLowerCase();
+  return q.length > 0 && String(ad.carDetails || "").toLowerCase().includes(q);
+}
+
+// Marka tugmalari: callback = `${prefix}:${brandId}` ("Boshqa" = 0)
+function brandKeyboard(prefix) {
+  const kb = new InlineKeyboard();
+  const items = [...catalog.get().brands, { id: 0, name: "Boshqa" }];
+  items.forEach((b, i) => { kb.text(b.name, `${prefix}:${b.id}`); if ((i + 1) % 3 === 0) kb.row(); });
+  return kb;
+}
+
+// Model tugmalari: callback = `${prefix}:${modelId}`
+function modelKeyboard(prefix, brandId) {
+  const kb = new InlineKeyboard();
+  const brand = brandId ? catalog.brandById(brandId) : null;
+  (brand ? brand.models : []).forEach((m, i) => { kb.text(m.name, `${prefix}:${m.id}`); if ((i + 1) % 3 === 0) kb.row(); });
+  return kb;
+}
+
+// Tugma yoki yozilgan matndan markani aniqlaydi -> { id, name } (id: 0 = Boshqa, null = katalogda yo'q)
+function parseBrandAnswer(res, prefix) {
+  const data = res.callbackQuery?.data;
+  let text = res.message?.text;
+  if (data && data.startsWith(prefix + ":")) {
+    const val = data.slice(prefix.length + 1);
+    if (val === "0" || val === "Boshqa") return { id: 0, name: "Boshqa" };
+    const b = /^\d+$/.test(val) ? catalog.brandById(val) : null;
+    if (b) return { id: b.id, name: b.name };
+    text = val; // eski (nomli) tugma bosilgan bo'lsa
+  }
+  if (!text) return null;
+  const found = catalog.findBrand(text);
+  if (found) return { id: found.id, name: found.name };
+  if (catalog.norm(text) === "boshqa") return { id: 0, name: "Boshqa" };
+  return { id: null, name: sanitizeText(text, 40) };
+}
+
+// Tugma yoki yozilgan matndan modelni aniqlaydi -> { id, name, brandId }
+function parseModelAnswer(res, prefix, brand) {
+  const data = res.callbackQuery?.data;
+  let text = res.message?.text;
+  if (data && data.startsWith(prefix + ":")) {
+    const val = data.slice(prefix.length + 1);
+    const m = /^\d+$/.test(val) ? catalog.modelById(val) : null;
+    if (m) return { id: m.id, name: m.name, brandId: m.brandId };
+    text = val; // eski (nomli) tugma
+  }
+  if (!text) return null;
+  text = sanitizeText(text, 60);
+  if (brand && brand.id) {
+    const m = catalog.findModel(brand.id, text);
+    return m ? { id: m.id, name: m.name, brandId: m.brandId } : { id: null, name: text, brandId: brand.id };
+  }
+  // "Boshqa" yoki katalogda yo'q marka: to'liq nomdan aniqlashga harakat qilamiz ("Changan UNI-K")
+  const full = brand && brand.id === null ? `${brand.name} ${text}` : text;
+  const hit = catalog.matchCarDetails(full);
+  return { id: hit.modelId, name: text, brandId: hit.brandId };
+}
+
+// ==============================================================
+// 🧩 BOT VA MINI APP UCHUN UMUMIY AMALLAR
+// Har bir amal bitta funksiyada: bot ham, Mini App ham shu funksiyani chaqiradi.
+// Natija: { ok: true, ... } yoki { ok: false, error: "foydalanuvchiga ko'rsatiladigan matn" }
+// ==============================================================
+const AD_CHANNEL_MARKUP = (adId) => new InlineKeyboard()
+  .url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
+  .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${adId}`).row()
+  .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
+
+// E'lon faol va shu foydalanuvchiniki ekanini tekshiradi
+async function getOwnActiveAd(adId, userId) {
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  const ad = rows[0];
+  if (!ad || ad.status !== "active") return { error: "❌ Bu e'lon faol emas yoki allaqachon yopilgan." };
+  if (Number(userId) !== ADMIN_ID && Number(ad.userId) !== Number(userId)) return { error: "❌ Bu e'lon sizga tegishli emas." };
+  return { ad };
+}
+
+// 💰 "Sotildi" so'rovi (ixtiyoriy real sotuv narxi bilan). Admin tasdiqlagach kanalda belgilanadi.
+async function requestSoldToAdmin({ adId, userId, firstName, soldPrice = null }) {
+  const { ad, error } = await getOwnActiveAd(adId, userId);
+  if (error) return { ok: false, error };
+  let price = null;
+  if (soldPrice) {
+    const p = parseAdPrice(soldPrice);
+    if (p.error) return { ok: false, error: p.error };
+    price = p.value;
+  }
+  await db.execute("UPDATE ads SET sold_price = ? WHERE id = ?", [price, ad.id]);
+  const priceInfo = price ? `\n💰 <b>Sotuv narxi:</b> ${formatNum(price)}$` : `\n💰 <b>Sotuv narxi:</b> Aytilmadi`;
+  await bot.api.sendMessage(ADMIN_ID,
+    `💰 <b>SOTILDI XABARI!</b>\n\n🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>${priceInfo}\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a>`,
+    { reply_markup: new InlineKeyboard().text("✅ Tasdiqlash (Kanalda belgilash)", `confirm_sold:${ad.id}`), parse_mode: "HTML" }
+  );
+  return { ok: true, ad, soldPrice: price };
+}
+
+// 📉 Narxni o'zgartirish: kanaldagi e'lon yangilanadi; narx tushsa "Qaynoq narx" posti va saqlaganlarga xabar
+async function changeAdPrice({ adId, userId, newPrice }) {
+  const { ad, error } = await getOwnActiveAd(adId, userId);
+  if (error) return { ok: false, error };
+  const p = parseAdPrice(newPrice);
+  if (p.error) return { ok: false, error: p.error };
+  newPrice = p.value;
+
+  const newCaption =
+    `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
+    `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
+    `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: <s>${formatNum(ad.price)} $</s> <b>${formatNum(newPrice)}$ 📉</b>\n☎️ +${ad.phone}\n🚩 #${String(ad.region).replace(/\s+/g, "_")}\n\n` +
+    `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
+  const channelMarkup = AD_CHANNEL_MARKUP(ad.id);
+
+  try {
+    await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, reply_markup: channelMarkup, parse_mode: "HTML" });
+  } catch (e) {
+    console.error("Narx: kanaldagi xabarni yangilab bo'lmadi:", e.message);
+    return { ok: false, error: "❌ Kanaldagi xabarni yangilab bo'lmadi. Ehtimol eski xabar kanaldan o'chirilgan bo'lishi mumkin." };
+  }
+  try {
+    const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
+    if (SECOND_CHANNEL_ID && ad.secondChannelMsgId) {
+      await bot.api.editMessageCaption(SECOND_CHANNEL_ID, ad.secondChannelMsgId, { caption: newCaption, reply_markup: channelMarkup, parse_mode: "HTML" });
+    }
+  } catch (err) {
+    console.error("2-kanaldagi xabarni yangilashda xato (Narx):", err.message);
+  }
+
+  const oldPriceNum = parseInt(ad.price) || 0; // yangilashdan oldin eslab qolamiz
+  const newPriceNum = parseInt(newPrice) || 0;
+  await db.execute("UPDATE ads SET price = ? WHERE id = ?", [newPrice, ad.id]);
+
+  const diff = oldPriceNum - newPriceNum;
+  if (diff > 0) {
+    const hotPriceText =
+      `🔥 <b>QAYNOQ NARX! Mashina arzonlashdi!</b>\n\n` +
+      `🚗 <b>${ad.carDetails}</b>\n` +
+      `❌ Eski narxi: <s>${oldPriceNum}$</s>\n` +
+      `✅ Yangi narxi: <b>${newPriceNum}$ 📉</b>\n\n` +
+      `👆 <i>E'lonni to'liq ko'rish uchun tepadagi xabarga bosing</i>`;
+    try {
+      await bot.api.sendMessage(CHANNEL_ID, hotPriceText, { parse_mode: "HTML", reply_to_message_id: ad.channelMsgId });
+      const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
+      if (SECOND_CHANNEL_ID && ad.secondChannelMsgId) {
+        await bot.api.sendMessage(SECOND_CHANNEL_ID, hotPriceText, { parse_mode: "HTML", reply_to_message_id: ad.secondChannelMsgId });
+      }
+    } catch (err) {
+      console.error("Kanalga qaynoq narx xabarini yuborishda xato:", err.message);
+    }
+    // Saqlaganlarga xabar (orqa fonda — javobni kutib turmaydi)
+    (async () => {
+      const [favs] = await db.execute("SELECT userId FROM favorites WHERE adId = ?", [ad.id]);
+      for (const fav of favs) {
+        try {
+          await bot.api.sendMessage(fav.userId,
+            `🔔 <b>SIZ KUZATAYOTGAN MOSHINA ARZONLASHDI!</b>\n\n` +
+            `🚗 <b>${ad.carDetails}</b> narxi <b>${diff}$</b> ga tushdi.\n\n` +
+            `❌ Eski narx: <s>${oldPriceNum}$</s>\n` +
+            `✅ Yangi narx: <b>${newPriceNum}$</b>\n\n` +
+            `Kanalda ko'rish: https://t.me/engarzonidamoshina/${ad.channelMsgId}`,
+            { parse_mode: "HTML" }
+          );
+          await delay(50);
+        } catch (e) {
+          if (e.error_code === 429) await delay((e.parameters?.retry_after || 1) * 1000);
+        }
+      }
+    })().catch((e) => console.error("Saqlaganlarga xabar yuborishda xato:", e));
+  }
+  return { ok: true, ad, oldPrice: String(oldPriceNum), newPrice, dropped: diff > 0 };
+}
+
+// ✏️ To'liq tahrir so'rovi: ad_edits ga yoziladi, admin tasdiqlagach kanaldagi e'lon yangilanadi
+async function submitAdEditToAdmin({ adId, ad, userId, firstName, source = "bot" }) {
+  const own = await getOwnActiveAd(adId, userId);
+  if (own.error) return { ok: false, error: own.error };
+  resolveAdIds(ad);
+  const fullCarName = catalog.carName(ad.brand, ad.model);
+  const priceBadge = await getPreviewPriceBadge(ad);
+  const caption = buildAdCaption(ad, priceBadge);
+
+  const [[pAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'pending'");
+  const [[pEdits]] = await db.execute("SELECT COUNT(*) as count FROM ad_edits");
+  const countText = `\n\n📦 <b>Tasdiq kutayotganlar soni: ${pAds.count + pEdits.count + 1} ta</b>`;
+  const urgentTextEdit = ad.urgent ? "\n\n🚨 <b>Diqqat: Foydalanuvchi buni SHOSHILINCH sotmoqchi!</b>" : "";
+  const sourceText = source === "miniapp" ? "\n📱 <i>Mini App orqali yuborildi</i>" : "";
+
+  const [result] = await db.execute(
+    `INSERT INTO ad_edits (oldAdId, userId, carDetails, brand_id, model_id, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, dealer_offer, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [own.ad.id, userId, fullCarName, ad.brand_id || null, ad.model_id || null, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.dealer_offer || null, ad.videoId || null]
+  );
+  const editId = result.insertId;
+
+  const photoUrls = await getPhotoUrls(ad.photos);
+  const adminCollage = await createCollage(photoUrls);
+  try {
+    let adminCaption = `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 <b>Eski ID: ${own.ad.id}</b>\n\n${caption}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a>${countText}${urgentTextEdit}${sourceText}`;
+    if (adminCaption.length > 1020) adminCaption = adminCaption.slice(0, 1000) + "…";
+    const adminMsg = await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
+      caption: adminCaption,
+      reply_markup: new InlineKeyboard().text("✅ O'zgarishni tasdiqlash", `approve_edit:${editId}`).text("❌ Rad etish", `reject_edit:${editId}`),
+      parse_mode: "HTML",
+    });
+    if (ad.videoId) await bot.api.sendVideo(ADMIN_ID, ad.videoId, { reply_to_message_id: adminMsg.message_id }).catch(() => {});
+  } finally {
+    if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
+  }
+  return { ok: true, editId };
+}
+
+// 🌟 VIP so'rovi: to'lov cheki adminga boradi, tasdiqlansa e'lon kanal tepasiga qadaladi
+async function submitVipRequest({ adId, userId, firstName, username, screenshotFileId }) {
+  const { ad, error } = await getOwnActiveAd(adId, userId);
+  if (error) return { ok: false, error };
+  const [saveRes] = await db.execute(
+    "INSERT INTO vip_requests (userId, adId, screenshotId, status) VALUES (?,?,?,'pending')",
+    [userId, ad.id, screenshotFileId]
+  );
+  const vipReqId = saveRes.insertId;
+  const usernameStr = username ? `@${username}` : "yo'q";
+  const adminCaption =
+    `🌟 <b>YANGI VIP TO'LOV SO'ROVI!</b>\n\n` +
+    `🚗 <b>Moshina:</b> ${ad.carDetails}\n` +
+    `🆔 <b>E'lon ID:</b> ${ad.id}\n` +
+    `💰 <b>Summa:</b> ${VIP_PRICE} so'm\n` +
+    `👤 <b>Foydalanuvchi:</b> <a href="tg://user?id=${userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a> (${usernameStr})\n\n` +
+    `<i>Chekni tekshiring va tasdiqlang yoki rad eting:</i>`;
+  await bot.api.sendPhoto(ADMIN_ID, screenshotFileId, {
+    caption: adminCaption,
+    parse_mode: "HTML",
+    reply_markup: new InlineKeyboard()
+      .text("✅ Tasdiqlash (VIP qilish)", `vip_approve:${vipReqId}`)
+      .text("❌ Rad etish", `vip_reject:${vipReqId}`),
+  });
+  return { ok: true, vipReqId };
+}
+
+// 🚀 Bepul UP (do'st taklif qilib yig'ilgan bonus): e'lon kanalda eng pastga (eng yangi qatorga) ko'tariladi
+async function useFreeUp({ adId, userId }) {
+  const [[user]] = await db.execute("SELECT free_ups FROM users WHERE id = ?", [userId]);
+  if (!user || user.free_ups <= 0) return { ok: false, error: "❌ Sizda bepul UP bonusi tugagan. Do'stlaringizni taklif qilib yangisini oling!" };
+  const { ad, error } = await getOwnActiveAd(adId, userId);
+  if (error) return { ok: false, error };
+
+  let newMsgId;
+  try {
+    const newMsg = await bot.api.copyMessage(CHANNEL_ID, CHANNEL_ID, ad.channelMsgId, { reply_markup: AD_CHANNEL_MARKUP(ad.id) });
+    newMsgId = newMsg.message_id;
+    if (ad.videoId) {
+      try { await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: newMsgId }); } catch (e) {}
+    }
+    await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(() => {});
+  } catch (copyErr) {
+    return { ok: false, error: "❌ Kanaldagi e'lon topilmadi. Bepul UP amalga oshmadi." };
+  }
+  await db.execute("UPDATE ads SET channelMsgId = ? WHERE id = ?", [newMsgId, ad.id]);
+  await db.execute("UPDATE users SET free_ups = free_ups - 1 WHERE id = ?", [userId]);
+  return { ok: true, freeUpsLeft: user.free_ups - 1, channelMsgId: newMsgId };
+}
+
+// 🧮 Baholash: shu model (±2 yil) e'lonlari va sotilganlarining o'rtacha narxi asosida oraliq
+async function estimateCarPrice({ modelId, model, year }) {
+  const f = catalog.modelFilter(modelId, model);
+  const [rows] = await db.execute(`SELECT price, year FROM ads WHERE ${f.sql} AND status IN ('active', 'sold')`, f.params);
+  const targetYear = parseInt(year);
+  const validPrices = rows
+    .filter(r => Math.abs((parseInt(r.year) || 0) - targetYear) <= 2)
+    .map(r => parseInt(String(r.price).replace(/\D/g, "")))
+    .filter(p => p > 1000 && p < 200000);
+  if (validPrices.length === 0) return { ok: false, error: "Bazamizda bu moshina uchun yetarli ma'lumot yo'q." };
+  const avg = validPrices.reduce((a, b) => a + b, 0) / validPrices.length;
+  return {
+    ok: true,
+    minPrice: Math.round((avg * 0.94) / 100) * 100,
+    maxPrice: Math.round((avg * 1.06) / 100) * 100,
+    count: validPrices.length,
+  };
+}
+
+// 🏢 Avtosalon (diler) arizasi
+async function submitDealerApplication({ userId, firstName, username, name, phone }) {
+  const [[u]] = await db.execute("SELECT is_dealer FROM users WHERE id = ?", [userId]);
+  if (u && u.is_dealer === 1) return { ok: false, code: "already", error: "✅ Siz allaqachon tasdiqlangan avtosalonsiz!" };
+  const dealerName = sanitizeText(name, 80);
+  if (dealerName.length < 2) return { ok: false, error: "❗️ Nom juda qisqa. Qaytadan urinib ko'ring." };
+  const dealerPhone = normalizePhone(phone);
+  if (!dealerPhone) return { ok: false, error: "❗️ To'g'ri raqam kiriting. (Masalan: 901234567)" };
+
+  await db.execute("INSERT IGNORE INTO users (id, first_name, username) VALUES (?, ?, ?)", [userId, String(firstName || "").slice(0, 255), username ? `@${username}` : ""]);
+  await db.execute("UPDATE users SET dealer_name = ?, dealer_phone = ? WHERE id = ?", [dealerName, dealerPhone, userId]);
+
+  const usernameStr = username ? `@${username}` : "yo'q";
+  const adminText =
+    `🏢 <b>YANGI AVTOSALON SO'ROVI!</b>\n\n` +
+    `📛 <b>Salon nomi:</b> ${dealerName}\n` +
+    `☎️ <b>Telefon:</b> +${dealerPhone}\n` +
+    `👤 <b>Foydalanuvchi:</b> <a href="tg://user?id=${userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a> (${usernameStr})\n` +
+    `🆔 <b>ID:</b> <code>${userId}</code>\n\n` +
+    `<i>Ushbu foydalanuvchini avtosalon sifatida tasdiqlaysizmi?</i>`;
+  await bot.api.sendMessage(ADMIN_ID, adminText, {
+    parse_mode: "HTML",
+    reply_markup: new InlineKeyboard().text("✅ Tasdiqlash", `dealer_approve:${userId}`).text("❌ Rad etish", `dealer_reject:${userId}`),
+  });
+  return { ok: true, dealerName, dealerPhone };
+}
+
+// 📢 Salon reklamasi: faqat tasdiqlangan avtosalonlar, kuniga 2 ta
+async function getSalonAdStatus(userId) {
+  const [uRows] = await db.execute("SELECT is_dealer, dealer_paused, dealer_name, dealer_phone FROM users WHERE id = ?", [userId]);
+  const user = uRows[0];
+  const [cRows] = await db.execute(
+    "SELECT COUNT(*) as count FROM salon_ads WHERE userId = ? AND DATE(created_at) = CURDATE() AND status != 'rejected'",
+    [userId]
+  );
+  const isDealer = !!(user && user.is_dealer === 1 && user.dealer_paused !== 1);
+  const todayCount = cRows[0].count;
+  let error = null, code = null;
+  if (!isDealer) { code = "not_dealer"; error = "❌ <b>Bu bo'lim faqat tasdiqlangan avtosalonlar uchun.</b>\n\nAgar siz doimiy sotuvchi bo'lsangiz, «🏢 Avtosalon bo'lish» tugmasi orqali ariza qoldiring."; }
+  else if (todayCount >= 2) { code = "limit"; error = "⏳ <b>Bugungi reklama limitingiz tugadi.</b>\n\nBir kunda eng ko'pi bilan <b>2 ta</b> salon reklamasi bera olasiz. Ertaga qaytadan urinib ko'ring."; }
+  return { ok: !error, code, error, user: user || null, todayCount, dealerName: user?.dealer_name || null, dealerPhone: user?.dealer_phone || null };
+}
+
+async function submitSalonAd({ userId, adText, mediaType, mediaId, location, phone }) {
+  const st = await getSalonAdStatus(userId);
+  if (!st.ok) return { ok: false, code: st.code, error: st.error };
+  adText = String(adText || "").trim();
+  if (adText.length < 10) return { ok: false, error: "❗️ Matn juda qisqa. Qaytadan urinib ko'ring." };
+  if (!["photo", "video"].includes(mediaType) || !mediaId) return { ok: false, error: "❗️ Iltimos, video yoki rasm yuboring." };
+  location = String(location || "").trim();
+  phone = String(phone || "").trim() || `+${st.dealerPhone}`;
+
+  const [saveResult] = await db.execute(
+    "INSERT INTO salon_ads (userId, salonName, adText, mediaType, mediaId, location, phone, status) VALUES (?,?,?,?,?,?,?,'pending')",
+    [userId, st.dealerName, adText, mediaType, mediaId, location, phone]
+  );
+  const salonAdId = saveResult.insertId;
+  const adminCaption =
+    `📢 <b>YANGI SALON REKLAMASI!</b>\n\n` +
+    `🏢 <b>Salon:</b> ${st.dealerName}\n\n` +
+    `${adText}\n\n` +
+    `📍 <b>Manzil:</b> ${location}\n` +
+    `📞 <b>Tel:</b> ${phone}\n\n` +
+    `👤 <a href="tg://user?id=${userId}">Profil</a> | 🆔 <code>${userId}</code>`;
+  const adminKb = new InlineKeyboard().text("✅ Tasdiqlash", `salon_approve:${salonAdId}`).text("❌ Rad etish", `salon_reject:${salonAdId}`);
+  if (mediaType === "video") await bot.api.sendVideo(ADMIN_ID, mediaId, { caption: adminCaption, parse_mode: "HTML", reply_markup: adminKb });
+  else await bot.api.sendPhoto(ADMIN_ID, mediaId, { caption: adminCaption, parse_mode: "HTML", reply_markup: adminKb });
+  return { ok: true, salonAdId };
+}
+
+// 🎁 Referal (do'st taklif qilib bepul UP olish) ma'lumotlari
+let cachedBotUsername = null;
+async function getReferralInfo(userId) {
+  const [rows] = await db.execute("SELECT referral_count, free_ups FROM users WHERE id = ?", [userId]);
+  const user = rows[0] || { referral_count: 0, free_ups: 0 };
+  if (!cachedBotUsername) cachedBotUsername = (await bot.api.getMe()).username;
+  const refLink = `https://t.me/${cachedBotUsername}?start=ref_${userId}`;
+  const shareMessage =
+    "🚗 O'zbekistondagi eng qulay onlayn Avto-Bozor!\n\n" +
+    "💸 E'lon berish mutlaqo BEPUL.\n" +
+    "🔍 O'zingiz izlagan moshinani juda oson toping.\n\n" +
+    "👇 Hoziroq botga kirib ko'ring:\n" +
+    refLink;
+  return {
+    ok: true,
+    refLink,
+    shareUrl: `https://t.me/share/url?text=${encodeURIComponent(shareMessage)}`,
+    referralCount: user.referral_count || 0,
+    freeUps: user.free_ups || 0,
+    left: 5 - ((user.referral_count || 0) % 5),
+  };
 }
 /**
  * ✅ 1. АДМИН ПАНЕЛЬ ЖАРАЁНИ (РАССЫЛКА)
@@ -1229,9 +1816,48 @@ bot.callbackQuery("admin_help", async (ctx) => {
     `📊 <b>Haftalik analitika:</b>\n<code>/test_analytics</code>\n\n` +
     `📣 <b>"E'lon bering" chaqiriq posti:</b>\n<code>/test_sellcall</code>\n\n` +
     `🆕 <b>1-3 kunlik yangi e'lon ko'tarish:</b>\n<code>/test_newbump</code>\n\n` +
-    `🚀 <b>15 kunlik UP testi:</b>\n<code>/test_up</code>`;
-    
+    `🚀 <b>15 kunlik UP testi:</b>\n<code>/test_up</code>\n\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `🚗 <b>KATALOG (bot va Mini App uchun):</b>\n\n` +
+    `➕ <b>Yangi model qo'shish</b> (marka yo'q bo'lsa u ham qo'shiladi):\n<code>/model_qosh Chevrolet | Tracker 2</code>\n\n` +
+    `📋 <b>Katalogni ko'rish:</b>\n<code>/katalog</code>`;
+
   await ctx.editMessageText(helpText, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_back") });
+});
+
+// 🚗 KATALOGGA MODEL QO'SHISH: /model_qosh Marka | Model
+bot.command("model_qosh", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const [brandName, modelName] = String(ctx.match || "").split("|").map(s => s.trim());
+  if (!brandName || !modelName) {
+    return ctx.reply("❗️ Format: <code>/model_qosh Marka | Model</code>\nMasalan: <code>/model_qosh Chevrolet | Tracker 2</code>", { parse_mode: "HTML" });
+  }
+  try {
+    const r = await catalog.addModel(db, sanitizeText(brandName, 50), sanitizeText(modelName, 50));
+    if (!r.created) return ctx.reply(`ℹ️ <b>${r.brand.name} ${r.model.name}</b> katalogda allaqachon bor (ID: ${r.model.id}).`, { parse_mode: "HTML" });
+    const filled = await catalog.backfill(db); // shu nomdagi eski e'lonlarni ham bog'laymiz
+    await ctx.reply(
+      `✅ <b>Qo'shildi:</b> ${r.brand.name} ${r.model.name} (ID: ${r.model.id})${r.brandCreated ? "\n🆕 Yangi marka ham yaratildi." : ""}\n\n` +
+      `Endi bot va Mini App'da darhol ko'rinadi. Eski e'lonlardan bog'landi: ${filled.ads} ta.`,
+      { parse_mode: "HTML" }
+    );
+  } catch (e) {
+    console.error("Model qo'shishda xato:", e);
+    await ctx.reply("❌ Xatolik: " + e.message);
+  }
+});
+
+// 📋 KATALOG: markalar va har biridagi modellar soni
+bot.command("katalog", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const brands = catalog.get().brands;
+  const [counts] = await db.execute("SELECT brand_id, COUNT(*) AS cnt FROM ads WHERE status = 'active' AND brand_id IS NOT NULL GROUP BY brand_id");
+  const [[unlinked]] = await db.execute("SELECT COUNT(*) AS cnt FROM ads WHERE status = 'active' AND model_id IS NULL");
+  const adsByBrand = new Map(counts.map(r => [r.brand_id, r.cnt]));
+  let text = `📋 <b>KATALOG:</b> ${brands.length} marka\n\n`;
+  brands.forEach(b => { text += `• <b>${b.name}</b> — ${b.models.length} model, ${adsByBrand.get(b.id) || 0} faol e'lon\n`; });
+  text += `\n❔ Modelga bog'lanmagan faol e'lonlar: <b>${unlinked.cnt} ta</b> <i>(ular nomi bo'yicha qidiriladi)</i>`;
+  await ctx.reply(text, { parse_mode: "HTML" });
 });
 // =====================================================================
 // 🛠 15 KUNLIK "UP" TIZIMINI TEST QILISH UCHUN MAXSUS BUYRUQ
@@ -1557,45 +2183,21 @@ async function searchCarConversation(conversation, ctx) {
   const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim", "🔔 Obunalarim", "🎁 Bepul VIP (UP)", "🧮 Mashina narxini aniqlash"];
   const chatToClean = [];
 
-  const carCatalog = {
-    "Chevrolet": ["Cobalt", "Gentra", "Lacetti","Epica", "Spark","Orlando", "Nexia 1", "Nexia 2", "Nexia 3", "Matiz", "Damas", "Labo", "Tracker", "Onix", "Monza", "Malibu 1", "Malibu 2", "Captiva","Captiva 5", "Equinox", "Tahoe", "Traverse","Trablaizer"],
-    "Daewoo": ["Matiz", "Nexia 1", "Tico", "Damas"],
-    "BYD": ["Song L","Seal","Chazor", "Song Plus", "Song Pro","Champion","Han", "Tang", "Seagull", "Yuan Up", "Yuan Plus", "Destroyer 05", "e2"],
-    "Kia": ["Sonet","K3","K4","K5", "K8","K9","EV6", "Carens","Sportage", "Sorento", "Carnival", "Cerato", "Seltos", "Bongo"],
-    "Hyundai": ["Accent","Creta","Kona", "Elantra", "Sonata", "Tucson", "Santa Fe", "Staria", "Porter","Palisade"],
-    "Chery": ["Tiggo 7 Pro", "Tiggo 8 Pro", "Arrizo 6 Pro","Tiggo 2 Pro","Tiggo 4 Pro","Tiggo 9"],
-    "Haval": ["M6", "H6", "Dargo","H9","Jolion"],
-    "Lada": ["Vesta", "Largus", "Granta", "Niva Legend"],
-    "Jetour": ["X70", "X70 Plus", "X90 Plus", "Dashing","T2"],
-    "Changan":["UNI-K","UNI-T","UNI-V","CS35 Plus","CS55 Plus"],
-    "Geely":["Coolray","Monjaro","Tugella","Emgrand"],
-    "Exeed":["RX","VX","TXL","LX"],
-    "Omoda":["C5","S5"],
-    "Volkswagen":["ID4","ID6","Bora","Lavida","eTharu"],
-    "Xpeng":["G6","G9","P7"],
-    "Lexus":["RX","LX","ES","NX"],
-    "Toyota": ["Highlander","Avalon","Prius","Hilux","Camry", "Corolla", "Prado", "Land Cruiser 100","Land Cruiser 120","Land Cruiser 150","Land Cruiser 200","Land Cruiser 300", "RAV4"],
-    "Honda / Nissan":["CR-V","NS1 (Honda)","Sylphy","Altima"],
-    "Mercedes": ["C-Class", "E-Class", "S-Class", "GLE", "G-Class"],
-    "BMW": ["3-Series", "5-Series", "7-Series", "X5", "X7"],
-    "Zeekr": ["001", "007", "009", "X"],
-    "Li Auto": ["L7", "L8", "L9"],
-    "Tesla": ["Model 3", "Model Y", "Model S"],
-    "Boshqa": [],
-  };
+  // Marka/model ro'yxati endi bazada (catalog.js) — bu yerdagi eski ro'yxat olib tashlandi
 
   // ================= KATTA SIKL: YANA QIDIRISH UCHUN =================
   while (true) {
       let brand = "";
       let model = "";
       let query = "";
+      let brandObj = null;  // { id, name } — id: 0 = Boshqa, null = katalogda yo'q
+      let modelId = null;   // katalogdagi model ID (qidiruv shu bo'yicha)
       let step = "BRAND";
 
       // 1. Marka va Modelni tanlash sikli
       while (true) {
           if (step === "BRAND") {
-              const kb = new InlineKeyboard();
-              Object.keys(carCatalog).forEach((b, i) => { kb.text(b, `sb:${b}`); if ((i + 1) % 3 === 0) kb.row(); });
+              const kb = brandKeyboard("sb");
               kb.row().text("❌ Bekor qilish", "cancel_search");
 
               const msgPrompt = await ctx.reply("🔍 <b>Qaysi moshina markasini qidiryapsiz?</b>", { reply_markup: kb, parse_mode: "HTML" });
@@ -1607,19 +2209,18 @@ async function searchCarConversation(conversation, ctx) {
               if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Qidiruv to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu }); }
               if (res.callbackQuery?.data === "cancel_search") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Qidiruv to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu }); }
 
-              brand = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+              brandObj = parseBrandAnswer(res, "sb");
               await safeAnswerCbq(res);
               await deleteMsgs(ctx, chatToClean);
+              if (!brandObj) continue; // boshqa (eski) tugma bosildi — qayta so'raymiz
+              brand = brandObj.name;
               step = "MODEL";
           }
           else if (step === "MODEL") {
-              const kb = new InlineKeyboard();
-              if (carCatalog[brand] && carCatalog[brand].length > 0) {
-                  carCatalog[brand].forEach((m, i) => { kb.text(m, `sm:${m}`); if ((i + 1) % 3 === 0) kb.row(); });
-              }
+              const kb = modelKeyboard("sm", brandObj?.id);
               kb.row().text("🔙 Orqaga", "back_to_brand").text("❌ Bekor qilish", "cancel_search");
 
-              const promptText = brand === "Boshqa" 
+              const promptText = !brandObj?.id
                   ? "🔍 <b>Qidirayotgan moshinangiz rusumini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>"
                   : `🔍 <b>${brand}</b> qaysi modelini qidiryapsiz?`;
 
@@ -1633,14 +2234,19 @@ async function searchCarConversation(conversation, ctx) {
               if (res.callbackQuery?.data === "cancel_search") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); return ctx.reply("❌ <b>Qidiruv to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu }); }
               if (res.callbackQuery?.data === "back_to_brand") { await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); step = "BRAND"; continue; }
 
-              model = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+              const modelObj = parseModelAnswer(res, "sm", brandObj);
               await safeAnswerCbq(res);
               await deleteMsgs(ctx, chatToClean);
-              
-                            query = model.toLowerCase();
-              // Qidiruvni statistika uchun bazaga yozamiz
+              if (!modelObj) continue;
+              model = modelObj.name;
+              modelId = modelObj.id;
+              // Katalogda yo'q marka bilan yozilgan bo'lsa ham, to'liq nomda qidiramiz
+              if (brandObj && brandObj.id === null) { brand = "Boshqa"; model = `${brandObj.name} ${modelObj.name}`; }
+
+              query = model.toLowerCase();
+              // Qidiruvni statistika uchun bazaga yozamiz (model ID bilan)
               await conversation.external(() =>
-                db.execute("INSERT INTO search_logs (query) VALUES (?)", [query]).catch(() => {})
+                db.execute("INSERT INTO search_logs (query, model_id) VALUES (?, ?)", [query, modelId || null]).catch(() => {})
               );
               break;
           }
@@ -1675,12 +2281,16 @@ async function searchCarConversation(conversation, ctx) {
 
       const waitMsg = await ctx.reply("⏳ <i>Qidirilmoqda...</i>", {parse_mode: "HTML"});
 
-      const [ads] = await conversation.external(() => db.execute("SELECT * FROM ads WHERE status = 'active'"));
-      
+      // Model ID bo'yicha qidiramiz (ID siz eski e'lonlar — nomi bo'yicha)
+      const ads = await conversation.external(async () => {
+          const f = catalog.modelFilter(modelId, query);
+          const [rows] = await db.execute(`SELECT * FROM ads WHERE status = 'active' AND ${f.sql}`, f.params);
+          return rows;
+      });
+
       const filtered = ads.filter(ad => {
-          const matchQuery = ad.carDetails.toLowerCase().includes(query);
-          const price = parseInt(ad.price.replace(/\D/g,"")) || 0;
-          return matchQuery && price >= minPrice && price <= maxPrice; 
+          const price = parseInt(String(ad.price).replace(/\D/g,"")) || 0;
+          return price >= minPrice && price <= maxPrice;
       });
 
       await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(()=>{});
@@ -1823,7 +2433,9 @@ async function searchCarConversation(conversation, ctx) {
          }
       }
       // Obuna qismi
-      const alertKb = new InlineKeyboard().text("🔔 Qidiruvga obuna bo'lish", `al_sub:${query.substring(0, 20)}:${maxPrice}`);
+      // Obuna tugmasi: model ID ham saqlanadi (Telegram tugma ma'lumoti 64 baytdan oshmasligi uchun nomi qisqartiriladi)
+      const alertPrefix = `als:${modelId || 0}:${Math.min(maxPrice, 999999)}:`;
+      const alertKb = new InlineKeyboard().text("🔔 Qidiruvga obuna bo'lish", alertPrefix + cutBytes(query, 64 - Buffer.byteLength(alertPrefix)));
       await ctx.reply(`<i>Agar ushbu moshina bozorga chiqqanda darhol xabardor bo'lishni istasangiz, qo'ng'iroqchani bosing:</i>`, { parse_mode: "HTML", reply_markup: alertKb });
 
       // ================= YANGI QO'SHILGAN QISM =================
@@ -1886,9 +2498,20 @@ async function createAdConversation(conversation, ctx) {
       isFullUpdate = true;
       updateAdId = existingAd.id;
 
-      const parts = existingAd.carDetails.split(" ");
-      ad.brand = parts[0] || "Boshqa";
-      ad.model = parts.slice(1).join(" ") || "";
+      // Marka/modelni ID bo'yicha tiklaymiz ("Li Auto L7" kabi ikki so'zli markalar ham to'g'ri chiqadi)
+      const exModel = existingAd.model_id ? catalog.modelById(existingAd.model_id) : null;
+      const exBrand = existingAd.brand_id ? catalog.brandById(existingAd.brand_id) : null;
+      if (exModel) {
+        ad.brand = exModel.brandName; ad.brand_id = exModel.brandId;
+        ad.model = exModel.name; ad.model_id = exModel.id;
+      } else if (exBrand && existingAd.carDetails.toLowerCase().startsWith(exBrand.name.toLowerCase() + " ")) {
+        ad.brand = exBrand.name; ad.brand_id = exBrand.id;
+        ad.model = existingAd.carDetails.slice(exBrand.name.length + 1); ad.model_id = null;
+      } else {
+        // Katalogga mos kelmagan eski e'lon: nomi o'zgarmay qolishi uchun "Boshqa" sifatida olamiz
+        ad.brand = "Boshqa"; ad.brand_id = null;
+        ad.model = existingAd.carDetails; ad.model_id = null;
+      }
       ad.year = existingAd.year;
       ad.probeg = existingAd.probeg;
       ad.paint = existingAd.paint;
@@ -1915,63 +2538,41 @@ async function createAdConversation(conversation, ctx) {
 
   await ctx.reply(isFullUpdate ? "📝 <b>E'lonni tahrirlash boshlandi.</b>" : "📝 <b>E'lon berish boshlandi.</b>", { reply_markup: mainMenu, parse_mode: "HTML" });
 
-  const carCatalog = {
-    "Chevrolet": ["Cobalt", "Gentra", "Lacetti","Epica", "Spark","Orlando", "Nexia 1", "Nexia 2", "Nexia 3", "Matiz", "Damas", "Labo", "Tracker", "Onix", "Monza", "Malibu 1", "Malibu 2", "Captiva","Captiva 5", "Equinox", "Tahoe", "Traverse","Trablaizer"],
-    "Daewoo": ["Matiz", "Nexia 1", "Tico", "Damas"],
-    "BYD": ["Song L","Seal","Chazor", "Song Plus", "Song Pro","Champion","Han", "Tang", "Seagull", "Yuan Up", "Yuan Plus", "Destroyer 05", "e2"],
-    "Kia": ["Sonet","K3","K4","K5", "K8","K9","EV6", "Carens","Sportage", "Sorento", "Carnival", "Cerato", "Seltos", "Bongo"],
-    "Hyundai": ["Accent","Creta","Kona", "Elantra", "Sonata", "Tucson", "Santa Fe", "Staria", "Porter","Palisade"],
-    "Chery": ["Tiggo 7 Pro", "Tiggo 8 Pro", "Arrizo 6 Pro","Tiggo 2 Pro","Tiggo 4 Pro","Tiggo 9"],
-    "Haval": ["M6", "H6", "Dargo","H9","Jolion"],
-    "Lada": ["Vesta", "Largus", "Granta", "Niva Legend"],
-    "Jetour": ["X70", "X70 Plus", "X90 Plus", "Dashing","T2"],
-    "Changan":["UNI-K","UNI-T","UNI-V","CS35 Plus","CS55 Plus"],
-    "Geely":["Coolray","Monjaro","Tugella","Emgrand"],
-    "Exeed":["RX","VX","TXL","LX"],
-    "Omoda":["C5","S5"],
-    "Volkswagen":["ID4","ID6","Bora","Lavida","eTharu"],
-    "Xpeng":["G6","G9","P7"],
-    "Lexus":["RX","LX","ES","NX"],
-    "Toyota": ["Highlander","Avalon","Prius","Hilux","Camry", "Corolla", "Prado", "Land Cruiser 100","Land Cruiser 120","Land Cruiser 150","Land Cruiser 200","Land Cruiser 300", "RAV4"],
-    "Honda / Nissan":["CR-V","NS1 (Honda)","Sylphy","Altima"],
-    "Mercedes": ["C-Class", "E-Class", "S-Class", "GLE", "G-Class"],
-    "BMW": ["3-Series", "5-Series", "7-Series", "X5", "X7"],
-    "Zeekr": ["001", "007", "009", "X"],
-    "Li Auto": ["L7", "L8", "L9"],
-    "Tesla": ["Model 3", "Model Y", "Model S"],
-    "Boshqa": [],
-  };
+  // Marka/model ro'yxati endi bazada (catalog.js) — bu yerdagi eski ro'yxat olib tashlandi
 
   while (true) {
     let msgPrompt;
     try {
       if (step === "BRAND") {
-        const kb = new InlineKeyboard();
-        Object.keys(carCatalog).forEach((b, i) => { kb.text(b, `b:${b}`); if ((i + 1) % 3 === 0) kb.row(); });
+        const kb = brandKeyboard("b");
         kb.row().text("❌ Bekor qilish", "cancel_ad");
         msgPrompt = await ctx.reply("🚗 <b>Avtomobil markasini tanlang:</b>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
-        
+
         if (res.message?.text && cancelTexts.includes(res.message.text)) { await deleteMsgs(ctx, chatToClean);return ctx.reply("❌ <b>Jarayon to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { reply_markup: mainMenu, parse_mode: "HTML" }); }
-        
+
         if (res.callbackQuery?.data === "cancel_ad") break;
-        ad.brand = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        const picked = parseBrandAnswer(res, "b");
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
-        step = isEditing ? "PREVIEW" : "MODEL";
+        if (!picked) continue;
+        const sameBrand = ad.brand === picked.name;
+        ad.brand = picked.name;
+        ad.brand_id = picked.id || null;
+        ad.brandKnown = picked.id !== null; // false = katalogda yo'q, qo'lda yozilgan marka
+        // Tahrirlashda marka o'zgarsa, eski model endi mos kelmaydi — modelni qayta so'raymiz
+        if (!sameBrand) { ad.model_id = null; }
+        step = isEditing && sameBrand ? "PREVIEW" : "MODEL";
       }
 
 else if (step === "MODEL") {
-        const kb = new InlineKeyboard();
-        if (carCatalog[ad.brand] && carCatalog[ad.brand].length > 0) {
-          carCatalog[ad.brand].forEach((m, i) => { kb.text(m, `m:${m}`); if ((i + 1) % 3 === 0) kb.row(); });
-        }
+        const kb = modelKeyboard("m", ad.brand_id);
         kb.row().text("🔙 Orqaga", "back_BRAND").text("❌ Bekor qilish", "cancel_ad");
 
         // "Boshqa" tanlanganda matnni o'zgartirish
-        const promptText = ad.brand === "Boshqa" 
+        const promptText = !ad.brand_id && ad.brandKnown !== false
             ? "🚙 <b>Moshinangiz markasi va modelini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>"
             : `🚙 <b>${ad.brand}</b> modelini tanlang yoki yozing:`;
             
@@ -1985,9 +2586,13 @@ else if (step === "MODEL") {
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_BRAND") { step = "BRAND"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
-        ad.model = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        const pickedModel = parseModelAnswer(res, "m", { id: ad.brand_id || (ad.brandKnown === false ? null : 0), name: ad.brand });
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
+        if (!pickedModel) continue;
+        ad.model = pickedModel.name;
+        ad.model_id = pickedModel.id || null;
+        if (!ad.brand_id && pickedModel.brandId) ad.brand_id = pickedModel.brandId; // "Boshqa" orqali yozilgan, lekin katalogda bor
         step = isEditing ? "PREVIEW" : "YEAR";
       }
 
@@ -2115,10 +2720,11 @@ else if (step === "MODEL") {
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_FUEL") { step = "FUEL"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
-        let numericPrice = res.message?.text?.replace(/\D/g, "");
-        if (!numericPrice) { await ctx.reply("❗️ Iltimos, faqat raqam kiriting."); continue; }
-        
-        ad.price = numericPrice;
+        // Umumiy qoida (Mini App bilan bir xil): 300$ — 500 000$
+        const priceCheck = parseAdPrice(res.message?.text);
+        if (priceCheck.error) { const m = await ctx.reply(priceCheck.error); chatToClean.push(m.message_id); continue; }
+
+        ad.price = priceCheck.value;
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
         step = isEditing ? "PREVIEW" : "PHONE";
@@ -2137,17 +2743,18 @@ else if (step === "MODEL") {
         if (res.callbackQuery?.data === "back_PRICE") { step = "PRICE"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
         let phoneText = res.message?.contact ? res.message.contact.phone_number : res.message?.text;
-        let numericPhone = phoneText?.replace(/\D/g, "");
-        if (!numericPhone || numericPhone.length < 7) { await ctx.reply("❗️ To'g'ri raqam kiriting."); continue; }
-        
-        ad.phone = numericPhone.startsWith("998") ? numericPhone : `998${numericPhone}`;
+        // Umumiy qoida: 998 ikki marta yozilsa ham to'g'rilanadi, 9 xonali raqam bo'lishi shart
+        const normalizedPhone = normalizePhone(phoneText);
+        if (!normalizedPhone) { const m = await ctx.reply("❗️ To'g'ri raqam kiriting (masalan: 901234567)."); chatToClean.push(m.message_id); continue; }
+
+        ad.phone = normalizedPhone;
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
         step = isEditing ? "PREVIEW" : "REGION";
       }
 
       else if (step === "REGION") {
-        const regions = ["Toshkent sh.", "Toshkent vil.", "Sirdaryo", "Jizzax", "Samarqand", "Farg'ona", "Namangan", "Andijon", "Qashqadaryo", "Surxondaryo", "Buxoro", "Navoiy", "Xorazm", "Qoraqalpog'iston"];
+        const regions = catalog.AD_OPTIONS.regions; // Mini App bilan bir xil ro'yxat
         const kb = new InlineKeyboard();
         regions.forEach((r, i) => { kb.text(r, `r:${r}`); if ((i + 1) % 2 === 0) kb.row(); });
         kb.row().text("🔙 Orqaga", "back_PHONE").text("❌ Bekor", "cancel_ad");
@@ -2384,47 +2991,13 @@ else if (step === "PREVIEW") {
         isEditing = false;
         let waitMsg = await ctx.reply("⏳ <b>Aqlli tizim e'lonni tahlil qilmoqda...</b>", { parse_mode: "HTML" });
         
-        // ========= "BOSHQA" SO'ZINI OLIB TASHLASH =========
-        const fullCarName = ad.brand === "Boshqa" ? ad.model : `${ad.brand} ${ad.model}`;
-        
-        const numericPrice = parseInt(ad.price) || 0;
-        let priceBadge = "";
-        
-        try {
-            const [avgRows] = await db.execute("SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice FROM ads WHERE carDetails LIKE ? AND status = 'active'", [`%${ad.model}%`]);
-            const avgPrice = avgRows[0].avgPrice;
-            
-            if (avgPrice && numericPrice < avgPrice * 0.95) { 
-                priceBadge = " 🔥 (Qaynoq narx)";
-            } else if (avgPrice && numericPrice > avgPrice * 1.1) {
-                priceBadge = " 📈 (Bozordan biroz qimmat)";
-            }
-        } catch (e) {
-            console.error("Narx analitikasi xatosi:", e);
-        }
-
-        const photoUrls = await Promise.all(ad.photos.map(async (id) => {
-            const file = await bot.api.getFile(id);
-            return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
-        }));
+        // Umumiy funksiyalar (Mini App ham aynan shulardan foydalanadi)
+        resolveAdIds(ad);
+        const fullCarName = catalog.carName(ad.brand, ad.model); // "Boshqa" so'zi qo'shilmaydi
+        const priceBadge = await getPreviewPriceBadge(ad);
+        const photoUrls = await getPhotoUrls(ad.photos);
         const collagePath = await createCollage(photoUrls);
-        
-        let caption = "";
-        if (ad.urgent) {
-            caption += `🚨 <b>SHOSHILINCH SOTILADI!</b>\n\n`;
-        }
-        caption += 
-          `🚗 <b>Moshina:</b> ${fullCarName}\n` + // <--- Shu joy fullCarName bo'ldi
-          `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${formatNum(ad.probeg)} km\n` +
-          `💎 <b>Kraska:</b> ${ad.paint}\n🎨 <b>Rangi:</b> ${ad.color}\n` +
-          `⚙️ <b>Korobka:</b> ${ad.trans}\n⛽ <b>Yoqilg'i:</b> ${ad.fuel}\n`;
-
-        if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 <b>Tarixi:</b> ${ad.history}\n`;
-        if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 <b>Barter:</b> ${ad.barter}\n`;
-                if (ad.nasiya && ad.nasiya !== "Yo'q") caption += `💳 <b>Nasiya:</b> ${ad.nasiya}\n`;
-                        if (ad.dealer_offer) caption += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
-        caption += `💰 <b>Narxi:</b> ${formatNum(ad.price)}$${priceBadge}\n☎️ <b>Tel:</b> +${ad.phone}\n🚩 <b>Viloyat:</b> ${ad.region}`;
-        if (ad.videoId) caption += `\n🎥 <i>(Ushbu e'londa video-obzor mavjud!)</i>`;
+        const caption = buildAdCaption(ad, priceBadge);
 
         const kb = new InlineKeyboard()
           .text("✅ ADMINGA YUBORISH", "submit_ad").row()
@@ -2470,62 +3043,21 @@ if (action === "submit_ad") {
           const countText = `\n\n📦 <b>Tasdiq kutayotganlar soni: ${totalPending} ta</b>`;
           
           if (isFullUpdate) {
-            let urgentTextEdit = ad.urgent ? "\n\n🚨 <b>Diqqat: Foydalanuvchi buni SHOSHILINCH sotmoqchi!</b>" : "";
-            
-            const [result] = await db.execute(
-              `INSERT INTO ad_edits (oldAdId, userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, dealer_offer, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-              [updateAdId, ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.dealer_offer || null, ad.videoId || null]
+            // ad_edits ga yozish va adminga yuborish — umumiy funksiya (Mini App ham shuni chaqiradi)
+            const editResult = await conversation.external(() =>
+              submitAdEditToAdmin({ adId: updateAdId, ad, userId: ctx.from.id, firstName: ctx.from.first_name, source: "bot" })
             );
-            const editId = result.insertId; 
-            
-            const adminCollage = await createCollage(photoUrls);
-            const adminMsg = await ctx.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
-              caption: `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 <b>Eski ID: ${updateAdId}</b>\n\n${caption}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>${countText}${urgentTextEdit}`,
-              reply_markup: new InlineKeyboard().text("✅ O'zgarishni tasdiqlash", `approve_edit:${editId}`).text("❌ Rad etish", `reject_edit:${editId}`),
-              parse_mode: "HTML",
-            });
-            if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
-
-            if (ad.videoId) {
-                await ctx.api.sendVideo(ADMIN_ID, ad.videoId, { reply_to_message_id: adminMsg.message_id });
-            }
+            if (!editResult.ok) return ctx.reply(editResult.error, { parse_mode: "HTML", reply_markup: mainMenu });
 
             if (ctx.session) ctx.session.editAdData = null;
             await ctx.reply("✅ <b>Tahrirlangan e'lon adminga muvaffaqiyatli yuborildi!</b>\n\nTekshiruvdan so'ng kanaldagi e'lon yangilanadi.", { parse_mode: "HTML", reply_markup: mainMenu });
             return; 
           }
 
-          // 1. Avval bazaga saqlaymiz va adId ni aniqlaymiz
-          const [result] = await db.execute(
-            `INSERT INTO ads (userId, carDetails, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, dealer_offer, videoId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            [ctx.from.id, fullCarName, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.dealer_offer || null, ad.videoId || null]
+          // Yangi e'lon: bazaga yozish + adminga yuborish umumiy funksiyada (Mini App ham shuni chaqiradi)
+          await conversation.external(() =>
+            submitNewAdToAdmin({ ad, userId: ctx.from.id, firstName: ctx.from.first_name, source: "bot" })
           );
-          const adId = result.insertId; 
-
-          // 2. Endi adId malum bo'ldi, klaviaturani yasaymiz
-          let urgentTextNew = ad.urgent ? "\n\n🚨 <b>DIQQAT: Ushbu e'lon foydalanuvchi tomonidan SHOSHILINCH (Qaynoq narx) deb belgilangan!</b>" : "";
-          
-          let adminKb = new InlineKeyboard();
-          if (ad.urgent) {
-              adminKb.text("🔥 Qabul (Shoshilinch)", `approve_hot:${adId}`).text("❌ Rad etish", `reject:${adId}`).row()
-                     .text("✅ Oddiy qabul qilish", `approve:${adId}`);
-          } else {
-              adminKb.text("✅ Qabul qilish", `approve:${adId}`).text("❌ Rad etish", `reject:${adId}`).row()
-                     .text("🔥 Qaynoq narxda qabul qilish", `approve_hot:${adId}`);
-          }
-          
-          // 3. Adminga yuboramiz
-          const adminCollage = await createCollage(photoUrls);
-          const adminMsg = await ctx.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
-            caption: `🆔 <b>ID: ${adId}</b>\n\n${caption}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a>${countText}${urgentTextNew}`,
-            reply_markup: adminKb, 
-            parse_mode: "HTML",
-          });
-          if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
-
-          if (ad.videoId) {
-              await ctx.api.sendVideo(ADMIN_ID, ad.videoId, { reply_to_message_id: adminMsg.message_id });
-          }
 
           if (ctx.session) ctx.session.editAdData = null;
           await ctx.reply("✅ <b>E'loningiz adminga muvaffaqiyatli yuborildi!</b>\n\nTekshiruvdan so'ng kanalga joylanadi.", { parse_mode: "HTML", reply_markup: mainMenu });
@@ -2573,33 +3105,7 @@ async function evaluateCarConversation(conversation, ctx) {
     return res;
   };
 
-  const carCatalog = {
-    "Chevrolet": ["Cobalt", "Gentra", "Lacetti", "Spark", "Nexia 1", "Nexia 2", "Nexia 3", "Matiz", "Damas", "Labo", "Tracker", "Onix", "Monza", "Malibu 1", "Malibu 2", "Captiva", "Captiva 5", "Equinox", "Tahoe", "Traverse", "Epica", "Orlando"],
-    "Daewoo": ["Matiz", "Nexia 1", "Tico", "Damas"],
-    "BYD": ["Chazor", "Song Plus", "Song Pro", "Song L", "Han", "Tang", "Seal", "Seagull", "Yuan Up", "Yuan Plus", "Destroyer 05", "e2"],
-    "Kia": ["Sonet", "K3", "K4", "K5", "K8", "K9", "Sportage", "Sorento", "Carnival", "Cerato", "Seltos", "EV6", "Bongo"],
-    "Hyundai": ["Accent", "Elantra", "Sonata", "Tucson", "Santa Fe", "Staria", "Porter", "Palisade", "Creta", "Kona"],
-    "Chery": ["Tiggo 2 Pro", "Tiggo 4 Pro", "Tiggo 7 Pro", "Tiggo 8 Pro", "Tiggo 9", "Arrizo 6 Pro"],
-    "Haval": ["Jolion", "M6", "H6", "Dargo", "H9"],
-    "Changan": ["UNI-K", "UNI-T", "UNI-V", "CS35 Plus", "CS55 Plus", "CS75 Plus", "Eado"],
-    "Geely": ["Coolray", "Monjaro", "Tugella", "Okavango", "Emgrand", "Geometry C"],
-    "Exeed": ["RX", "VX", "TXL", "LX"],
-    "Omoda": ["C5", "S5"],
-    "Jetour": ["X70", "X70 Plus", "X90 Plus", "Dashing", "T2"],
-    "Lada": ["Vesta", "Largus", "Granta", "Niva Legend", "Niva Travel", "XRAY"],
-    "Toyota": ["Camry", "Corolla", "Avalon", "Prado", "Land Cruiser 100", "Land Cruiser 200", "Land Cruiser 300", "RAV4", "Highlander", "Hilux", "Prius"],
-    "Lexus": ["LX", "RX", "ES", "NX", "GX"],
-    "Mercedes": ["C-Class", "E-Class", "S-Class", "GLE", "GLS", "G-Class"],
-    "BMW": ["3-Series", "5-Series", "7-Series", "X3", "X5", "X6", "X7"],
-    "Volkswagen": ["ID.4", "ID.6", "Bora", "Lavida", "Passat", "Tiguan", "Touareg"],
-    "Honda": ["CR-V", "Civic", "Accord", "e:NS1"],
-    "Nissan": ["Sylphy", "Altima", "X-Trail", "Qashqai"],
-    "Zeekr": ["001", "007", "009", "X"],
-    "Li Auto": ["L7", "L8", "L9", "Mega"],
-    "Xpeng": ["G6", "G9", "P7"],
-    "Tesla": ["Model 3", "Model Y", "Model S", "Model X"],
-    "Boshqa": [],
-  };
+  // Marka/model ro'yxati endi bazada (catalog.js) — bu yerdagi eski ro'yxat olib tashlandi
 
   await ctx.reply("🧮 <b>Aqlli baholash tizimiga xush kelibsiz!</b>\n\nMoshinangizning bozordagi real narxini ma'lumotlar bazamizdagi e'lonlar asosida hisoblab beramiz.", { reply_markup: mainMenu, parse_mode: "HTML" });
 
@@ -2607,8 +3113,7 @@ async function evaluateCarConversation(conversation, ctx) {
     let msgPrompt;
     try {
       if (step === "BRAND") {
-        const kb = new InlineKeyboard();
-        Object.keys(carCatalog).forEach((b, i) => { kb.text(b, `b:${b}`); if ((i + 1) % 3 === 0) kb.row(); });
+        const kb = brandKeyboard("b");
         kb.row().text("❌ Bekor qilish", "cancel_ad");
         msgPrompt = await ctx.reply("🚗 <b>Markani tanlang:</b>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
@@ -2616,27 +3121,31 @@ async function evaluateCarConversation(conversation, ctx) {
         if (res.message) chatToClean.push(res.message.message_id);
         if (res.callbackQuery?.data === "cancel_ad") break;
 
-        ad.brand = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        const picked = parseBrandAnswer(res, "b");
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
+        if (!picked) continue;
+        ad.brandObj = picked;
+        ad.brand = picked.name;
         step = "MODEL";
       }
       else if (step === "MODEL") {
-        const kb = new InlineKeyboard();
-        if (carCatalog[ad.brand] && carCatalog[ad.brand].length > 0) {
-          carCatalog[ad.brand].forEach((m, i) => { kb.text(m, `m:${m}`); if ((i + 1) % 3 === 0) kb.row(); });
-        }
+        const kb = modelKeyboard("m", ad.brandObj?.id);
         kb.row().text("🔙 Orqaga", "back_BRAND").text("❌ Bekor qilish", "cancel_ad");
-        msgPrompt = await ctx.reply(`🚙 <b>${ad.brand}</b> modelini tanlang:`, { reply_markup: kb, parse_mode: "HTML" });
+        const modelPrompt = ad.brandObj?.id ? `🚙 <b>${ad.brand}</b> modelini tanlang:` : "🚙 <b>Moshina rusumini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>";
+        msgPrompt = await ctx.reply(modelPrompt, { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_BRAND") { step = "BRAND"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
-        ad.model = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        const pickedModel = parseModelAnswer(res, "m", ad.brandObj);
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
+        if (!pickedModel) continue;
+        ad.model = pickedModel.name;
+        ad.model_id = pickedModel.id || null;
         step = "YEAR";
       }
       else if (step === "YEAR") {
@@ -2661,33 +3170,15 @@ async function evaluateCarConversation(conversation, ctx) {
         let waitMsg = await ctx.reply("⏳ <b>Bazadagi e'lonlar va narxlar tahlil qilinmoqda...</b>", { parse_mode: "HTML" });
 
         try {
-            // Bazadan faol yoki sotilgan o'xshash modellarni qidiramiz
-            const [rows] = await db.execute(
-                "SELECT price, year FROM ads WHERE carDetails LIKE ? AND status IN ('active', 'sold')",
-                [`%${ad.model}%`]
-            );
-
-            const targetYear = parseInt(ad.year);
-            // Aniqroq natija uchun yili yaqin bo'lganlarni (+/- 2 yil) filtrlaymiz
-            const relevantAds = rows.filter(r => {
-                const y = parseInt(r.year) || 0;
-                return Math.abs(y - targetYear) <= 2;
-            });
-
-            // Narxlarni tozalab faqat raqamlarni olamiz (1000$ dan 200,000$ gacha bo'lganlarni real deb qabul qilamiz)
-            let validPrices = relevantAds.map(r => parseInt(r.price.replace(/\D/g, ""))).filter(p => p > 1000 && p < 200000);
-
+            // Hisob-kitob umumiy funksiyada (Mini App ham shuni chaqiradi)
+            const estimate = await estimateCarPrice({ modelId: ad.model_id, model: ad.model, year: ad.year });
+            ad.brand = ad.brand === "Boshqa" ? "" : ad.brand; // natija matnida "Boshqa" so'zi chiqmasin
             await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(()=>{});
 
-            if (validPrices.length === 0) {
+            if (!estimate.ok) {
                 await ctx.reply(`📭 <b>Kechirasiz, bazamizda ${ad.year} yil ${ad.brand} ${ad.model} uchun yetarli ma'lumot yo'q.</b>\n\nMoshinangizning narxi holatiga qarab turlicha bo'lishi mumkin.`, { parse_mode: "HTML", reply_markup: mainMenu });
             } else {
-                const sum = validPrices.reduce((a, b) => a + b, 0);
-                const avg = sum / validPrices.length;
-
-                // Bazaviy hisoblash: O'rtacha narxning -6% va +6% oralig'ini (minimum va maksimum) hisoblaymiz
-                const minPrice = Math.round((avg * 0.94) / 100) * 100;
-                const maxPrice = Math.round((avg * 1.06) / 100) * 100;
+                const { minPrice, maxPrice } = estimate; // o'rtacha narxning -6% / +6% oralig'i
 
                 const text = 
                   `📊 <b>SIZNING MOSHINANGIZ BAHOLANDI!</b>\n\n` +
@@ -2893,35 +3384,12 @@ async function becomeDealerConversation(conversation, ctx) {
   );
   const phoneRes = await conversation.waitFor("message:text");
   if (cancelTexts.includes(phoneRes.message.text)) return ctx.reply("❌ <b>So'rov to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
-  let dealerPhone = phoneRes.message.text.replace(/\D/g, "");
-  dealerPhone = dealerPhone.replace(/^(998)+/, "");
-  if (dealerPhone.length > 9) dealerPhone = dealerPhone.slice(-9);
-  if (dealerPhone.length < 9) return ctx.reply("❗️ To'g'ri raqam kiriting. (Masalan: 901234567)", { reply_markup: mainMenu });
-  dealerPhone = `998${dealerPhone}`;
-
-  // Ma'lumotlarni vaqtincha saqlaymiz (hali tasdiqlanmagan, is_dealer=0 qoladi)
-  await conversation.external(() =>
-    db.execute("UPDATE users SET dealer_name = ?, dealer_phone = ? WHERE id = ?", [dealerName, dealerPhone, ctx.from.id])
-  );
-
-  // Adminга so'rov yuboramiz
-  const usernameStr = ctx.from.username ? `@${ctx.from.username}` : "yo'q";
-  const adminText =
-    `🏢 <b>YANGI AVTOSALON SO'ROVI!</b>\n\n` +
-    `📛 <b>Salon nomi:</b> ${dealerName}\n` +
-    `☎️ <b>Telefon:</b> +${dealerPhone}\n` +
-    `👤 <b>Foydalanuvchi:</b> <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a> (${usernameStr})\n` +
-    `🆔 <b>ID:</b> <code>${ctx.from.id}</code>\n\n` +
-    `<i>Ushbu foydalanuvchini avtosalon sifatida tasdiqlaysizmi?</i>`;
-
-  await conversation.external(() =>
-    bot.api.sendMessage(ADMIN_ID, adminText, {
-      parse_mode: "HTML",
-      reply_markup: new InlineKeyboard()
-        .text("✅ Tasdiqlash", `dealer_approve:${ctx.from.id}`)
-        .text("❌ Rad etish", `dealer_reject:${ctx.from.id}`)
-    })
-  );
+  // Telefonni tekshirish, saqlash va adminga yuborish — umumiy funksiya (Mini App ham shuni chaqiradi)
+  const dealerResult = await conversation.external(() => submitDealerApplication({
+    userId: ctx.from.id, firstName: ctx.from.first_name, username: ctx.from.username,
+    name: dealerName, phone: phoneRes.message.text,
+  }));
+  if (!dealerResult.ok) return ctx.reply(dealerResult.error, { parse_mode: "HTML", reply_markup: mainMenu });
 
   await ctx.reply(
     "✅ <b>So'rovingiz adminга yuborildi!</b>\n\n" +
@@ -2936,34 +3404,9 @@ bot.use(createConversation(becomeDealerConversation));
 async function salonAdConversation(conversation, ctx) {
   const cancelTexts = ["/start", "/cancel", "📝 E'lon berish", "🔍 Mashina qidirish", "📂 Mening e'lonlarim", "🔔 Obunalarim"];
 
-  // Diler ekanligini va kunlik limitni tekshiramiz
-  const checkData = await conversation.external(async () => {
-    const [uRows] = await db.execute("SELECT is_dealer, dealer_paused, dealer_name, dealer_phone FROM users WHERE id = ?", [ctx.from.id]);
-    const user = uRows[0];
-    // Bugun nechta reklama berganini sanaymiz
-    const [cRows] = await db.execute(
-      "SELECT COUNT(*) as count FROM salon_ads WHERE userId = ? AND DATE(created_at) = CURDATE() AND status != 'rejected'",
-      [ctx.from.id]
-    );
-    return { user, todayCount: cRows[0].count };
-  });
-
-  const isDealer = checkData.user && checkData.user.is_dealer === 1 && checkData.user.dealer_paused !== 1;
-
-  if (!isDealer) {
-    return ctx.reply(
-      "❌ <b>Bu bo'lim faqat tasdiqlangan avtosalonlar uchun.</b>\n\nAgar siz doimiy sotuvchi bo'lsangiz, «🏢 Avtosalon bo'lish» tugmasi orqali ariza qoldiring.",
-      { parse_mode: "HTML", reply_markup: mainMenu }
-    );
-  }
-
-  // Kunlik limit: 2 ta
-  if (checkData.todayCount >= 2) {
-    return ctx.reply(
-      "⏳ <b>Bugungi reklama limitingiz tugadi.</b>\n\nBir kunda eng ko'pi bilan <b>2 ta</b> salon reklamasi bera olasiz. Ertaga qaytadan urinib ko'ring.",
-      { parse_mode: "HTML", reply_markup: mainMenu }
-    );
-  }
+  // Diler ekanligi va kunlik limit (2 ta) — umumiy funksiya (Mini App ham shuni chaqiradi)
+  const checkData = await conversation.external(() => getSalonAdStatus(ctx.from.id));
+  if (!checkData.ok) return ctx.reply(checkData.error, { parse_mode: "HTML", reply_markup: mainMenu });
 
   await ctx.reply(
     "📢 <b>SALON REKLAMASI BERISH</b>\n\n" +
@@ -3028,34 +3471,11 @@ async function salonAdConversation(conversation, ctx) {
     phone = phoneRes.message.text.trim();
   }
 
-  // Bazaga saqlaymiz (pending holatda)
-  const saveResult = await conversation.external(() =>
-    db.execute(
-      "INSERT INTO salon_ads (userId, salonName, adText, mediaType, mediaId, location, phone, status) VALUES (?,?,?,?,?,?,?,'pending')",
-      [ctx.from.id, checkData.user.dealer_name, adText, mediaType, mediaId, location, phone]
-    )
-  );
-  const salonAdId = saveResult[0].insertId;
-
-  // Adminга tasdiqlashga yuboramiz
-  const adminCaption =
-    `📢 <b>YANGI SALON REKLAMASI!</b>\n\n` +
-    `🏢 <b>Salon:</b> ${checkData.user.dealer_name}\n\n` +
-    `${adText}\n\n` +
-    `📍 <b>Manzil:</b> ${location}\n` +
-    `📞 <b>Tel:</b> ${phone}\n\n` +
-    `👤 <a href="tg://user?id=${ctx.from.id}">Profil</a> | 🆔 <code>${ctx.from.id}</code>`;
-
-  await conversation.external(async () => {
-    const adminKb = new InlineKeyboard()
-      .text("✅ Tasdiqlash", `salon_approve:${salonAdId}`)
-      .text("❌ Rad etish", `salon_reject:${salonAdId}`);
-    if (mediaType === "video") {
-      await bot.api.sendVideo(ADMIN_ID, mediaId, { caption: adminCaption, parse_mode: "HTML", reply_markup: adminKb });
-    } else {
-      await bot.api.sendPhoto(ADMIN_ID, mediaId, { caption: adminCaption, parse_mode: "HTML", reply_markup: adminKb });
-    }
-  });
+  // Bazaga saqlash va adminga yuborish — umumiy funksiya (Mini App ham shuni chaqiradi)
+  const salonResult = await conversation.external(() => submitSalonAd({
+    userId: ctx.from.id, adText, mediaType, mediaId, location, phone,
+  }));
+  if (!salonResult.ok) return ctx.reply(salonResult.error, { parse_mode: "HTML", reply_markup: mainMenu });
 
   await ctx.reply(
     "✅ <b>Reklamangiz adminга yuborildi!</b>\n\nTekshiruvdan so'ng kanalga joylanadi. Odatda bu tez amalga oshadi.",
@@ -3280,7 +3700,7 @@ if (ad.barter && ad.barter !== "Yo'q") {
         const adDetails = ad.carDetails.toLowerCase();
 
         for (const alert of alerts) {
-            if (adDetails.includes(alert.query) && adPrice <= alert.maxPrice) {
+            if (alertMatchesAd(alert, ad) && adPrice <= alert.maxPrice) { // model ID bo'yicha (bo'lmasa nomi bo'yicha)
                 try {
                     await bot.api.sendMessage(alert.userId, `🔔 <b>SIZ Qidirayotgan moshina chiqdi!</b>\n\nBizning kanalga sizning talabingizga mos moshina joylandi:`, { parse_mode: "HTML" });
                     await bot.api.copyMessage(alert.userId, CHANNEL_ID, msg.message_id);
@@ -3418,7 +3838,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
         const adDetails = ad.carDetails.toLowerCase();
 
         for (const alert of alerts) {
-            if (adDetails.includes(alert.query) && adPrice <= alert.maxPrice) {
+            if (alertMatchesAd(alert, ad) && adPrice <= alert.maxPrice) { // model ID bo'yicha (bo'lmasa nomi bo'yicha)
                 try {
                     await bot.api.sendMessage(alert.userId, `🔔 <b>SIZ Qidirayotgan moshina chiqdi!</b>`, { parse_mode: "HTML" });
                     await bot.api.copyMessage(alert.userId, CHANNEL_ID, msg.message_id);
@@ -3559,45 +3979,19 @@ bot.callbackQuery(/^reject_edit:(\d+)/, async (ctx) => {
 //   }
 // });
 
+// "💰 Sotildi" — avval real sotuv narxini so'raymiz (ixtiyoriy), keyin adminga (soldConversation)
 bot.callbackQuery(/^sold_req:(\d+)/, async (ctx) => {
-  const adId = ctx.match[1];
-  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
-  const ad = rows[0];
-
-  if (ad && ad.status === 'active') {
-      await bot.api.sendMessage(ADMIN_ID, `💰 <b>SOTILDI XABARI!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>`, {
-          reply_markup: new InlineKeyboard().text("✅ Tasdiqlash (Kanalda belgilash)", `confirm_sold:${adId}`), parse_mode: "HTML",
-      });
-      await ctx.answerCallbackQuery({ text: "So'rov adminga yuborildi." });
-      
-      try {
-          await ctx.editMessageText(`🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n\n⏳ <i>Sotildi deb belgilash bo'yicha so'rov adminga yuborildi...</i>`, { parse_mode: "HTML" });
-      } catch (e) {
-          // Tugma 2-marta bosilsa, xatolikni inkor qilamiz (message is not modified)
-      }
-  } else {
-      await ctx.answerCallbackQuery({ text: "Bu e'lon allaqachon yopilgan yoki topilmadi.", show_alert: true });
-  }
+  await ctx.answerCallbackQuery().catch(() => {});
+  await ctx.conversation.enter("soldConversation");
 });
 
 bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
   // FAQAT ADMIN kanalda "sotildi" deb belgilay oladi!
   if (ctx.from.id !== ADMIN_ID) {
-    // Agar oddiy foydalanuvchi bossa, uni sold_req (admin so'rovi) ga yo'naltiramiz
-    const adId = ctx.match[1];
-    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
-    const ad = rows[0];
-    if (ad && ad.status === 'active') {
-      await bot.api.sendMessage(ADMIN_ID, `💰 <b>SOTILDI XABARI!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>`, {
-        reply_markup: new InlineKeyboard().text("✅ Tasdiqlash (Kanalda belgilash)", `confirm_sold:${adId}`), parse_mode: "HTML",
-      });
-      await ctx.answerCallbackQuery({ text: "✅ So'rov adminga yuborildi.", show_alert: true });
-      try {
-        await ctx.editMessageText(`🚗 <b>${ad.carDetails}</b>\n\n⏳ <i>«Sotildi» so'rovi adminga yuborildi. Admin tasdiqlagach, kanalda belgilanadi.</i>`, { parse_mode: "HTML" });
-      } catch (e) {}
-    } else {
-      await ctx.answerCallbackQuery({ text: "Bu e'lon allaqachon yopilgan.", show_alert: true });
-    }
+    // Oddiy foydalanuvchi (eslatmadagi "Allaqachon sotildi") — kanalda o'zgartirmaymiz,
+    // avval sotuv narxini so'rab, adminga so'rov yuboramiz
+    await ctx.answerCallbackQuery().catch(() => {});
+    await ctx.conversation.enter("soldConversation");
     return;
   }
 
@@ -3607,7 +4001,10 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
   
   if (ad && ad.status === 'active') {
       try {
-       const newCaption = `💰 <b>SOTILDI!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Narxi: ${formatNum(ad.price)} $</b>\n\n❌ <b>E'lon yopildi.</b>`;
+       // Real sotuv narxi aytilgan bo'lsa shuni, aks holda e'londagi narxni ko'rsatamiz
+       const newCaption = ad.sold_price
+         ? `💰 <b>SOTILDI!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Sotildi: ${formatNum(ad.sold_price)} $</b>\n\n❌ <b>E'lon yopildi.</b>`
+         : `💰 <b>SOTILDI!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Narxi: ${formatNum(ad.price)} $</b>\n\n❌ <b>E'lon yopildi.</b>`;
         
         // 1. Asosiy kanalni yangilash
         await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, parse_mode: "HTML" });
@@ -3656,9 +4053,10 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
         }
         // Avtomatik tabriknoma (Reklama) asosiy kanalga
                // Avtomatik tabriknoma (Reklama) asosiy kanalga
-        const congratsText = 
+        const soldPriceText = ad.sold_price ? ` <b>${formatNum(ad.sold_price)}$ ga</b>` : "";
+        const congratsText =
           `🎉 <b>YANA BITTA MOSHINA SOTILDI!</b>\n\n` +
-          `🚗 <b>${ad.carDetails}</b> — ${daysText}! 🤝\n\n` +
+          `🚗 <b>${ad.carDetails}</b> — ${daysText}${soldPriceText}! 🤝\n\n` +
           `Sotuvchini tabriklaymiz! Bizning botimiz orqali moshinalar <b>maklersiz, komissiyasiz va tez</b> sotilmoqda.\n\n` +
           `🚘 <b>Sizda ham sotiladigan moshina bormi?</b>\n` +
           `Uni bepul joylang — minglab xaridor kutmoqda! 👇\n` +
@@ -3834,39 +4232,43 @@ bot.command("start", async (ctx) => {
 });
 
 bot.hears("📝 E'lon berish", async (ctx) => {
-  // 1. Obunani tekshirish
-  if (!(await isSubscribed(ctx))) return askForSub(ctx);
-
-  // FAQAT ADMIN BO'LMAGANLAR UCHUN CHEKLOVLAR (Admindan bularni so'ramaydi)
-  if (ctx.from.id !== ADMIN_ID) {
-    // 2. Anti-spam: Tasdiq kutayotgan e'loni borligini tekshirish
-    const [[pendingAds]] = await db.execute(
-      "SELECT COUNT(*) as count FROM ads WHERE userId = ? AND status = 'pending'",
-      [ctx.from.id]
-    );
-    
-    if (pendingAds.count > 0) {
-      return ctx.reply("⏳ <b>Sizning oldingi e'loningiz hali adminlar tomonidan ko'rib chiqilmoqda.</b>\n\nIltimos, u tasdiqlanguncha yoki rad etilguncha kutib turing.", { parse_mode: "HTML" });
-    }
-
-    // Diler ekanligini tekshiramiz — diler bo'lsa limit yo'q
-        const [[dealerCheck]] = await db.execute("SELECT is_dealer, dealer_paused FROM users WHERE id = ?", [ctx.from.id]);
-    const isDealer = dealerCheck && dealerCheck.is_dealer === 1 && dealerCheck.dealer_paused !== 1;
-
-    // 3. Limit: Diler bo'lmaganlar uchun 3 ta faol e'lon cheklovi
-    if (!isDealer) {
-      const [[activeAds]] = await db.execute(
-        "SELECT COUNT(*) as count FROM ads WHERE userId = ? AND status = 'active'",
-        [ctx.from.id]
-      );
-      
-      if (activeAds.count >= 3) {
-        return ctx.reply("❗️ <b>Sizda cheklov mavjud!</b>\n\nBir vaqtning o'zida eng ko'pi bilan <b>3 ta</b> faol e'loningiz bo'lishi mumkin. Yangi e'lon berish uchun '📂 Mening e'lonlarim' bo'limidan eskilarini 'Sotildi' deb belgilang.\n\n💡 <i>Doimiy sotuvchimisiz? «🏢 Avtosalon bo'lish» tugmasi orqali cheksiz e'lon bering!</i>", { parse_mode: "HTML" });
-      }
-    }
+  // Obuna, kutilayotgan e'lon va 3 ta limit — umumiy funksiyada (Mini App ham aynan shuni tekshiradi)
+  const check = await checkCanPostAd(ctx.from.id);
+  if (!check.ok) {
+    if (check.code === "not_subscribed") return askForSub(ctx);
+    return ctx.reply(check.message, { parse_mode: "HTML" });
   }
-if (ctx.session) ctx.session.editAdData = null;
-await ctx.conversation.enter("createAdConversation");
+
+  if (ctx.session) ctx.session.editAdData = null;
+
+  // Mini App ulangan bo'lsa — foydalanuvchi o'zi tanlaydi: ilovada (forma) yoki botda (savol-javob)
+  if (WEBAPP_URL) {
+    return ctx.reply(
+      "📝 <b>E'lonni qanday to'ldirasiz?</b>\n\n" +
+      "📱 <b>Ilovada</b> — barcha maydonlar bitta sahifada, 1-2 daqiqada tayyor.\n" +
+      "💬 <b>Bot orqali</b> — savol-javob tarzida, qadamma-qadam.",
+      {
+        parse_mode: "HTML",
+        reply_markup: new InlineKeyboard()
+          .webApp("📱 Ilovada to'ldirish", `${WEBAPP_URL}/#/new`).row()
+          .text("💬 Bot orqali to'ldirish", "ad_via_bot"),
+      }
+    );
+  }
+  await ctx.conversation.enter("createAdConversation");
+});
+
+// "💬 Bot orqali to'ldirish" tanlanganda — eski (savol-javob) usul
+bot.callbackQuery("ad_via_bot", async (ctx) => {
+  await ctx.answerCallbackQuery().catch(() => {});
+  const check = await checkCanPostAd(ctx.from.id); // tugma kechroq bosilgan bo'lishi mumkin
+  if (!check.ok) {
+    if (check.code === "not_subscribed") return askForSub(ctx);
+    return ctx.reply(check.message, { parse_mode: "HTML" });
+  }
+  await ctx.deleteMessage().catch(() => {});
+  if (ctx.session) ctx.session.editAdData = null;
+  await ctx.conversation.enter("createAdConversation");
 });
 
 bot.hears("🔍 Mashina qidirish", async (ctx) => {
@@ -3998,8 +4400,9 @@ bot.hears("🔔 Obunalarim", async (ctx) => {
   for (const alert of alerts) {
     const kb = new InlineKeyboard().text("❌ Obunani bekor qilish", `del_alert:${alert.id}`);
     
-    // So'zni bosh harf bilan yozish uchun kichik funksiya
-    const carName = alert.query.charAt(0).toUpperCase() + alert.query.slice(1);
+    // Model ID bo'lsa to'liq nomi (marka bilan), bo'lmasa saqlangan so'z bosh harf bilan
+    const alertModel = alert.model_id ? catalog.modelById(alert.model_id) : null;
+    const carName = alertModel ? `${alertModel.brandName} ${alertModel.name}` : alert.query.charAt(0).toUpperCase() + alert.query.slice(1);
     
     const text = `🚗 <b>Mashina:</b> ${carName}\n💰 <b>Maksimal narx:</b> ${alert.maxPrice}$ gacha`;
     
@@ -4009,13 +4412,11 @@ bot.hears("🔔 Obunalarim", async (ctx) => {
 bot.hears("🎁 Bepul VIP (UP)", async (ctx) => {
   if (!(await isSubscribed(ctx))) return askForSub(ctx);
 
-  const [rows] = await db.execute("SELECT referral_count, free_ups FROM users WHERE id = ?", [ctx.from.id]);
-  const user = rows[0];
-  if (!user) return;
-
-  const botInfo = await bot.api.getMe();
-  const refLink = `https://t.me/${botInfo.username}?start=ref_${ctx.from.id}`;
-  const qoldi = 5 - (user.referral_count % 5);
+  // Havola va statistika — umumiy funksiya (Mini App ham shuni ko'rsatadi)
+  const ref = await getReferralInfo(ctx.from.id);
+  const user = { referral_count: ref.referralCount, free_ups: ref.freeUps };
+  const refLink = ref.refLink;
+  const qoldi = ref.left;
 
   const text = 
     `🎁 <b>BEPUL E'LON KO'TARISH (VIP)</b>\n\n` +
@@ -4028,16 +4429,7 @@ bot.hears("🎁 Bepul VIP (UP)", async (ctx) => {
     `<code>${refLink}</code>\n\n` +
     `<i>Shu havolani do'stlaringizga va gruppalarga tarqating!</i>`;
 
- const shareMessage = 
-    "🚗 O'zbekistondagi eng qulay onlayn Avto-Bozor!\n\n" +
-    "💸 E'lon berish mutlaqo BEPUL.\n" +
-    "🔍 O'zingiz izlagan moshinani juda oson toping.\n\n" +
-    "👇 Hoziroq botga kirib ko'ring:\n" + 
-    refLink;
-
-  const shareText = encodeURIComponent(shareMessage);
-  // Bu yerda 'url=' olib tashlandi, hammasi 'text=' ichiga joylandi
-  const kb = new InlineKeyboard().url("📤 Do'stlarga yuborish", `https://t.me/share/url?text=${shareText}`);
+  const kb = new InlineKeyboard().url("📤 Do'stlarga yuborish", ref.shareUrl);
   
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
 });
@@ -4197,106 +4589,11 @@ async function editPriceConversation(conversation, ctx) {
 
   const waitMsg = await ctx.reply("⏳ <i>Kanaldagi e'lon yangilanmoqda...</i>", { parse_mode: "HTML" });
 
-  try {
-    const newCaption = 
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
-      `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
-      `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: <s>${formatNum(ad.price)} $</s> <b>${formatNum(newPrice)}$ 📉</b>\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
-      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
-
-    const channelMarkup = new InlineKeyboard().url("👤 KANAL ADMINI", "https://t.me/uzdev75").row()
-    .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
-      // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
-
-    // 1. Asosiy kanalni yangilash
-    await ctx.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, {
-      caption: newCaption,
-      reply_markup: channelMarkup,
-      parse_mode: "HTML"
-    });
-
-    // ================= YANGI: 2-KANALDAGI E'LONNI HAM YANGILASH =================
-    try {
-        const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
-        if (SECOND_CHANNEL_ID && ad.secondChannelMsgId) {
-            await ctx.api.editMessageCaption(SECOND_CHANNEL_ID, ad.secondChannelMsgId, {
-                caption: newCaption,
-                reply_markup: channelMarkup,
-                parse_mode: "HTML"
-            });
-        }
-    } catch (err) {
-        console.error("2-kanaldagi xabarni yangilashda xato (Narx):", err);
-    }
-    // ============================================================================
-
-    await db.execute("UPDATE ads SET price = ? WHERE id = ?", [newPrice, adId]);
-
-    try {
-      const oldPriceNum = parseInt(ad.price) || 0;
-      const newPriceNum = parseInt(newPrice) || 0;
-      const diff = oldPriceNum - newPriceNum;
-
-      if (diff > 0) { 
-        
-        const hotPriceText = 
-        `🔥 <b>QAYNOQ NARX! Mashina arzonlashdi!</b>\n\n` +
-        `🚗 <b>${ad.carDetails}</b>\n` +
-        `❌ Eski narxi: <s>${oldPriceNum}$</s>\n` +
-        `✅ Yangi narxi: <b>${newPriceNum}$ 📉</b>\n\n` +
-        `👆 <i>E'lonni to'liq ko'rish uchun tepadagi xabarga bosing</i>`;
-            
-        try {
-            // Asosiy kanalga "Qaynoq narx" tashlash
-            await bot.api.sendMessage(CHANNEL_ID, hotPriceText, {
-                parse_mode: "HTML",
-                reply_to_message_id: ad.channelMsgId 
-            });
-            
-            // ================= 2-KANALGA HAM "QAYNOQ NARX" TASHALANADI =================
-            const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
-            if (SECOND_CHANNEL_ID && ad.secondChannelMsgId) {
-                await bot.api.sendMessage(SECOND_CHANNEL_ID, hotPriceText, {
-                    parse_mode: "HTML",
-                    reply_to_message_id: ad.secondChannelMsgId 
-                });
-            }
-            // ============================================================================
-        } catch (err) {
-            console.error("Kanalga qaynoq narx xabarini yuborishda xato:", err);
-        }
-
-        const [favs] = await db.execute("SELECT userId FROM favorites WHERE adId = ?", [adId]);
-        for (const fav of favs) {
-           try {
-             await bot.api.sendMessage(fav.userId, 
-               `🔔 <b>SIZ KUZATAYOTGAN MOSHINA ARZONLASHDI!</b>\n\n` +
-               `🚗 <b>${ad.carDetails}</b> narxi <b>${diff}$</b> ga tushdi.\n\n` +
-               `❌ Eski narx: <s>${oldPriceNum}$</s>\n` +
-               `✅ Yangi narx: <b>${newPriceNum}$</b>\n\n` +
-               `Kanalda ko'rish: https://t.me/engarzonidamoshina/${ad.channelMsgId}`, 
-               { parse_mode: "HTML" }
-             );
-             
-             await delay(50); // <--- MANA SHU PAUZA QO'SHILDI
-           } catch(e) { 
-               if (e.error_code === 429) {
-                   await delay((e.parameters?.retry_after || 1) * 1000);
-               }
-           }
-        }
-      }
-    } catch (error) { console.error("Xabarnoma yuborishda xatolik:", error); }
-
-    await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
-    await ctx.reply(`✅ <b>Narx muvaffaqiyatli tushirildi!</b>\nKanalda moshinangiz narxi <b>${newPrice}$</b> bo'lib o'zgardi.`, { parse_mode: "HTML", reply_markup: mainMenu }); 
-
-  } catch (error) {
-    console.error(error);
-    await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
-    await ctx.reply("❌ Xatolik: Kanaldagi xabarni yangilab bo'lmadi. Ehtimol eski xabar kanaldan o'chirilgan bo'lishi mumkin.", { reply_markup: mainMenu }); 
-  }
+  // Kanal, baza, "Qaynoq narx" posti va saqlaganlarga xabar — umumiy funksiyada (Mini App ham shuni chaqiradi)
+  const result = await conversation.external(() => changeAdPrice({ adId, userId: ctx.from.id, newPrice }));
+  await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(() => {});
+  if (!result.ok) return ctx.reply(result.error, { parse_mode: "HTML", reply_markup: mainMenu });
+  await ctx.reply(`✅ <b>Narx muvaffaqiyatli o'zgartirildi!</b>\nKanalda moshinangiz narxi <b>${formatNum(result.newPrice)}$</b> bo'lib o'zgardi.`, { parse_mode: "HTML", reply_markup: mainMenu });
 }
 bot.use(createConversation(editPriceConversation));
 /**
@@ -4308,7 +4605,7 @@ async function soldConversation(conversation, ctx) {
   if (!cbData) return;
   const adId = cbData.split(":")[1];
 
-  const [rows] = await conversation.external(() => db.execute("SELECT * FROM ads WHERE id = ?", [adId]));
+  const rows = await conversation.external(async () => (await db.execute("SELECT * FROM ads WHERE id = ?", [adId]))[0]);
   const ad = rows[0];
 
   if (!ad || ad.status !== 'active') {
@@ -4342,22 +4639,11 @@ async function soldConversation(conversation, ctx) {
     soldPrice = null; // aytmadi
   }
 
-  // Sotuv narxini bazaga saqlaymiz (agar aytgan bo'lsa)
-  if (soldPrice) {
-    await conversation.external(() => db.execute("UPDATE ads SET sold_price = ? WHERE id = ?", [soldPrice, adId]));
-  }
-
-  // Adminга so'rov yuboramiz
-  const priceInfo = soldPrice ? `\n💰 <b>Sotuv narxi:</b> ${formatNum(soldPrice)}$` : `\n💰 <b>Sotuv narxi:</b> Aytilmadi`;
-  await conversation.external(() =>
-    bot.api.sendMessage(ADMIN_ID,
-      `💰 <b>SOTILDI XABARI!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>${priceInfo}\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>`,
-      {
-        reply_markup: new InlineKeyboard().text("✅ Tasdiqlash (Kanalda belgilash)", `confirm_sold:${adId}`),
-        parse_mode: "HTML"
-      }
-    )
+  // Narxni saqlash va adminga so'rov — umumiy funksiya (Mini App ham shuni chaqiradi)
+  const soldResult = await conversation.external(() =>
+    requestSoldToAdmin({ adId, userId: ctx.from.id, firstName: ctx.from.first_name, soldPrice })
   );
+  if (!soldResult.ok) return ctx.reply(soldResult.error, { parse_mode: "HTML", reply_markup: mainMenu });
 
   await ctx.reply(
     "✅ <b>So'rovingiz adminга yuborildi!</b>\n\nAdmin tasdiqlagach, e'loningiz kanalda «Sotildi» deb belgilanadi. Xaridor topilishiga hissa qo'shganingiz uchun rahmat! 🤝",
@@ -4372,53 +4658,12 @@ bot.callbackQuery(/^edit_price:(\d+)/, async (ctx) => {
 });
 
 bot.callbackQuery(/^free_up_req:(\d+)/, async (ctx) => {
-  await ctx.answerCallbackQuery("⏳ E'lon kanalga qayta ko'tarilmoqda...");
-  const adId = parseInt(ctx.match[1]);
-
-  // 1. Bonus hali borligini tekshiramiz
-  const [[user]] = await db.execute("SELECT free_ups FROM users WHERE id = ?", [ctx.from.id]);
-  if (!user || user.free_ups <= 0) {
-      return ctx.editMessageText("❌ Sizda bepul UP bonusi tugagan. Do'stlaringizni taklif qilib yangisini oling!", { parse_mode: "HTML" });
-  }
-
-  // 2. E'lonni topamiz
-  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ? AND status = 'active'", [adId, ctx.from.id]);
-  const ad = rows[0];
-  if (!ad) return ctx.reply("❌ Bu e'lon faol emas yoki topilmadi.");
-
-  try {
-    const channelMarkup = new InlineKeyboard()
-      .url("👤 E'LON ADMINI", "https://t.me/uzdev75").row()
-      .url("❤️ Saqlash (Narx tushsa bilish)", `https://t.me/arzonida_bot?start=fav_${ad.id}`).row()
-      .url("🤖 BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row();
-      // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
-
-    let newMsgId;
-
-    try {
-      // Kanaldagi eski xabarni o'chirib, eng pastga yangi nusxasini joylaymiz
-      const newMsg = await bot.api.copyMessage(CHANNEL_ID, CHANNEL_ID, ad.channelMsgId, { reply_markup: channelMarkup });
-      newMsgId = newMsg.message_id;
-      if (ad.videoId) {
-        try { await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: newMsgId }); } catch(e){}
-      }
-      await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(() => {});
-    } catch (copyErr) {
-      // Agar kanaldan xabar o'chirilgan bo'lsa (yoki topilmasa) xatolik beramiz
-      return ctx.reply("❌ Kanaldagi e'lon topilmadi. Bepul UP amalga oshmadi.");
-    }
-
-    // 3. Bazada e'lonning ID sini yangilaymiz va bonusdan 1 ta ayirib tashlaymiz
-    await db.execute("UPDATE ads SET channelMsgId = ? WHERE id = ?", [newMsgId, adId]);
-    await db.execute("UPDATE users SET free_ups = free_ups - 1 WHERE id = ?", [ctx.from.id]);
-
-    await ctx.deleteMessage().catch(()=>{});
-    await ctx.reply(`✅ <b>E'loningiz muvaffaqiyatli ko'tarildi!</b>\n\nMoshinangiz kanalda eng so'nggi xabarlar qatoriga chiqdi.`, { parse_mode: "HTML" });
-
-  } catch (err) {
-    console.error(err);
-    await ctx.reply("❌ Xatolik yuz berdi: E'lonni ko'tarib bo'lmadi.");
-  }
+  await ctx.answerCallbackQuery("⏳ E'lon kanalga qayta ko'tarilmoqda...").catch(() => {});
+  // Umumiy funksiya (Mini App ham shuni chaqiradi)
+  const result = await useFreeUp({ adId: parseInt(ctx.match[1]), userId: ctx.from.id });
+  if (!result.ok) return ctx.reply(result.error, { parse_mode: "HTML" });
+  await ctx.deleteMessage().catch(() => {});
+  await ctx.reply(`✅ <b>E'loningiz muvaffaqiyatli ko'tarildi!</b>\n\nMoshinangiz kanalda eng so'nggi xabarlar qatoriga chiqdi.`, { parse_mode: "HTML" });
 });
 /**
  * ✅ АҚЛЛИ ХАБАРНОМАГА ОБУНА БЎЛИШ
@@ -4430,6 +4675,21 @@ bot.callbackQuery(/^al_sub:(.+):(\d+)$/, async (ctx) => {
   try {
     await db.execute("INSERT INTO alerts (userId, query, maxPrice) VALUES (?, ?, ?)", [ctx.from.id, query, maxPrice]);
     await ctx.editMessageText(`✅ <b>Qidiruvga obuna bo'ldingiz!</b>\n\nEndi botga <b>${maxPrice}$</b> gacha bo'lgan <b>${query}</b> qo'shilsa va admin tasdiqlasa, sizga avtomatik tarzda xabar beraman.`, { parse_mode: "HTML" });
+  } catch(e) {
+    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true });
+  }
+});
+// Yangi format: als:<modelId>:<maxPrice>:<nomi> — obuna model ID bilan saqlanadi
+bot.callbackQuery(/^als:(\d+):(\d+):(.*)$/s, async (ctx) => {
+  const modelId = Number(ctx.match[1]) || null;
+  const maxPrice = parseInt(ctx.match[2]);
+  const model = modelId ? catalog.modelById(modelId) : null;
+  const query = model ? model.name.toLowerCase() : ctx.match[3];
+  const title = model ? `${model.brandName} ${model.name}` : query;
+
+  try {
+    await db.execute("INSERT INTO alerts (userId, query, maxPrice, model_id) VALUES (?, ?, ?, ?)", [ctx.from.id, query, maxPrice, modelId]);
+    await ctx.editMessageText(`✅ <b>Qidiruvga obuna bo'ldingiz!</b>\n\nEndi botga <b>${maxPrice}$</b> gacha bo'lgan <b>${sanitizeText(title, 80)}</b> qo'shilsa va admin tasdiqlasa, sizga avtomatik tarzda xabar beraman.`, { parse_mode: "HTML" });
   } catch(e) {
     await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true });
   }
@@ -4520,8 +4780,8 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
     // ============================================================================
 
     await db.execute(
-        `UPDATE ads SET carDetails=?, year=?, probeg=?, paint=?, color=?, transmission=?, fuel=?, price=?, phone=?, region=?, photoId=?, history=?, barter=?, videoId=? WHERE id=?`,
-        [editData.carDetails, editData.year, editData.probeg, editData.paint, editData.color, editData.transmission, editData.fuel, editData.price, editData.phone, editData.region, editData.photoId, editData.history || "Ko'rsatilmagan", editData.barter || "Yo'q", editData.videoId || null, oldAd.id]
+        `UPDATE ads SET carDetails=?, brand_id=?, model_id=?, year=?, probeg=?, paint=?, color=?, transmission=?, fuel=?, price=?, phone=?, region=?, photoId=?, history=?, barter=?, nasiya=?, dealer_offer=?, videoId=? WHERE id=?`,
+        [editData.carDetails, editData.brand_id || null, editData.model_id || null, editData.year, editData.probeg, editData.paint, editData.color, editData.transmission, editData.fuel, editData.price, editData.phone, editData.region, editData.photoId, editData.history || "Ko'rsatilmagan", editData.barter || "Yo'q", editData.nasiya || "Yo'q", editData.dealer_offer || null, editData.videoId || null, oldAd.id]
     );
 
     await db.execute("DELETE FROM ad_edits WHERE editId = ?", [editId]);
@@ -4622,30 +4882,9 @@ bot.on("message:photo", async (ctx, next) => {
   const ad = rows[0];
   if (!ad) return ctx.reply("❌ Bu e'lon faol emas yoki topilmadi.", { reply_markup: mainMenu });
 
-  // VIP so'rovini bazaga saqlaymiz
-  const [saveRes] = await db.execute(
-    "INSERT INTO vip_requests (userId, adId, screenshotId, status) VALUES (?,?,?,'pending')",
-    [ctx.from.id, adId, screenshotId]
-  );
-  const vipReqId = saveRes.insertId;
-
-  // Adminга skrinshot va tugmalar bilan yuboramiz
-  const usernameStr = ctx.from.username ? `@${ctx.from.username}` : "yo'q";
-  const adminCaption =
-    `🌟 <b>YANGI VIP TO'LOV SO'ROVI!</b>\n\n` +
-    `🚗 <b>Moshina:</b> ${ad.carDetails}\n` +
-    `🆔 <b>E'lon ID:</b> ${adId}\n` +
-    `💰 <b>Summa:</b> ${VIP_PRICE} so'm\n` +
-    `👤 <b>Foydalanuvchi:</b> <a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name}</a> (${usernameStr})\n\n` +
-    `<i>Chekni tekshiring va tasdiqlang yoki rad eting:</i>`;
-
-  await bot.api.sendPhoto(ADMIN_ID, screenshotId, {
-    caption: adminCaption,
-    parse_mode: "HTML",
-    reply_markup: new InlineKeyboard()
-      .text("✅ Tasdiqlash (VIP qilish)", `vip_approve:${vipReqId}`)
-      .text("❌ Rad etish", `vip_reject:${vipReqId}`)
-  });
+  // VIP so'rovi bazaga va adminga — umumiy funksiya (Mini App ham shuni chaqiradi)
+  const vipResult = await submitVipRequest({ adId, userId: ctx.from.id, firstName: ctx.from.first_name, username: ctx.from.username, screenshotFileId: screenshotId });
+  if (!vipResult.ok) return ctx.reply(vipResult.error, { parse_mode: "HTML", reply_markup: mainMenu });
 
   await ctx.reply(
     "✅ <b>Chekingiz adminга yuborildi!</b>\n\nTo'lov tekshirilgach, e'loningiz VIP qilinadi. Odatda bu tez amalga oshadi.",
@@ -5328,7 +5567,38 @@ setInterval(() => {
 
 }, 60 * 1000 * 30);
 
-bot.start({
-  allowed_updates: ["message", "edited_message", "callback_query", "chat_member", "my_chat_member", "channel_post", "edited_channel_post"]
+// ==============================================================
+// 🚀 ISHGA TUSHIRISH: avval jadvallar va katalog, keyin Mini App va bot
+// ==============================================================
+dbReady.finally(async () => {
+  // 📱 MINI APP serveri (Railway PORT ni o'zi beradi). Xato bo'lsa ham bot ishlayveradi.
+  try {
+    const { startWebApp } = require("./webapp");
+    startWebApp({
+      bot, db, catalog, InputFile, mainMenu,
+      ADMIN_ID, CHANNEL_ID, LOG_CHANNEL_ID, WEBAPP_URL,
+      VIP_PRICE, VIP_CARD, VIP_CARD_NAME,
+      // Bot ham, Mini App ham aynan shu funksiyalarni chaqiradi:
+      checkCanPostAd, submitNewAdToAdmin, sanitizeText, normalizePhone, parseAdPrice,
+      requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
+      estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
+    });
+  } catch (e) {
+    console.error("❌ Mini App serverini ishga tushirib bo'lmadi:", e);
+  }
+
+  // Yozish joyining chap tomonidagi "📱 Ilova" tugmasi (barcha foydalanuvchilar uchun)
+  if (WEBAPP_URL) {
+    bot.api.setChatMenuButton({
+      menu_button: { type: "web_app", text: "📱 Ilova", web_app: { url: `${WEBAPP_URL}/` } },
+    }).then(() => console.log(`✅ Mini App tugmasi o'rnatildi: ${WEBAPP_URL}`))
+      .catch((e) => console.error("Menyu tugmasini o'rnatishda xato:", e.message));
+  } else {
+    console.log("ℹ️ WEBAPP_URL yo'q — Mini App tugmasi qo'yilmadi (faqat bot orqali e'lon berish ishlaydi).");
+  }
+
+  bot.start({
+    allowed_updates: ["message", "edited_message", "callback_query", "chat_member", "my_chat_member", "channel_post", "edited_channel_post"]
+  });
 });
 console.log("Бот муваффақиятли ишга тушди...");
