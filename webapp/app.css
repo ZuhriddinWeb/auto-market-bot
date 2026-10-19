@@ -57,7 +57,7 @@ h1.page { font-size: 24px; line-height: 1.2; margin: 8px 4px 4px; }
 .tab[aria-current="page"] { color: var(--accent); }
 .tab.sell .dot { width: 34px; height: 26px; border-radius: 13px; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; }
 .tab.sell .dot svg { width: 20px; height: 20px; }
-.tab.sell { color: var(--text); }
+.tab.sell { color: var(--text); font-weight: 600; white-space: nowrap; }
 
 /* ---------- Bo'limlar (Telegram uslubida) ---------- */
 .group-title { color: var(--header-text); font-size: 14px; margin: 24px 16px 7px; }
@@ -196,6 +196,7 @@ select.input {
 .btn.ghost { background: var(--chip-bg); color: var(--link); }
 .btn:disabled { opacity: .55; }
 .btn svg { width: 18px; height: 18px; }
+.btn.new-ad { margin: 4px 0 14px; }
 .fallback-main { position: fixed; left: 16px; right: 16px; bottom: calc(14px + env(safe-area-inset-bottom)); max-width: 608px; margin: 0 auto; z-index: 6; }
 
 /* ---------- Mening: bo'limlar almashtirgich ---------- */

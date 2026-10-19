@@ -565,14 +565,35 @@
   var DRAFT_KEY = "ad_draft_v1";
   function draftKey() { return DRAFT_KEY + "_" + (me && me.user ? me.user.id : "0"); }
 
+  // "E'lon berish" — har safar holatni serverdan yangilab olamiz:
+  // admin tasdiqlagan/rad etgan bo'lsa, ilovani qayta ochmasdan forma ochiladi.
+  function screenNew(m, query) {
+    app.appendChild(skeleton());
+    var alive = true, inner = null;
+    refreshMe().catch(function () {}).then(function () {
+      if (!alive) return;
+      app.innerHTML = "";
+      inner = screenSell(m, query) || null;
+    });
+    return function () { alive = false; if (inner) inner(); };
+  }
+  function openNewForm() {
+    var path = (location.hash.slice(1) || "/").split("?")[0];
+    if (path === "/new") render(); else go("/new");
+  }
+
   function screenSell(m, query, editAd) {
     var isEdit = !!editAd;
     if (!isEdit && !me.canPost) {
-      app.appendChild(messageScreen(
-        { pending: "Oldingi e'loningiz tekshirilmoqda", limit: "3 ta faol e'lon chegarasi", banned: "E'lon berish yopilgan" }[me.code] || "Hozircha e'lon berib bo'lmaydi",
-        me.message || "",
-        [h("button", { type: "button", class: "btn", text: "Mening e'lonlarim", onclick: function () { replaceTo("/my"); } })]
-      ));
+      var why = {
+        pending: ["Oldingi e'loningiz tekshirilmoqda", "Admin uni tasdiqlagach yoki rad etgach, yangi e'lon bera olasiz. Natijani bot sizga yozadi."],
+        limit: ["3 ta faol e'lon chegarasi", "Yangi e'lon berish uchun faol e'lonlaringizdan birini «Sotildi» deb belgilang."],
+        banned: ["E'lon berish yopilgan", ""],
+      }[me.code] || ["Hozircha e'lon berib bo'lmaydi", ""];
+      app.appendChild(messageScreen(why[0], why[1] || me.message || "", [
+        h("button", { type: "button", class: "btn", text: "Mening e'lonlarim", onclick: function () { replaceTo("/my"); } }),
+        h("button", { type: "button", class: "btn ghost", text: "Bozorga qaytish", onclick: function () { replaceTo("/"); } }),
+      ], me.code === "pending" ? "KUTING" : null));
       return;
     }
     var refs = {};
@@ -901,17 +922,25 @@
     }
     function done(adId) {
       haptic("success");
-      if (!isEdit) { try { localStorage.removeItem(draftKey()); } catch (e) {} me.canPost = false; me.code = "pending"; }
+      if (!isEdit) { try { localStorage.removeItem(draftKey()); } catch (e) {} }
       setClosingConfirm(false);
       setMain(null);
-      app.innerHTML = "";
-      app.appendChild(messageScreen(
-        isEdit ? "Tahrir adminga yuborildi" : "E'lon adminga yuborildi",
-        isEdit ? "Tekshiruvdan so'ng kanaldagi e'lon yangilanadi." : "Tekshiruvdan so'ng kanalga joylanadi. Natijani bot sizga yozadi." + (adId ? " E'lon ID: " + adId + "." : ""),
-        [h("button", { type: "button", class: "btn", text: "Mening e'lonlarim", onclick: function () { replaceTo("/my"); } }),
-         h("button", { type: "button", class: "btn ghost", text: "Bozorga qaytish", onclick: function () { replaceTo("/"); } })],
-        "YUBORILDI"
-      ));
+      // Yana e'lon bera oladimi — serverdan so'raymiz (admin va avtosalonlar uchun cheklov yo'q,
+      // oddiy foydalanuvchi esa oldingi e'loni tasdiqlanguncha kutadi — botdagi qoida)
+      (isEdit ? Promise.resolve() : refreshMe()).then(function () {
+        app.innerHTML = "";
+        var actions = [];
+        if (!isEdit && me.canPost) actions.push(h("button", { type: "button", class: "btn", onclick: openNewForm }, [icon("plus"), "Yana e'lon berish"]));
+        actions.push(h("button", { type: "button", class: "btn" + (actions.length ? " ghost" : ""), text: "Mening e'lonlarim", onclick: function () { replaceTo("/my"); } }));
+        actions.push(h("button", { type: "button", class: "btn ghost", text: "Bozorga qaytish", onclick: function () { replaceTo("/"); } }));
+        app.appendChild(messageScreen(
+          isEdit ? "Tahrir adminga yuborildi" : "E'lon adminga yuborildi",
+          isEdit ? "Tekshiruvdan so'ng kanaldagi e'lon yangilanadi." : "Tekshiruvdan so'ng kanalga joylanadi. Natijani bot sizga yozadi." + (adId ? " E'lon ID: " + adId + "." : "") +
+            (!me.canPost ? " Admin tasdiqlagach, keyingi e'lonni berishingiz mumkin." : ""),
+          actions,
+          "YUBORILDI"
+        ));
+      });
     }
     setMain(isEdit ? "Tahrirni yuborish" : "Adminga yuborish", submit);
     updateSign();
@@ -959,6 +988,7 @@
         if (!r.ok) return body.appendChild(emptyState("Yuklab bo'lmadi", r.error || ""));
         if (r.freeUps > 0) body.appendChild(h("div", { class: "notice" }, [h("span", { text: "🚀" }), h("div", null, [h("b", { text: r.freeUps + " ta bepul UP bonusingiz bor" }), h("span", { class: "s", text: "Faol e'lonni oching va «Bepul UP» ni bosing — e'lon kanalda yangi qatorga chiqadi." })])]));
         if (!r.items.length) return body.appendChild(emptyState("Hali e'loningiz yo'q", "Moshinangizni bepul joylang — minglab xaridor kutmoqda.", "E'lon berish", function () { go("/new"); }));
+        body.appendChild(h("button", { type: "button", class: "btn new-ad", onclick: function () { go("/new"); } }, [icon("plus"), "Yangi e'lon berish"]));
         var list = h("div", { class: "list" });
         r.items.forEach(function (it) {
           list.appendChild(h("button", { type: "button", class: "my-row", onclick: function () { go(it.status === "active" ? "/my/ad/" + it.id : "/ad/" + it.id); } }, [
@@ -1427,7 +1457,7 @@
   // =====================================================================
   var TABS = [
     { key: "market", path: "/", label: "Bozor", icon: "search" },
-    { key: "sell", path: "/new", label: "Sotish", icon: "plus", sell: true },
+    { key: "sell", path: "/new", label: "E'lon berish", icon: "plus", sell: true },
     { key: "my", path: "/my", label: "Mening", icon: "user" },
     { key: "services", path: "/services", label: "Xizmatlar", icon: "grid" },
   ];
@@ -1447,7 +1477,7 @@
   var ROUTES = [
     [/^\/$/, screenMarket, { tab: "market" }],
     [/^\/ad\/(\d+)$/, screenAd, { parent: "/" }],
-    [/^\/new$/, screenSell, { parent: "/" }],
+    [/^\/new$/, screenNew, { parent: "/" }],
     [/^\/my$/, screenMy, { tab: "my" }],
     [/^\/my\/ad\/(\d+)$/, screenManage, { parent: "/my" }],
     [/^\/edit\/(\d+)$/, screenEdit, { parent: "/my" }],
