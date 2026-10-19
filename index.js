@@ -2497,8 +2497,18 @@ async function searchCarConversation(conversation, ctx) {
           reply_markup: againKb
       });
 
-      const againRes = await conversation.waitFor(["callback_query:data", "message:text"]);
-      
+      // «🔔 Obuna bo'lish» tugmasi ham shu paytda bosiladi — suhbat uni yutib yubormasligi uchun
+      // shu yerning o'zida obuna yaratamiz va «Yana qidirasizmi?» javobini kutishda davom etamiz
+      let againRes;
+      while (true) {
+          againRes = await conversation.waitFor(["callback_query:data", "message:text"]);
+          const alertData = againRes.callbackQuery?.data || "";
+          if (!alertData.startsWith("als:")) break;
+          const alertRes = await conversation.external(() => createAlertFromButton(againRes.from.id, alertData));
+          await againRes.answerCallbackQuery(alertRes.ok ? { text: "🔔 Obuna bo'ldingiz!" } : { text: alertRes.error, show_alert: true }).catch(()=>{});
+          if (alertRes.ok) await againRes.editMessageText(alertRes.text, { parse_mode: "HTML" }).catch(()=>{});
+      }
+
       if (againRes.message?.text && cancelTexts.includes(againRes.message.text)) {
           await ctx.api.deleteMessage(ctx.chat.id, promptMsg.message_id).catch(()=>{});
           return ctx.reply("❌ Qidiruv yakunlandi.", { reply_markup: mainMenu });
@@ -3947,8 +3957,16 @@ async function rejectReasonConversation(conversation, ctx) {
   const promptMsg = await ctx.reply("📝 <b>Nima uchun e'lon rad etildi?</b>\nSababni tanlang yoki qo'lda yozing:", { parse_mode: "HTML", reply_markup: kb });
 
   let reasonText = "";
-  const res = await conversation.waitFor("callback_query:data");
-  
+  // Faqat sabab tugmasi yoki «Bekor qilish» qabul qilinadi. Admin shu payt boshqa e'lonning tugmasini
+  // bossa — avval e'lon SABABSIZ rad etilib ketardi; endi eslatma chiqadi va sabab kutilaveradi.
+  let res;
+  while (true) {
+    res = await conversation.waitFor("callback_query:data");
+    const d = res.callbackQuery.data;
+    if (d === "cancel_reject" || d.startsWith("rsn:")) break;
+    await res.answerCallbackQuery({ text: "Avval rad etish sababini tanlang yoki «Bekor qilish» ni bosing.", show_alert: true }).catch(() => {});
+  }
+
   if (res.callbackQuery.data === "cancel_reject") {
       await res.answerCallbackQuery();
       await ctx.api.deleteMessage(ctx.chat.id, promptMsg.message_id).catch(()=>{});
@@ -3987,18 +4005,24 @@ async function rejectReasonConversation(conversation, ctx) {
 
   // Foydalanuvchiga sababni yuborish
   const userMsg = isEdit
-      ? `❌ <b>E'lonni yangilash rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningizdagi o'zgarishlar qabul qilinmadi.\n\n📝 <b>Sabab:</b> ${reasonText}`
-      : `❌ <b>E'loningiz rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz admin tomonidan rad etildi.\n\n📝 <b>Sabab:</b> ${reasonText}\n\nIltimos, xatolikni to'g'rilab qaytadan e'lon bering.`;
+      ? `❌ <b>E'lonni yangilash rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningizdagi o'zgarishlar qabul qilinmadi.\n\n📝 <b>Sabab:</b> ${escapeHtml(reasonText)}`
+      : `❌ <b>E'loningiz rad etildi.</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz admin tomonidan rad etildi.\n\n📝 <b>Sabab:</b> ${escapeHtml(reasonText)}\n\nIltimos, xatolikni to'g'rilab qaytadan e'lon bering.`;
 
   try {
       await bot.api.sendMessage(ad.userId, userMsg, { parse_mode: "HTML" });
   } catch (e) {}
 
-  await ctx.reply(`✅ Foydalanuvchiga rad etish sababi yuborildi:\n<i>"${reasonText}"</i>`, { parse_mode: "HTML" });
+  await ctx.reply(`✅ Foydalanuvchiga rad etish sababi yuborildi:\n<i>"${escapeHtml(reasonText)}"</i>`, { parse_mode: "HTML" });
 }
 
 // Konversatsiyani ulash
 bot.use(createConversation(rejectReasonConversation));
+
+// MUHIM: suhbat (conversation) uni ochadigan tugma handleridan OLDIN ulanishi shart —
+// grammY middleware'larni yozilgan tartibda ishlatadi. Aks holda:
+// "The conversation 'soldConversation' has not been registered!" xatosi chiqadi.
+bot.use(createConversation(editPriceConversation));
+bot.use(createConversation(soldConversation));
 
 // Yangi e'lonni rad etish tugmasi
 bot.callbackQuery(/^reject:(\d+)/, async (ctx) => {
@@ -4633,24 +4657,24 @@ async function editPriceConversation(conversation, ctx) {
   if (!cbData) return;
   const adId = cbData.split(":")[1]; 
 
-  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  // Bazaga murojaat external ichida — suhbat qayta o'ynalganda (replay) qayta so'ralmaydi
+  const rows = await conversation.external(async () => (await db.execute("SELECT * FROM ads WHERE id = ?", [adId]))[0]);
   const ad = rows[0];
-  
+
   if (!ad || ad.status !== 'active') {
      return ctx.reply("❌ Bu e'lon faol emas yoki allaqachon yopilgan.");
   }
 
   await ctx.reply(`📉 <b>${ad.carDetails}</b> uchun yangi narxni kiriting ($):\n<i>(Masalan: 8500)</i>\n\nBekor qilish uchun pastdagi menyudan foydalaning.`, { reply_markup: mainMenu, parse_mode: "HTML" });
-  
+
   const res = await conversation.waitFor("message:text");
-  if (res.message?.text && cancelTexts.includes(res.message.text)) {
-    return ctx.reply("❌ Narx o'zgartirish bekor qilindi.", { reply_markup: mainMenu }); 
+  const text = res.message.text.trim();
+  // Menyu tugmasi yoki buyruq bosilsa — narx deb o'qimaymiz, bekor qilamiz
+  if (cancelTexts.includes(text) || text.startsWith("/") || !/\d/.test(text)) {
+    return ctx.reply("❌ Narx o'zgartirish bekor qilindi. Kerakli bo'limni menyudan qayta tanlang.", { reply_markup: mainMenu });
   }
 
-  let newPrice = res.message.text.replace(/\D/g, "");
-  if (!newPrice) {
-    return ctx.reply("❗️ Xato narx kiritildi. Amaliyot bekor qilindi.", { reply_markup: mainMenu }); 
-  }
+  let newPrice = text.replace(/\D/g, "");
 
   const waitMsg = await ctx.reply("⏳ <i>Kanaldagi e'lon yangilanmoqda...</i>", { parse_mode: "HTML" });
 
@@ -4660,7 +4684,7 @@ async function editPriceConversation(conversation, ctx) {
   if (!result.ok) return ctx.reply(result.error, { parse_mode: "HTML", reply_markup: mainMenu });
   await ctx.reply(`✅ <b>Narx muvaffaqiyatli o'zgartirildi!</b>\nKanalda moshinangiz narxi <b>${formatNum(result.newPrice)}$</b> bo'lib o'zgardi.`, { parse_mode: "HTML", reply_markup: mainMenu });
 }
-bot.use(createConversation(editPriceConversation));
+// (editPriceConversation va soldConversation yuqorida, tugmalaridan oldin ulangan)
 /**
  * ✅ SOTILDI + SOTUV NARXINI SO'RASH JARAYONI
  */
@@ -4688,21 +4712,29 @@ async function soldConversation(conversation, ctx) {
     { parse_mode: "HTML", reply_markup: kb }
   );
 
-  const res = await conversation.waitFor(["callback_query:data", "message:text"]);
-
+  // Javobni kutamiz: narx (raqam) yoki «O'tkazib yuborish». Boshqa tugma/menyu bosilsa — bekor qilamiz
+  // (avval bu holda «sotildi» so'rovi narxsiz yuborilib ketardi).
   let soldPrice = null;
-  if (res.message?.text) {
-    if (cancelTexts.includes(res.message.text)) {
+  let decided = false;
+  for (let attempt = 0; attempt < 3 && !decided; attempt++) {
+    const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+    if (res.callbackQuery) {
+      await res.answerCallbackQuery().catch(() => {});
+      if (res.callbackQuery.data === "sold_skip_price") { decided = true; break; }
+      return ctx.reply("❌ Amaliyot bekor qilindi. «Sotildi» tugmasini qaytadan bosing.", { reply_markup: mainMenu });
+    }
+    const text = res.message.text.trim();
+    if (cancelTexts.includes(text) || text.startsWith("/") || !/\d/.test(text)) {
       return ctx.reply("❌ Amaliyot bekor qilindi.", { reply_markup: mainMenu });
     }
-    const num = res.message.text.replace(/\D/g, "");
-    if (num && parseInt(num) >= 300 && parseInt(num) <= 500000) {
-      soldPrice = num;
-    }
-  } else if (res.callbackQuery?.data === "sold_skip_price") {
-    await res.answerCallbackQuery();
-    soldPrice = null; // aytmadi
+    const num = parseInt(text.replace(/\D/g, ""), 10);
+    if (num >= AD_MIN_PRICE && num <= AD_MAX_PRICE) { soldPrice = String(num); decided = true; break; }
+    await ctx.reply(
+      `⚠️ Narxni dollarda kiriting (${formatNum(AD_MIN_PRICE)} dan ${formatNum(AD_MAX_PRICE)} gacha), masalan: <b>10500</b>.\nYoki «O'tkazib yuborish» ni bosing.`,
+      { parse_mode: "HTML", reply_markup: kb }
+    );
   }
+  if (!decided) return ctx.reply("❌ Amaliyot bekor qilindi.", { reply_markup: mainMenu });
 
   // Narxni saqlash va adminga so'rov — umumiy funksiya (Mini App ham shuni chaqiradi)
   const soldResult = await conversation.external(() =>
@@ -4711,11 +4743,10 @@ async function soldConversation(conversation, ctx) {
   if (!soldResult.ok) return ctx.reply(soldResult.error, { parse_mode: "HTML", reply_markup: mainMenu });
 
   await ctx.reply(
-    "✅ <b>So'rovingiz adminга yuborildi!</b>\n\nAdmin tasdiqlagach, e'loningiz kanalda «Sotildi» deb belgilanadi. Xaridor topilishiga hissa qo'shganingiz uchun rahmat! 🤝",
+    "✅ <b>So'rovingiz adminga yuborildi!</b>\n\nAdmin tasdiqlagach, e'loningiz kanalda «Sotildi» deb belgilanadi. Xaridor topilishiga hissa qo'shganingiz uchun rahmat! 🤝",
     { parse_mode: "HTML", reply_markup: mainMenu }
   );
 }
-bot.use(createConversation(soldConversation));
 // "Нархни тушириш" тугмаси босилганда ишлайдиган код
 bot.callbackQuery(/^edit_price:(\d+)/, async (ctx) => {
   await ctx.answerCallbackQuery();
@@ -4744,19 +4775,32 @@ bot.callbackQuery(/^al_sub:(.+):(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true });
   }
 });
-// Yangi format: als:<modelId>:<maxPrice>:<nomi> — obuna model ID bilan saqlanadi
-bot.callbackQuery(/^als:(\d+):(\d+):(.*)$/s, async (ctx) => {
-  const modelId = Number(ctx.match[1]) || null;
-  const maxPrice = parseInt(ctx.match[2]);
+// Yangi format: als:<modelId>:<maxPrice>:<nomi> — obuna model ID bilan saqlanadi.
+// Umumiy funksiya: oddiy tugma handleri ham, qidiruv suhbati ham shuni chaqiradi.
+async function createAlertFromButton(userId, data) {
+  const m = String(data || "").match(/^als:(\d+):(\d+):(.*)$/s);
+  if (!m) return { ok: false, error: "Xatolik yuz berdi." };
+  const modelId = Number(m[1]) || null;
+  const maxPrice = parseInt(m[2]);
   const model = modelId ? catalog.modelById(modelId) : null;
-  const query = model ? model.name.toLowerCase() : ctx.match[3];
+  const query = model ? model.name.toLowerCase() : m[3];
   const title = model ? `${model.brandName} ${model.name}` : query;
-
   try {
-    await db.execute("INSERT INTO alerts (userId, query, maxPrice, model_id) VALUES (?, ?, ?, ?)", [ctx.from.id, query, maxPrice, modelId]);
-    await ctx.editMessageText(`✅ <b>Qidiruvga obuna bo'ldingiz!</b>\n\nEndi botga <b>${maxPrice}$</b> gacha bo'lgan <b>${sanitizeText(title, 80)}</b> qo'shilsa va admin tasdiqlasa, sizga avtomatik tarzda xabar beraman.`, { parse_mode: "HTML" });
-  } catch(e) {
-    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true });
+    await db.execute("INSERT INTO alerts (userId, query, maxPrice, model_id) VALUES (?, ?, ?, ?)", [userId, query, maxPrice, modelId]);
+    const priceText = maxPrice >= 999999 ? "" : `<b>${formatNum(maxPrice)}$</b> gacha bo'lgan `;
+    return { ok: true, text: `✅ <b>Qidiruvga obuna bo'ldingiz!</b>\n\nEndi botga ${priceText}<b>${sanitizeText(title, 80)}</b> qo'shilsa va admin tasdiqlasa, sizga avtomatik tarzda xabar beraman.` };
+  } catch (e) {
+    console.error("Obuna yaratishda xato:", e.message);
+    return { ok: false, error: "Xatolik yuz berdi." };
+  }
+}
+bot.callbackQuery(/^als:(\d+):(\d+):(.*)$/s, async (ctx) => {
+  const r = await createAlertFromButton(ctx.from.id, ctx.match[0]);
+  if (r.ok) {
+    await ctx.answerCallbackQuery({ text: "🔔 Obuna bo'ldingiz!" }).catch(() => {});
+    await ctx.editMessageText(r.text, { parse_mode: "HTML" }).catch(() => {});
+  } else {
+    await ctx.answerCallbackQuery({ text: r.error, show_alert: true }).catch(() => {});
   }
 });
 bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
@@ -5631,6 +5675,17 @@ setInterval(() => {
     }
 
 }, 60 * 1000 * 30);
+
+// ==============================================================
+// 🧯 JAVOBSIZ TUGMALAR (eng oxirida turishi shart — boshqa handlerlardan keyin)
+// ==============================================================
+// "⏳ Kutilmoqda..." tugmasi
+bot.callbackQuery("ignore", (ctx) => ctx.answerCallbackQuery({ text: "⏳ Iltimos, biroz kuting..." }).catch(() => {}));
+// Eskirgan tugmalar: suhbat tugagandan keyin bosilgan eski xabardagi tugma (masalan, tashlab ketilgan
+// e'lon formasidagi tugmalar). Avval Telegram'da tugma cheksiz "aylanib" turardi.
+bot.on("callback_query:data", async (ctx) => {
+  await ctx.answerCallbackQuery({ text: "Bu tugma eskirgan. Kerakli bo'limni menyudan qaytadan tanlang.", show_alert: false }).catch(() => {});
+});
 
 // ==============================================================
 // 🚀 ISHGA TUSHIRISH: avval jadvallar va katalog, keyin Mini App va bot
