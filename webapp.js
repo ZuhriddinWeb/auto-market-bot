@@ -870,7 +870,10 @@ function startWebApp(deps) {
 
     try {
       if (req.method === "GET" && STATIC_FILES[p]) {
-        const file = path.join(STATIC_DIR, STATIC_FILES[p]);
+        let file = path.join(STATIC_DIR, STATIC_FILES[p]);
+        // Shriftlar webapp/fonts/ da bo'lmasa — loyiha ildizidagi fonts/ papkasidan ham qidiramiz
+        if (!fs.existsSync(file) && file.endsWith(".woff")) file = path.join(__dirname, STATIC_FILES[p]);
+        if (!fs.existsSync(file)) { res.writeHead(404); return res.end(); }
         const body = fs.readFileSync(file);
         const ext = path.extname(file);
         res.writeHead(200, { "Content-Type": STATIC_TYPES[ext], "Cache-Control": ext === ".woff" ? "public, max-age=2592000, immutable" : "no-cache" });

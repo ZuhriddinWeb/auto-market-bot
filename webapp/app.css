@@ -330,6 +330,7 @@ select.input {
 .specs dt { color: var(--ink-2); padding-right: 16px; }
 .specs dd { text-align: right; font-weight: 500; }
 .specs dt:first-of-type, .specs dt:first-of-type + dd { border-top: 0; }
+.specs .tel-link { font: 600 15px var(--display); letter-spacing: .01em; text-decoration: none; color: var(--brand); white-space: nowrap; }
 .text-block { white-space: pre-wrap; overflow-wrap: anywhere; }
 .similar { display: flex; gap: 10px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px 4px; scroll-snap-type: x proximity; }
 .similar::-webkit-scrollbar { display: none; }

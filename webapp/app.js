@@ -696,6 +696,10 @@
         specs.appendChild(h("dt", { text: row[0] })); specs.appendChild(h("dd", { text: row[1] }));
       });
       if (ad.region) { specs.appendChild(h("dt", { text: "Viloyat" })); specs.appendChild(h("dd", null, [plate(ad.region, true)])); }
+      if (ad.status === "active" && ad.phone) {
+        specs.appendChild(h("dt", { text: "Telefon" }));
+        specs.appendChild(h("dd", null, [h("a", { class: "tel-link", href: "tel:+" + digits(ad.phone), onclick: function () { logEvent("call", { adId: ad.id }); } }, [fmtPhone(ad.phone)])]));
+      }
       app.appendChild(h("p", { class: "sec-title", text: "Batafsil" }));
       app.appendChild(h("div", { class: "group" }, [h("div", { class: "field" }, [specs])]));
       [["Nasiya (bo'lib to'lash)", ad.nasiya], ["Maxsus taklif", ad.dealerOffer], ["Barter", ad.barter], ["Moshina tarixi", ad.history]].forEach(function (b) {
@@ -705,6 +709,7 @@
       });
 
       var links = [];
+      if (ad.isOwner && ad.status !== "sold") links.push(listItem({ icon: "edit", color: "#1667d9", title: "E'lonni boshqarish", sub: "Sotildi, narx, tahrir, VIP", onclick: function () { go("/my/ad/" + ad.id); } }));
       if (ad.channelUrl) links.push(listItem({ icon: "send", color: "#2aabee", title: ad.hasVideo ? "Kanalda ko'rish (video bilan)" : "Kanalda ko'rish", sub: "Post, izohlar va baholar", onclick: function () { logEvent("channel", { adId: ad.id }); openLink(ad.channelUrl); } }));
       if (links.length) { app.appendChild(h("div", { class: "list", style: "margin-top:16px" }, links)); }
 
@@ -713,11 +718,9 @@
         app.appendChild(h("div", { class: "similar" }, r.similar.map(function (it) { return adCard(it, null, true); })));
       }
 
-      // Pastdagi doimiy panel: qo'ng'iroq (yoki egasi uchun — boshqarish)
+      // Pastdagi doimiy panel: qo'ng'iroq — hammaga (egasi va admin ham raqamni ko'rsin)
       var barKids = null;
-      if (ad.isOwner && ad.status !== "sold") {
-        barKids = [h("button", { type: "button", class: "btn", onclick: function () { go("/my/ad/" + ad.id); } }, [icon("edit"), "E'lonni boshqarish"])];
-      } else if (ad.status === "active" && ad.phone) {
+      if (ad.status === "active" && ad.phone) {
         barKids = [
           h("a", { class: "btn", href: "tel:+" + digits(ad.phone), "aria-label": "Qo'ng'iroq qilish: " + fmtPhone(ad.phone), onclick: function () { logEvent("call", { adId: ad.id }); } }, [icon("phone"), fmtPhone(ad.phone)]),
           h("button", { type: "button", class: "icon-btn", "aria-label": "Raqamdan nusxa olish", onclick: function () { copyText("+" + digits(ad.phone), "Raqam nusxalandi"); logEvent("copy_phone", { adId: ad.id }); } }, [icon("copy")]),
