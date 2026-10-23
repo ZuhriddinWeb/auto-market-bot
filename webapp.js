@@ -1,909 +1,1796 @@
-// ==============================================================
-// 📱 MINI APP SERVERI — botdagi barcha foydalanuvchi bo'limlari
-// --------------------------------------------------------------
-// Qo'shimcha paket kerak emas: Node.js ichki modullari + loyihadagi axios va sharp.
-// Bot bilan bitta jarayonda ishlaydi, bitta bazadan va bitta qoidalar to'plamidan
-// foydalanadi: har bir amal (e'lon berish, sotildi, narx, tahrir, VIP, UP, diler...)
-// index.js dagi umumiy funksiyani chaqiradi — bot ham aynan shu funksiyani chaqiradi.
-//
-// Bo'limlar:
-//   Bozor (qidiruv)       GET  /api/ads, GET /api/ads/:id
-//   E'lon berish          POST /api/upload, POST /api/ads
-//   Mening e'lonlarim     GET  /api/my/ads, GET /api/my/ads/:id
-//                         POST /api/my/ads/:id/{sold,price,edit,vip,up}
-//   Saqlanganlar          GET  /api/favorites, POST /api/favorites/:id
-//   Obunalar              GET/POST /api/alerts, DELETE /api/alerts/:id
-//   Xizmatlar             POST /api/evaluate, GET /api/referral, POST /api/dealer,
-//                         GET/POST /api/salon-ad
-//   Rasmlar               GET  /api/photo/:adId/:idx  (imzolangan havola, bot tokeni oshkor qilinmaydi)
-//
-// Xavfsizlik: har bir so'rovda Telegram yuborgan initData bot tokeni bilan tekshiriladi.
-// ==============================================================
-const http = require("http");
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
+/* Avto Bozor — Telegram Mini App
+ * Botdagi barcha foydalanuvchi bo'limlari: Bozor (qidiruv), E'lon berish, Mening e'lonlarim,
+ * Saqlanganlar, Obunalar, Baholash, Kredit kalkulyatori, Referal, Avtosalon, Salon reklamasi.
+ * Har bir amal serverda bot bilan bir xil funksiyani chaqiradi (index.js).
+ */
+(function () {
+  "use strict";
+  var tg = window.Telegram && window.Telegram.WebApp;
+  var inTelegram = !!(tg && tg.initData);
+  var app = document.getElementById("app");
+  var tabbar = document.getElementById("tabbar");
 
-let axios = null, sharp = null;
-try { axios = require("axios"); } catch (e) {}
-try { sharp = require("sharp"); } catch (e) {}
+  // Mavzu: o'zimizning ranglar (yorug' / qorong'i — Telegramdagi tanlovga qarab)
+  function applyTheme() {
+    var dark = tg && tg.colorScheme ? tg.colorScheme === "dark" : !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    if (!tg) return;
+    var bg = dark ? "#0b1119" : "#edf0f4", surface = dark ? "#151d29" : "#ffffff";
+    try { tg.setHeaderColor(bg); } catch (e) { try { tg.setHeaderColor("secondary_bg_color"); } catch (e2) {} }
+    try { tg.setBackgroundColor(bg); } catch (e) {}
+    try { if (tg.setBottomBarColor) tg.setBottomBarColor(surface); } catch (e) {}
+  }
+  applyTheme();
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    try { if (tg.onEvent) tg.onEvent("themeChanged", applyTheme); } catch (e) {}
+  }
+  function brandColor() { return (getComputedStyle(document.documentElement).getPropertyValue("--brand") || "#1667d9").trim(); }
 
-const MAX_PHOTO_BYTES = 10 * 1024 * 1024;   // 10 MB (forma rasmlarni oldindan kichraytiradi)
-const MAX_VIDEO_BYTES = 49 * 1024 * 1024;   // Telegram Bot API yuklash chegarasi ~50 MB
-const MAX_JSON_BYTES = 64 * 1024;
-const UPLOAD_TTL_MS = 3 * 60 * 60 * 1000;   // yuklangan fayl 3 soat ichida ishlatilishi kerak
-const UPLOADS_PER_WINDOW = 30;              // bitta foydalanuvchi 30 daqiqada eng ko'pi 30 ta fayl
-const UPLOAD_WINDOW_MS = 30 * 60 * 1000;
-const PAGE_SIZE = 20;
-const PHOTO_CACHE_MAX = 400;
-const STATIC_FILES = {
-  "/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/app.css": "app.css",
-  // Shriftlar o'zimizda (Google Fonts'ga bog'liq emas — sekin internetda ham tez ochiladi)
-  "/fonts/onest.woff": "fonts/onest.woff", "/fonts/unbounded.woff": "fonts/unbounded.woff", "/fonts/permanent-marker.woff": "fonts/permanent-marker.woff",
-};
-const STATIC_TYPES = { ".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff": "font/woff" };
+  // =====================================================================
+  // Yordamchilar
+  // =====================================================================
+  function h(tag, attrs, children) {
+    var el = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      var v = attrs[k];
+      if (k === "class") el.className = v;
+      else if (k === "text") el.textContent = v;
+      else if (k === "html") el.innerHTML = v;
+      else if (k.slice(0, 2) === "on") el.addEventListener(k.slice(2), v);
+      else if (v === true) el.setAttribute(k, "");
+      else if (v !== false && v != null) el.setAttribute(k, v);
+    });
+    (children || []).forEach(function (c) { if (c != null && c !== false) el.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
+    return el;
+  }
+  var ICONS = {
+    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
+    grid: '<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/>',
+    heart: '<path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"/>',
+    filter: '<path d="M4 6h16M7 12h10M10 18h4"/>',
+    bell: '<path d="M6 16v-5a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+    phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/>',
+    chev: '<path d="M9 6l6 6-6 6"/>',
+    send: '<path d="M21 4L3 11l6 2 2 6 3-4 5 4z"/>',
+    tag: '<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+    calc: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 7h8M8 12h2M14 12h2M8 16h2M14 16h2"/>',
+    gift: '<rect x="4" y="9" width="16" height="11" rx="1"/><path d="M12 9v11M4 13h16M12 9c-2-4-6-4-6-1s6 1 6 1zm0 0c2-4 6-4 6-1s-6 1-6 1z"/>',
+    building: '<path d="M4 21V5l8-2v18M12 9h8v12M7 8h2M7 12h2M7 16h2M15 13h2M15 17h2"/>',
+    megaphone: '<path d="M4 10v4h3l8 4V6L7 10z"/><path d="M18 9a4 4 0 0 1 0 6"/>',
+    check: '<path d="M5 12l5 5 9-10"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+    down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+    star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+    up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+    eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    trash: '<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/>',
+    camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+    share: '<path d="M12 4v11M7 9l5-5 5 5"/><path d="M5 14v5h14v-5"/>',
+    calendar: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+    gauge: '<path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-5"/>',
+    gear: '<circle cx="6" cy="6" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="12" cy="18" r="2"/><path d="M6 8v8M12 8v8M18 8v4H6"/>',
+    fuel: '<path d="M5 20V5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v15M4 20h11M8 8h3"/><path d="M14 10h2a2 2 0 0 1 2 2v4a1.5 1.5 0 0 0 3 0V9l-3-3"/>',
+    copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
+    clock: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
+    shield: '<path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/>',
+    card: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 15h3"/>',
+    car: '<path d="M5 16v-4l2-5h10l2 5v4"/><path d="M3 16h18v3H3z"/><path d="M5 12h14"/>',
+  };
+  function icon(name, filled) {
+    var s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    s.setAttribute("viewBox", "0 0 24 24");
+    s.setAttribute("fill", filled ? "currentColor" : "none");
+    s.setAttribute("stroke", "currentColor");
+    s.setAttribute("stroke-width", "2");
+    s.setAttribute("stroke-linecap", "round");
+    s.setAttribute("stroke-linejoin", "round");
+    s.setAttribute("aria-hidden", "true");
+    s.innerHTML = ICONS[name] || "";
+    return s;
+  }
+  function haptic(kind) {
+    try {
+      if (!tg || !tg.HapticFeedback) return;
+      if (kind === "select") tg.HapticFeedback.selectionChanged();
+      else tg.HapticFeedback.notificationOccurred(kind);
+    } catch (e) {}
+  }
+  var toastTimer;
+  function toast(msg) {
+    var t = document.getElementById("toast");
+    t.textContent = msg; t.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove("show"); }, 2800);
+  }
+  function digits(s) { return String(s == null ? "" : s).replace(/\D/g, ""); }
+  function fmtNum(s) { var d = digits(s); return d ? Number(d).toLocaleString("en-US").replace(/,/g, " ") : ""; }
+  function fmtPrice(s) { var n = fmtNum(s); return n ? n + " $" : ""; }
+  function fmtKm(p) { return p === "Salon" ? "Yangi, 0 km" : (fmtNum(p) ? fmtNum(p) + " km" : ""); }
+  function fmtPhone(raw) {
+    var d = digits(raw).replace(/^(998)+/, "");
+    if (d.length > 9) d = d.slice(-9);
+    if (!d) return "";
+    return "+998 " + [d.slice(0, 2), d.slice(2, 5), d.slice(5, 7), d.slice(7, 9)].filter(Boolean).join(" ");
+  }
+  function openLink(url) {
+    if (!url) return;
+    if (tg && /^https:\/\/t\.me\//.test(url) && tg.openTelegramLink) tg.openTelegramLink(url);
+    else if (tg && tg.openLink) tg.openLink(url);
+    else window.open(url, "_blank");
+  }
+  function copyText(text, okMsg) {
+    function done() { toast(okMsg || "Nusxa olindi"); haptic("success"); }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+    else fallback();
+    function fallback() {
+      var ta = h("textarea", { style: "position:fixed;opacity:0" }); ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); done(); } catch (e) { toast("Nusxa olib bo'lmadi"); }
+      ta.remove();
+    }
+  }
+  function confirmBox(text) {
+    return new Promise(function (resolve) {
+      if (tg && tg.showConfirm && inTelegram) { try { tg.showConfirm(text, function (ok) { resolve(!!ok); }); return; } catch (e) {} }
+      resolve(window.confirm(text));
+    });
+  }
 
-// Telegram initData imzosini tekshiradi. To'g'ri bo'lsa foydalanuvchi obyektini qaytaradi.
-// https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
-function validateInitData(initData, botToken, maxAgeSec = 24 * 60 * 60) {
-  if (!initData || !botToken) return null;
-  let params;
-  try { params = new URLSearchParams(initData); } catch (e) { return null; }
-  const hash = params.get("hash");
-  if (!hash || !/^[0-9a-f]{64}$/i.test(hash)) return null;
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = { "X-Telegram-Init-Data": tg ? tg.initData : "" };
+    var body;
+    if (opts.json !== undefined) { headers["Content-Type"] = "application/json"; body = JSON.stringify(opts.json); }
+    return fetch(path, { method: opts.method || (opts.json !== undefined ? "POST" : "GET"), headers: headers, body: body })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: "Server javobi noto'g'ri." }; }); })
+      .catch(function () { return { ok: false, error: "Internet aloqasini tekshiring va qayta urinib ko'ring." }; });
+  }
+  // Admin uchun log: faqat serverga bosilgan tugma haqida qisqa belgi yuboriladi (javob kutilmaydi)
+  function logEvent(event, data) {
+    try {
+      fetch("/api/track", {
+        method: "POST", keepalive: true,
+        headers: { "X-Telegram-Init-Data": tg ? tg.initData : "", "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ event: event }, data || {})),
+      }).catch(function () {});
+    } catch (e) {}
+  }
+  function upload(kind, blob, onProgress) {
+    return new Promise(function (resolve) {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/upload?kind=" + kind);
+      xhr.setRequestHeader("X-Telegram-Init-Data", tg ? tg.initData : "");
+      xhr.setRequestHeader("Content-Type", blob.type || (kind === "photo" ? "image/jpeg" : "video/mp4"));
+      xhr.upload.onprogress = function (e) { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+      xhr.onload = function () { try { resolve(JSON.parse(xhr.responseText)); } catch (e) { resolve({ ok: false, error: "Yuklab bo'lmadi." }); } };
+      xhr.onerror = function () { resolve({ ok: false, error: "Internet aloqasi uzildi." }); };
+      xhr.send(blob);
+    });
+  }
+  // Rasmni telefonda kichraytiramiz (1600px, JPEG) — mobil internetda tez yuklanadi
+  function compressImage(file) {
+    return new Promise(function (resolve) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var max = 1600, w = img.naturalWidth, hgt = img.naturalHeight;
+        var scale = Math.min(1, max / Math.max(w, hgt));
+        var c = document.createElement("canvas");
+        c.width = Math.round(w * scale); c.height = Math.round(hgt * scale);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (b) { resolve(b || file); }, "image/jpeg", 0.85);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
+  }
 
-  const pairs = [];
-  for (const [k, v] of params.entries()) if (k !== "hash") pairs.push([k, v]);
-  pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  const dataCheckString = pairs.map(([k, v]) => `${k}=${v}`).join("\n");
+  // =====================================================================
+  // Telegram asosiy tugmasi (pastdagi ko'k tugma) va orqaga tugmasi
+  // =====================================================================
+  var mainHandler = null, mainText = "";
+  function setMain(text, handler) {
+    mainText = text || "";
+    if (inTelegram && tg.MainButton) {
+      if (mainHandler) tg.MainButton.offClick(mainHandler);
+      mainHandler = handler || null;
+      if (handler) {
+        try { tg.MainButton.hideProgress(); } catch (e) {}
+        tg.MainButton.setParams({ text: text, is_visible: true, is_active: true, color: brandColor(), text_color: "#ffffff" });
+        tg.MainButton.onClick(handler);
+      } else tg.MainButton.hide();
+    } else {
+      var old = document.getElementById("fallback-main"); if (old) old.remove();
+      mainHandler = handler || null;
+      if (handler) document.body.appendChild(h("button", { id: "fallback-main", class: "btn fallback-main", type: "button", text: text, onclick: handler }));
+    }
+  }
+  function mainBusy(on, text) {
+    if (inTelegram && tg.MainButton) {
+      if (on) { tg.MainButton.showProgress(false); tg.MainButton.disable(); tg.MainButton.setText(text || "Yuborilmoqda..."); }
+      else { tg.MainButton.hideProgress(); tg.MainButton.enable(); tg.MainButton.setText(mainText); }
+    } else {
+      var b = document.getElementById("fallback-main");
+      if (b) { b.disabled = on; b.textContent = on ? (text || "Yuborilmoqda...") : mainText; }
+    }
+  }
+  var currentParent = "/";
+  var navDepth = 0;
+  function go(path) { navDepth++; location.hash = path; }
+  function replaceTo(path) { location.replace("#" + path); }
+  function back() { if (navDepth > 0) { navDepth--; history.back(); } else replaceTo(currentParent || "/"); }
+  if (inTelegram && tg.BackButton) tg.BackButton.onClick(back);
 
-  const secret = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
-  const calc = crypto.createHmac("sha256", secret).update(dataCheckString).digest("hex");
-  if (!crypto.timingSafeEqual(Buffer.from(calc, "hex"), Buffer.from(hash.toLowerCase(), "hex"))) return null;
+  var closingConfirm = false;
+  function setClosingConfirm(on) {
+    if (!tg || !tg.isVersionAtLeast || !tg.isVersionAtLeast("6.2") || closingConfirm === on) return;
+    closingConfirm = on;
+    try { on ? tg.enableClosingConfirmation() : tg.disableClosingConfirmation(); } catch (e) {}
+  }
 
-  const authDate = Number(params.get("auth_date"));
-  if (!authDate || Date.now() / 1000 - authDate > maxAgeSec) return null;
+  // =====================================================================
+  // Pastdan chiquvchi oyna
+  // =====================================================================
+  var sheetEl = null;
+  function closeSheet() { if (sheetEl) { sheetEl.remove(); sheetEl = null; } }
+  function openSheet(title, children) {
+    closeSheet();
+    var sheet = h("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title }, [h("div", { class: "grab" }), h("h2", { text: title })].concat(children));
+    sheetEl = h("div", { class: "sheet-back", onclick: function (e) { if (e.target === sheetEl) closeSheet(); } }, [sheet]);
+    document.body.appendChild(sheetEl);
+    var first = sheet.querySelector("input, select, textarea");
+    if (first) setTimeout(function () { first.focus(); }, 60);
+    return closeSheet;
+  }
 
-  try {
-    const user = JSON.parse(params.get("user") || "null");
-    return user && user.id ? user : null;
-  } catch (e) {
+  // =====================================================================
+  // Umumiy holat
+  // =====================================================================
+  var catalog = null, me = null;
+  function brandById(id) { return catalog.brands.find(function (b) { return b.id === Number(id); }) || null; }
+  function modelById(id) {
+    for (var i = 0; i < catalog.brands.length; i++) {
+      var m = catalog.brands[i].models.find(function (x) { return x.id === Number(id); });
+      if (m) return { id: m.id, name: m.name, brand: catalog.brands[i] };
+    }
     return null;
   }
-}
+  function refreshMe() { return api("/api/me").then(function (m) { if (m.ok) me = m; return m; }); }
 
-function stripHtml(s) {
-  return String(s || "").replace(/<[^>]+>/g, "").replace(/^[❗️❌⏳✅🚫]+\s*/u, "").trim();
-}
+  // ---------- Kichik UI qismlari ----------
+  function field(refs, key, label, body, help) {
+    var f = h("div", { class: "field", "data-field": key }, [
+      label ? h("span", { class: "label", id: "lbl-" + key, text: label }) : null,
+      body,
+      help ? h("p", { class: "help", text: help }) : null,
+      h("p", { class: "error", id: "err-" + key }),
+    ]);
+    refs["f_" + key] = f;
+    return f;
+  }
+  function setError(refs, key, msg) {
+    var f = refs["f_" + key];
+    if (!f) return;
+    f.classList.toggle("invalid", !!msg);
+    var e = f.querySelector(".error");
+    if (e) e.textContent = msg || "";
+  }
+  // opts.collapse = N — uzun ro'yxatda dastlab N tasi (+ tanlangani) ko'rinadi, qolgani «Yana N ta» ortida
+  function chipGroup(labelId, items, isActive, onPick, opts) {
+    opts = opts || {};
+    var expanded = false;
+    var wrap = h("div", { class: "chips" + (opts.scroll ? " scroll" : ""), role: "group", "aria-labelledby": labelId, "aria-label": opts.ariaLabel || null });
+    function chip(it) {
+      return h("button", {
+        type: "button", class: "chip" + (it.dashed ? " dashed" : "") + (opts.onSection ? " on-section" : ""), "aria-pressed": isActive(it) ? "true" : "false",
+        onclick: function () { onPick(it); haptic("select"); render(); },
+      }, [it.name]);
+    }
+    function render() {
+      wrap.innerHTML = "";
+      var list = items();
+      var limit = opts.collapse && !expanded && list.length > opts.collapse + 2 ? opts.collapse : 0;
+      var hidden = 0, moreAdded = false;
+      function addMore() {
+        if (moreAdded || !hidden) return;
+        moreAdded = true;
+        wrap.appendChild(h("button", { type: "button", class: "chip chip-more", "aria-expanded": "false", onclick: function () { expanded = true; render(); } }, ["Yana " + hidden + " ta"]));
+      }
+      if (limit) hidden = list.filter(function (it, i) { return i >= limit && !it.dashed && !isActive(it); }).length;
+      list.forEach(function (it, i) {
+        if (limit && i >= limit && !it.dashed && !isActive(it)) return;
+        if (limit && it.dashed) addMore(); // «Yana N ta» — «Boshqa» dan oldin
+        wrap.appendChild(chip(it));
+      });
+      if (limit) addMore();
+    }
+    render();
+    wrap.rerender = render;
+    return wrap;
+  }
+  function textInput(state, key, attrs, onChange) {
+    var el = h("input", Object.assign({ class: "input", id: "in-" + key, "aria-labelledby": "lbl-" + key }, attrs));
+    el.value = state[key] == null ? "" : state[key];
+    el.addEventListener("input", function () { state[key] = el.value; if (onChange) onChange(el.value); });
+    return el;
+  }
+  function textArea(state, key, attrs, onChange) {
+    var el = h("textarea", Object.assign({ class: "input", id: "in-" + key, "aria-labelledby": "lbl-" + key }, attrs));
+    el.value = state[key] || "";
+    el.addEventListener("input", function () { state[key] = el.value; if (onChange) onChange(el.value); });
+    return el;
+  }
+  function selectBox(state, key, options, placeholder, onChange) {
+    var el = h("select", { class: "input", id: "in-" + key, "aria-labelledby": "lbl-" + key }, [h("option", { value: "", text: placeholder || "Tanlang" })]);
+    options.forEach(function (o) { var v = typeof o === "object" ? o : { value: o, text: o }; el.appendChild(h("option", { value: String(v.value), text: v.text })); });
+    el.value = state[key] == null ? "" : String(state[key]);
+    el.addEventListener("change", function () { state[key] = el.value; if (onChange) onChange(el.value); });
+    return el;
+  }
+  function switchRow(state, key, title, sub, onChange) {
+    var cb = h("input", { type: "checkbox", role: "switch", "aria-label": title });
+    cb.checked = !!state[key];
+    cb.addEventListener("change", function () { state[key] = cb.checked; haptic("select"); if (onChange) onChange(cb.checked); });
+    return h("label", { class: "switch-row" }, [
+      h("span", null, [h("span", { class: "txt", text: title }), sub ? h("span", { class: "sub", text: sub }) : null]),
+      h("span", { class: "switch" }, [cb, h("span", { class: "track" })]),
+    ]);
+  }
+  function yearOptions() { var out = []; for (var y = catalog.years.max; y >= catalog.years.min; y--) out.push(String(y)); return out; }
+  function listItem(o) {
+    return h("button", { type: "button", class: "item" + (o.danger ? " danger" : ""), onclick: o.onclick, disabled: o.disabled || false }, [
+      o.icon ? h("span", { class: "ico", style: "--ico:" + (o.color || "var(--brand)") + ";background:" + (o.color || "var(--brand)") }, [icon(o.icon)]) : null,
+      h("span", { class: "body" }, [h("span", { class: "t", text: o.title }), o.sub ? h("span", { class: "s", text: o.sub }) : null]),
+      o.end ? h("span", { class: "end", text: o.end }) : null,
+      o.chev === false ? null : h("span", { class: "chev" }, [icon("chev")]),
+    ]);
+  }
+  function emptyState(title, text, btnText, onBtn, iconName) {
+    return h("div", { class: "empty" }, [h("span", { class: "em-ico" }, [icon(iconName || "search")]), h("b", { text: title }), text, btnText ? h("button", { type: "button", class: "btn", text: btnText, onclick: onBtn }) : null]);
+  }
+  function messageScreen(title, text, actions, stamp) {
+    return h("div", { class: "screen" }, [stamp ? h("span", { class: "stamp", text: stamp }) : null, h("h1", { text: title }), text ? h("p", { text: text }) : null].concat(actions || []));
+  }
+  function skeleton() { return h("div", { class: "skeleton", "aria-hidden": "true" }); }
+  function skeletonCards(n) { return h("div", { class: "skeleton-cards", "aria-hidden": "true" }, Array.apply(null, Array(n || 4)).map(function () { return h("div", { class: "sk" }); })); }
 
-function sendJson(res, status, obj) {
-  const body = JSON.stringify(obj);
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store",
-    "Content-Length": Buffer.byteLength(body),
-  });
-  res.end(body);
-}
+  // Viloyat — O'zbekiston davlat raqami uslubida: [60 | Andijon]
+  var REGION_CODES = { "Toshkent sh.": "01", "Toshkent vil.": "10", "Sirdaryo": "20", "Jizzax": "25", "Samarqand": "30", "Farg'ona": "40", "Namangan": "50", "Andijon": "60", "Qashqadaryo": "70", "Surxondaryo": "75", "Buxoro": "80", "Navoiy": "85", "Xorazm": "90", "Qoraqalpog'iston": "95" };
+  function plate(region, large) {
+    if (!region) return null;
+    var code = REGION_CODES[region];
+    return h("span", { class: "plate" + (large ? " lg" : ""), title: "Viloyat: " + region }, [code ? h("b", { text: code }) : null, h("span", { text: region }), large ? h("i", { text: "UZ" }) : null]);
+  }
+  function relDay(iso) {
+    var t = Date.parse(iso || "");
+    if (!t) return "";
+    var d = Math.floor((Date.now() - t) / 86400000);
+    if (d <= 0) return "Bugun";
+    if (d === 1) return "Kecha";
+    if (d < 30) return d + " kun oldin";
+    var mo = Math.floor(d / 30);
+    return mo < 12 ? mo + " oy oldin" : "1 yildan ko'proq oldin";
+  }
 
-// So'rov tanasini chegaralangan hajmda o'qiydi
-function readBody(req, limit) {
-  return new Promise((resolve, reject) => {
-    const declared = Number(req.headers["content-length"] || 0);
-    if (declared > limit) { reject(Object.assign(new Error("Fayl juda katta"), { status: 413 })); req.resume(); return; }
-    const chunks = [];
-    let size = 0;
-    req.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > limit) {
-        reject(Object.assign(new Error("Fayl juda katta"), { status: 413 }));
-        req.destroy();
+  // Kartochka (bozor, saqlanganlar)
+  function adCard(it, onFavChange, mini) {
+    var heart = h("button", { type: "button", class: "heart", "aria-label": "Saqlash", "aria-pressed": it.isFav ? "true" : "false" }, [icon("heart", it.isFav)]);
+    heart.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var on = !it.isFav;
+      it.isFav = on;
+      heart.setAttribute("aria-pressed", on ? "true" : "false");
+      heart.innerHTML = ""; heart.appendChild(icon("heart", on));
+      haptic("select");
+      api("/api/favorites/" + it.id, { json: { on: on } }).then(function (r) {
+        if (!r.ok) { it.isFav = !on; toast(r.error || "Saqlab bo'lmadi"); heart.setAttribute("aria-pressed", it.isFav ? "true" : "false"); heart.innerHTML = ""; heart.appendChild(icon("heart", it.isFav)); return; }
+        toast(on ? "Saqlandi. Narxi tushsa, bot xabar beradi." : "Saqlanganlardan olib tashlandi");
+        if (onFavChange) onFavChange(it, on);
+      });
+    });
+    var ph = h("div", { class: "ph" }, [
+      it.photo ? h("img", { src: it.photo, alt: it.title, loading: "lazy" }) : null,
+      it.badge && it.badge.type === "cheap" ? h("span", { class: "deal", text: it.badge.pct + "% arzon" }) : null,
+      it.photosCount > 1 ? h("span", { class: "cnt", "aria-label": it.photosCount + " ta rasm" }, [icon("camera"), String(it.photosCount)]) : null,
+      it.status === "sold" ? h("div", { class: "sold-veil" }, [h("span", { text: "SOTILDI" })]) : null,
+      it.status === "active" ? heart : null,
+    ]);
+    var meta = [it.year, fmtKm(it.probeg)].filter(Boolean).join(", ");
+    return h("div", { class: "card" + (mini ? " mini" : ""), role: "link", tabindex: "0", onclick: function () { go("/ad/" + it.id); }, onkeydown: function (e) { if (e.key === "Enter") go("/ad/" + it.id); } }, [
+      ph,
+      h("div", { class: "info" }, [
+        h("div", { class: "price", text: fmtPrice(it.status === "sold" && it.soldPrice ? it.soldPrice : it.price) }),
+        h("div", { class: "title", text: it.title }),
+        h("div", { class: "meta", text: meta }),
+        mini ? null : h("div", { class: "foot" }, [plate(it.region), it.hasNasiya ? h("span", { class: "tagline", text: "Nasiya" }) : null]),
+      ]),
+    ]);
+  }
+
+  // =====================================================================
+  // 1. BOZOR (qidiruv)
+  // =====================================================================
+  var market = {
+    f: { q: "", brandId: null, modelId: null, minPrice: "", maxPrice: "", yearFrom: "", yearTo: "", region: "", trans: "", fuel: "", nasiya: false, sort: "new" },
+    items: [], page: 0, pages: 1, total: 0, loading: false, loaded: false, scrollY: 0,
+  };
+  function marketParams(page) {
+    var f = market.f, p = new URLSearchParams();
+    ["q", "brandId", "modelId", "minPrice", "maxPrice", "yearFrom", "yearTo", "region", "trans", "fuel", "sort"].forEach(function (k) { if (f[k]) p.set(k, f[k]); });
+    if (f.nasiya) p.set("nasiya", "1");
+    p.set("page", page);
+    return p.toString();
+  }
+  function activeFilterCount() {
+    var f = market.f, n = 0;
+    if (f.minPrice || f.maxPrice) n++;
+    if (f.yearFrom || f.yearTo) n++;
+    if (f.region) n++; if (f.trans) n++; if (f.fuel) n++; if (f.nasiya) n++;
+    return n;
+  }
+
+  function screenMarket() {
+    var refs = {};
+    var head = h("div", { class: "search-head" });
+    var grid = h("div", { class: "cards" });
+    var footer = h("div");
+    app.appendChild(head); app.appendChild(grid); app.appendChild(footer);
+
+    function renderHead() {
+      head.innerHTML = "";
+      // Qidiruv: yozilgan so'z bo'yicha (e'lon nomida) + katalogdan aniq model takliflari
+      var search = h("input", { class: "input", type: "search", id: "in-q", placeholder: "Marka yoki model", "aria-label": "Qidiruv", enterkeyhint: "search", autocomplete: "off", spellcheck: "false" });
+      search.value = market.f.q || "";
+      var clearBtn = h("button", { type: "button", class: "clear", "aria-label": "Qidiruvni tozalash", text: "×", hidden: !search.value, onclick: function () {
+        search.value = ""; clearBtn.hidden = true; renderSuggest(""); if (market.f.q) { market.f.q = ""; reload(); } search.focus();
+      } });
+      var sugBox = h("div", { class: "suggest", hidden: true });
+      var timer = null;
+      search.addEventListener("input", function () {
+        clearBtn.hidden = !search.value;
+        renderSuggest(search.value);
+        clearTimeout(timer);
+        timer = setTimeout(function () { var v = search.value.trim(); if (v !== (market.f.q || "")) { market.f.q = v; reload(); } }, 450);
+      });
+      search.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter") return;
+        clearTimeout(timer); search.blur();
+        var v = search.value.trim(); if (v !== (market.f.q || "")) { market.f.q = v; reload(); }
+      });
+      function renderSuggest(v) {
+        sugBox.innerHTML = "";
+        var q = String(v || "").trim().toLowerCase();
+        var out = [];
+        if (q.length >= 2) catalog.brands.forEach(function (b) {
+          if (b.name.toLowerCase().indexOf(q) === 0) out.push({ brand: b, model: null, name: b.name });
+          b.models.forEach(function (m) {
+            if (m.name.toLowerCase().indexOf(q) === 0 || (b.name + " " + m.name).toLowerCase().indexOf(q) === 0) out.push({ brand: b, model: m, name: b.name + " " + m.name });
+          });
+        });
+        out = out.slice(0, 8);
+        sugBox.hidden = !out.length;
+        out.forEach(function (sg) {
+          sugBox.appendChild(h("button", { type: "button", class: "chip", text: sg.name, onclick: function () {
+            clearTimeout(timer);
+            market.f.brandId = sg.brand.id; market.f.modelId = sg.model ? sg.model.id : null; market.f.q = "";
+            haptic("select"); renderHead(); reload();
+          } }));
+        });
+      }
+      var n = activeFilterCount();
+      head.appendChild(h("div", { class: "search-row" }, [
+        h("div", { class: "search-box" }, [icon("search"), search, clearBtn]),
+        h("button", { type: "button", class: "tool", "aria-label": "Filtr" + (n ? ", " + n + " ta tanlangan" : ""), onclick: openFilters }, [icon("filter"), n ? h("span", { class: "n", text: String(n) }) : null]),
+      ]));
+      head.appendChild(sugBox);
+
+      var brands = [{ id: null, name: "Barchasi" }].concat(catalog.brands);
+      head.appendChild(chipGroup(null, function () { return brands; }, function (b) { return market.f.brandId === b.id; }, function (b) {
+        market.f.brandId = b.id; market.f.modelId = null; renderHead(); reload();
+      }, { scroll: true, onSection: true, ariaLabel: "Marka" }));
+      var b = market.f.brandId ? brandById(market.f.brandId) : null;
+      if (b) {
+        var models = [{ id: null, name: "Barcha " + b.name }].concat(b.models);
+        head.appendChild(chipGroup(null, function () { return models; }, function (m) { return market.f.modelId === m.id; }, function (m) {
+          market.f.modelId = m.id; renderHead(); reload();
+        }, { scroll: true, onSection: true, ariaLabel: "Model" }));
+      }
+      var sortSel = h("select", { class: "sort", "aria-label": "Saralash" }, [
+        h("option", { value: "new", text: "Avval yangilari" }), h("option", { value: "price_asc", text: "Avval arzonlari" }), h("option", { value: "price_desc", text: "Avval qimmatlari" }),
+      ]);
+      sortSel.value = market.f.sort;
+      sortSel.addEventListener("change", function () { market.f.sort = sortSel.value; haptic("select"); reload(); });
+      refs.count = h("span", { class: "count", text: market.loaded ? (fmtNum(market.total) || "0") + " ta e'lon" : "" });
+      head.appendChild(h("div", { class: "toolbar" }, [refs.count, sortSel]));
+      // Tanlangan marka/model tugmasi ko'rinib tursin
+      head.querySelectorAll(".chips.scroll").forEach(function (row) {
+        var on = row.querySelector('[aria-pressed="true"]');
+        if (on && on.offsetLeft > row.clientWidth - 60) row.scrollLeft = on.offsetLeft - 40;
+      });
+    }
+
+    function renderItems(fresh) {
+      if (fresh) grid.innerHTML = "";
+      var start = fresh ? 0 : grid.children.length;
+      market.items.slice(start).forEach(function (it) { grid.appendChild(adCard(it)); });
+      footer.innerHTML = "";
+      if (market.loaded && market.items.length === 0) {
+        footer.appendChild(emptyState("Hech narsa topilmadi", market.f.q ? "«" + market.f.q + "» bo'yicha e'lon yo'q. Boshqacha yozib ko'ring yoki filtrlarni yumshating." : "Filtrlarni yumshating yoki boshqa modelni tanlang.", market.f.modelId ? "Bu moshina chiqsa xabar berish" : null, subscribeAlert, "car"));
+      } else if (market.page < market.pages) {
+        footer.appendChild(h("button", { type: "button", class: "btn ghost more", id: "more", text: market.loading ? "Yuklanmoqda..." : "Yana ko'rsatish", onclick: function () { load(market.page + 1); } }));
+      }
+      if (market.loaded && market.f.modelId && market.items.length) {
+        footer.appendChild(h("button", { type: "button", class: "btn secondary more", onclick: subscribeAlert }, [icon("bell"), "Yangi e'lon chiqsa xabar berish"]));
+      }
+      if (refs.count) refs.count.textContent = (fmtNum(market.total) || "0") + " ta e'lon";
+    }
+
+    function load(page) {
+      if (market.loading && page !== 1) return;
+      var seq = market.seq = (market.seq || 0) + 1; // qidiruv tez o'zgarsa — faqat oxirgi so'rov javobi chiqadi
+      market.loading = true;
+      if (page === 1 && !market.items.length) { footer.innerHTML = ""; footer.appendChild(skeletonCards(4)); }
+      api("/api/ads?" + marketParams(page)).then(function (r) {
+        if (seq !== market.seq) return;
+        market.loading = false;
+        if (!r.ok) {
+          toast(r.error || "Yuklab bo'lmadi");
+          if (page === 1) { footer.innerHTML = ""; footer.appendChild(emptyState("Yuklab bo'lmadi", r.error || "", "Qayta urinish", function () { load(1); }, "search")); }
+          return;
+        }
+        market.loaded = true;
+        market.page = r.page; market.pages = r.pages; market.total = r.total;
+        market.items = page === 1 ? r.items : market.items.concat(r.items);
+        renderItems(page === 1);
+      });
+    }
+    function reload() { market.items = []; market.page = 0; market.loaded = false; window.scrollTo(0, 0); grid.innerHTML = ""; load(1); }
+
+    function subscribeAlert() {
+      var m = modelById(market.f.modelId);
+      if (!m) return;
+      var st = { maxPrice: market.f.maxPrice || "" };
+      openSheet("Yangi e'lon chiqsa xabar berish", [
+        h("p", { class: "page-sub", text: m.brand.name + " " + m.name + " kanalga chiqishi bilan bot sizga yozadi." }),
+        h("div", { class: "group" }, [h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-maxPrice", text: "Narxi ko'pi bilan ($, ixtiyoriy)" }), textInput(st, "maxPrice", { inputmode: "numeric", placeholder: "Masalan: 9000" })])]),
+        h("div", { class: "actions" }, [h("button", { type: "button", class: "btn", text: "Obuna bo'lish", onclick: function () {
+          api("/api/alerts", { json: { modelId: m.id, maxPrice: digits(st.maxPrice) || 999999 } }).then(function (r) {
+            if (!r.ok) return toast(r.error || "Xatolik");
+            closeSheet(); haptic("success"); toast("Obuna bo'ldingiz. «Mening → Obunalar» bo'limida ko'rasiz.");
+          });
+        } })]),
+      ]);
+    }
+
+    function openFilters() {
+      var f = Object.assign({}, market.f);
+      var opts = catalog.options;
+      var years = yearOptions();
+      openSheet("Filtrlar", [
+        h("div", { class: "group" }, [
+          h("div", { class: "field" }, [h("span", { class: "label", text: "Narxi, $" }), h("div", { class: "row2" }, [
+            textInput(f, "minPrice", { inputmode: "numeric", placeholder: "dan", "aria-label": "Narxi dan" }),
+            textInput(f, "maxPrice", { inputmode: "numeric", placeholder: "gacha", "aria-label": "Narxi gacha" }),
+          ])]),
+          h("div", { class: "field" }, [h("span", { class: "label", text: "Yili" }), h("div", { class: "row2" }, [
+            selectBox(f, "yearFrom", years, "dan"), selectBox(f, "yearTo", years, "gacha"),
+          ])]),
+          h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-region", text: "Viloyat" }), selectBox(f, "region", opts.regions, "Hammasi")]),
+          h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-ftrans", text: "Korobka" }), chipGroup("lbl-ftrans", function () { return opts.transmissions.map(function (n) { return { name: n }; }); }, function (it) { return f.trans === it.name; }, function (it) { f.trans = f.trans === it.name ? "" : it.name; })]),
+          h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-ffuel", text: "Yoqilg'i" }), chipGroup("lbl-ffuel", function () { return opts.fuels.map(function (n) { return { name: n }; }); }, function (it) { return f.fuel === it.name; }, function (it) { f.fuel = f.fuel === it.name ? "" : it.name; })]),
+          h("div", { class: "field" }, [switchRow(f, "nasiya", "Faqat nasiyaga beriladiganlar")]),
+        ]),
+        h("div", { class: "actions" }, [
+          h("button", { type: "button", class: "btn", text: "Natijalarni ko'rsatish", onclick: function () {
+            f.minPrice = digits(f.minPrice); f.maxPrice = digits(f.maxPrice);
+            market.f = f; closeSheet(); renderHead(); reload();
+          } }),
+          h("button", { type: "button", class: "btn ghost", text: "Tozalash", onclick: function () {
+            market.f = Object.assign(market.f, { minPrice: "", maxPrice: "", yearFrom: "", yearTo: "", region: "", trans: "", fuel: "", nasiya: false });
+            closeSheet(); renderHead(); reload();
+          } }),
+        ]),
+      ]);
+    }
+
+    renderHead();
+    if (market.loaded) { renderItems(true); setTimeout(function () { window.scrollTo(0, market.scrollY); }, 0); }
+    else load(1);
+
+    var io = null;
+    if ("IntersectionObserver" in window) {
+      io = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting && market.loaded && !market.loading && market.page < market.pages) load(market.page + 1);
+      }, { rootMargin: "400px" });
+      io.observe(footer);
+    }
+    return function () { market.scrollY = window.scrollY; if (io) io.disconnect(); };
+  }
+
+  // =====================================================================
+  // 2. E'LON SAHIFASI
+  // =====================================================================
+  // Narx shkalasi: e'lon narxi shu model (±2 yil) o'rtachasiga nisbatan qayerda
+  // Zonalar kanaldagi belgi bilan bir xil: -5% dan arzon — «arzon», +10% dan qimmat — «qimmat»
+  function priceMeter(price, mk) {
+    var diff = (price - mk.avg) / mk.avg;
+    var pct = Math.round(Math.abs(diff) * 100);
+    var verdict = "Bozor narxida", cls = "";
+    if (diff <= -0.05) { verdict = "O'rtachadan " + pct + "% arzon"; cls = "cheap"; }
+    else if (diff >= 0.10) { verdict = "O'rtachadan " + pct + "% qimmat"; cls = "high"; }
+    var RANGE = 0.3; // shkala: o'rtachadan ±30%
+    var left = Math.max(3, Math.min(97, (Math.max(-RANGE, Math.min(RANGE, diff)) + RANGE) / (2 * RANGE) * 100));
+    var pin = h("span", { class: "pin" });
+    var el = h("section", { class: "meter", "aria-label": "Narx bozorga nisbatan: " + verdict }, [
+      h("div", { class: "m-title", text: "Narx bozorga nisbatan" }),
+      h("div", { class: "m-verdict " + cls, text: verdict }),
+      h("div", { class: "bar", style: "grid-template-columns:25fr 15fr 20fr", "aria-hidden": "true" }, [h("i"), h("i"), h("i"), pin]),
+      h("div", { class: "scale", "aria-hidden": "true" }, [h("span", { text: "Arzon" }), h("span", { text: "O'rtacha " + fmtPrice(mk.avg) }), h("span", { text: "Qimmat" })]),
+      h("p", { class: "m-foot", text: "Shu model, ±2 yil: " + mk.count + " ta faol e'lon, " + fmtPrice(mk.min) + " dan " + fmtPrice(mk.max) + " gacha." }),
+    ]);
+    // Yagona animatsiya: ko'rsatkich o'rtadan e'lon narxi turgan joyga siljiydi
+    requestAnimationFrame(function () { requestAnimationFrame(function () { pin.style.left = left + "%"; }); });
+    return el;
+  }
+
+  function screenAd(m) {
+    var id = Number(m[1]);
+    app.appendChild(skeleton());
+    var alive = true;
+    api("/api/ads/" + id).then(function (r) {
+      if (!alive) return;
+      app.innerHTML = "";
+      if (!r.ok) { app.appendChild(messageScreen("E'lon topilmadi", r.error || "", [h("button", { type: "button", class: "btn", text: "Bozorga qaytish", onclick: function () { replaceTo("/"); } })])); return; }
+      var ad = r.ad;
+      var n = ad.photos.length;
+      var pos = h("span", { class: "pos", text: "1/" + Math.max(1, n) });
+      var dots = n > 1 && n <= 8 ? h("div", { class: "dots", "aria-hidden": "true" }, ad.photos.map(function (_, i) { return h("i", { class: i ? "" : "on" }); })) : null;
+      var track = h("div", { class: "track" }, ad.photos.map(function (src, i) { return h("img", { src: src, alt: ad.title + ", rasm " + (i + 1), loading: i ? "lazy" : "eager" }); }));
+      track.addEventListener("scroll", function () {
+        var i = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+        pos.textContent = (i + 1) + "/" + n;
+        if (dots) Array.prototype.forEach.call(dots.children, function (d, k) { d.className = k === i ? "on" : ""; });
+      }, { passive: true });
+      var heart = h("button", { type: "button", class: "heart", "aria-label": "Saqlash", "aria-pressed": ad.isFav ? "true" : "false" }, [icon("heart", ad.isFav)]);
+      heart.addEventListener("click", toggleFav);
+      var share = ad.channelUrl ? h("button", { type: "button", class: "share", "aria-label": "Ulashish", onclick: function () {
+        logEvent("share_ad", { adId: ad.id });
+        openLink("https://t.me/share/url?url=" + encodeURIComponent(ad.channelUrl) + "&text=" + encodeURIComponent(ad.title + (ad.year ? ", " + ad.year : "") + " — " + fmtPrice(ad.price)));
+      } }, [icon("share")]) : null;
+      var canFav = ad.status === "active" && !ad.isOwner;
+      if (share && !canFav) share.style.right = "12px";
+      app.appendChild(h("div", { class: "gallery" }, [track, n > 8 ? pos : dots, share, canFav ? heart : null,
+        ad.status === "sold" ? h("div", { class: "sold-veil" }, [h("span", { text: "SOTILDI" })]) : null]));
+
+      // Narx va nom
+      var priceText = ad.status === "sold" && ad.soldPrice ? fmtPrice(ad.soldPrice) : fmtPrice(ad.price);
+      var when = relDay(ad.createdAt);
+      var badges = [];
+      if (ad.dealer) badges.push(h("span", { class: "badge trust" }, [icon("shield"), "Ishonchli sotuvchi: " + ad.dealer]));
+      if (ad.nasiya) badges.push(h("span", { class: "badge amber" }, [icon("card"), "Nasiyaga beriladi"]));
+      if (ad.badge && !(ad.market && ad.status === "active")) badges.push(h("span", { class: "badge " + ad.badge.type, text: ad.badge.text }));
+      app.appendChild(h("div", { class: "ad-head" }, [
+        h("div", { class: "ad-price" }, [priceText, ad.status === "sold" && ad.soldPrice && ad.soldPrice !== ad.price ? h("s", { text: fmtPrice(ad.price) }) : null]),
+        h("div", { class: "ad-title", text: ad.title + (ad.year ? ", " + ad.year : "") }),
+        h("div", { class: "ad-sub" }, [
+          when ? h("span", null, [icon("clock"), when]) : null,
+          ad.saves > 0 ? h("span", null, [icon("heart"), ad.saves + " kishi saqlagan"]) : null,
+          h("span", { text: "E'lon #" + ad.id }),
+        ]),
+        badges.length ? h("div", { class: "badges" }, badges) : null,
+      ]));
+
+      if (ad.market && ad.status === "active") app.appendChild(priceMeter(Number(digits(ad.price)), ad.market));
+
+      // Asosiy ko'rsatkichlar
+      var tiles = [["calendar", "Yili", ad.year], ["gauge", "Probeg", fmtKm(ad.probeg)], ["gear", "Korobka", ad.trans], ["fuel", "Yoqilg'i", ad.fuel]]
+        .filter(function (t) { return t[2]; });
+      app.appendChild(h("div", { class: "spec-tiles" }, tiles.map(function (t) { return h("div", { class: "tile" }, [icon(t[0]), h("span", { class: "k", text: t[1] }), h("span", { class: "v", text: t[2] })]); })));
+
+      var specs = h("dl", { class: "specs" });
+      [["Kraska", ad.paint], ["Rangi", ad.color]].forEach(function (row) {
+        if (!row[1]) return;
+        specs.appendChild(h("dt", { text: row[0] })); specs.appendChild(h("dd", { text: row[1] }));
+      });
+      if (ad.region) { specs.appendChild(h("dt", { text: "Viloyat" })); specs.appendChild(h("dd", null, [plate(ad.region, true)])); }
+      app.appendChild(h("p", { class: "sec-title", text: "Batafsil" }));
+      app.appendChild(h("div", { class: "group" }, [h("div", { class: "field" }, [specs])]));
+      [["Nasiya (bo'lib to'lash)", ad.nasiya], ["Maxsus taklif", ad.dealerOffer], ["Barter", ad.barter], ["Moshina tarixi", ad.history]].forEach(function (b) {
+        if (!b[1]) return;
+        app.appendChild(h("p", { class: "sec-title", text: b[0] }));
+        app.appendChild(h("div", { class: "group" }, [h("div", { class: "field text-block", text: b[1] })]));
+      });
+
+      var links = [];
+      if (ad.channelUrl) links.push(listItem({ icon: "send", color: "#2aabee", title: ad.hasVideo ? "Kanalda ko'rish (video bilan)" : "Kanalda ko'rish", sub: "Post, izohlar va baholar", onclick: function () { logEvent("channel", { adId: ad.id }); openLink(ad.channelUrl); } }));
+      if (links.length) { app.appendChild(h("div", { class: "list", style: "margin-top:16px" }, links)); }
+
+      if (r.similar && r.similar.length) {
+        app.appendChild(h("p", { class: "sec-title", text: "O'xshash e'lonlar" }));
+        app.appendChild(h("div", { class: "similar" }, r.similar.map(function (it) { return adCard(it, null, true); })));
+      }
+
+      // Pastdagi doimiy panel: qo'ng'iroq (yoki egasi uchun — boshqarish)
+      var barKids = null;
+      if (ad.isOwner && ad.status !== "sold") {
+        barKids = [h("button", { type: "button", class: "btn", onclick: function () { go("/my/ad/" + ad.id); } }, [icon("edit"), "E'lonni boshqarish"])];
+      } else if (ad.status === "active" && ad.phone) {
+        barKids = [
+          h("a", { class: "btn", href: "tel:+" + digits(ad.phone), "aria-label": "Qo'ng'iroq qilish: " + fmtPhone(ad.phone), onclick: function () { logEvent("call", { adId: ad.id }); } }, [icon("phone"), fmtPhone(ad.phone)]),
+          h("button", { type: "button", class: "icon-btn", "aria-label": "Raqamdan nusxa olish", onclick: function () { copyText("+" + digits(ad.phone), "Raqam nusxalandi"); logEvent("copy_phone", { adId: ad.id }); } }, [icon("copy")]),
+        ];
+      }
+      if (barKids) showActionBar(barKids);
+
+      function toggleFav() {
+        var on = !ad.isFav; ad.isFav = on;
+        heart.setAttribute("aria-pressed", on ? "true" : "false"); heart.innerHTML = ""; heart.appendChild(icon("heart", on));
+        haptic("select");
+        api("/api/favorites/" + ad.id, { json: { on: on } }).then(function (res) {
+          if (!res.ok) { toast(res.error || "Xatolik"); return; }
+          toast(on ? "Saqlandi. Narxi tushsa, bot xabar beradi." : "Saqlanganlardan olib tashlandi");
+          market.items.forEach(function (it) { if (it.id === ad.id) it.isFav = on; });
+        });
+      }
+    });
+    return function () { alive = false; hideActionBar(); };
+  }
+  function showActionBar(kids) {
+    hideActionBar();
+    document.body.appendChild(h("div", { class: "actionbar", id: "actionbar" }, [h("div", { class: "actionbar-in" }, kids)]));
+    document.body.classList.add("has-actionbar");
+  }
+  function hideActionBar() {
+    var b = document.getElementById("actionbar"); if (b) b.remove();
+    document.body.classList.remove("has-actionbar");
+  }
+
+  // =====================================================================
+  // 3. E'LON BERISH / TAHRIRLASH FORMASI
+  // =====================================================================
+  var DRAFT_KEY = "ad_draft_v1";
+  function draftKey() { return DRAFT_KEY + "_" + (me && me.user ? me.user.id : "0"); }
+
+  // "E'lon berish" — har safar holatni serverdan yangilab olamiz:
+  // admin tasdiqlagan/rad etgan bo'lsa, ilovani qayta ochmasdan forma ochiladi.
+  function screenNew(m, query) {
+    app.appendChild(skeleton());
+    var alive = true, inner = null;
+    refreshMe().catch(function () {}).then(function () {
+      if (!alive) return;
+      app.innerHTML = "";
+      inner = screenSell(m, query) || null;
+    });
+    return function () { alive = false; if (inner) inner(); };
+  }
+  function openNewForm() {
+    var path = (location.hash.slice(1) || "/").split("?")[0];
+    if (path === "/new") render(); else go("/new");
+  }
+
+  function screenSell(m, query, editAd) {
+    var isEdit = !!editAd;
+    if (!isEdit && !me.canPost) {
+      var why = {
+        pending: ["Oldingi e'loningiz tekshirilmoqda", "Admin uni tasdiqlagach yoki rad etgach, yangi e'lon bera olasiz. Natijani bot sizga yozadi."],
+        limit: [(me.adLimit || "") + (me.adLimit ? " ta " : "") + "faol e'lon chegarasi", "Yangi e'lon berish uchun faol e'lonlaringizdan birini «Sotildi» deb belgilang."],
+        banned: ["E'lon berish yopilgan", ""],
+      }[me.code] || ["Hozircha e'lon berib bo'lmaydi", ""];
+      logEvent("form_blocked", { code: me.code });
+      app.appendChild(messageScreen(why[0], why[1] || me.message || "", [
+        h("button", { type: "button", class: "btn", text: "Mening e'lonlarim", onclick: function () { replaceTo("/my"); } }),
+        h("button", { type: "button", class: "btn ghost", text: "Bozorga qaytish", onclick: function () { replaceTo("/"); } }),
+      ], me.code === "pending" ? "KUTING" : null));
+      return;
+    }
+    if (!isEdit) logEvent("form_open");
+    var refs = {};
+    var S = {
+      brandId: null, modelId: null, modelText: "", customModel: false, fullName: "",
+      year: "", probeg: "", salon: false, paint: "", color: "", colorCustom: "", trans: "", fuel: "",
+      price: "", phone: "", region: "", history: "", barter: "", nasiya: false, nasiyaTerms: "", offer: "", urgent: false,
+    };
+    var photos = []; // { key, file, blob, url, token, ref, status, progress }
+    var video = null;
+    var keySeq = 0;
+    var submitting = false;
+
+    if (isEdit) {
+      ["brandId", "modelId", "modelText", "customModel", "fullName", "year", "probeg", "salon", "paint", "color", "colorCustom", "trans", "fuel", "price", "phone", "region", "history", "barter", "nasiya", "nasiyaTerms", "offer"].forEach(function (k) { if (editAd[k] !== undefined && editAd[k] !== null) S[k] = editAd[k]; });
+      photos = editAd.photos.map(function (p) { return { key: ++keySeq, ref: p.ref, url: p.url, status: "done", progress: 1 }; });
+      if (editAd.hasVideo) video = { key: ++keySeq, old: true, status: "done" };
+    } else {
+      try { var raw = localStorage.getItem(draftKey()); if (raw) Object.assign(S, JSON.parse(raw)); } catch (e) {}
+      if (query.get("brandId")) { S.brandId = Number(query.get("brandId")); S.modelId = query.get("modelId") ? Number(query.get("modelId")) : null; S.customModel = false; }
+      if (query.get("year")) S.year = query.get("year");
+      if (S.brandId !== null && S.brandId !== 0 && !brandById(S.brandId)) { S.brandId = null; S.modelId = null; }
+      if (!S.phone && me.lastPhone) S.phone = String(me.lastPhone).replace(/^998/, "");
+    }
+
+    function touched() {
+      if (!isEdit) { try { localStorage.setItem(draftKey(), JSON.stringify(S)); } catch (e) {} }
+      updateSign();
+      updateSections();
+      setClosingConfirm(true);
+    }
+    // Bo'lim sarlavhalari: raqam → to'ldirilgach ✓ (qaysi bo'lim qolganini bir qarashda ko'rish uchun)
+    function secTitle(n, text, opt) {
+      var el = h("p", { class: "group-title" }, [h("span", { class: "step", text: String(n) }), text, opt ? h("span", { class: "opt", text: opt }) : null]);
+      refs["sec" + n] = el;
+      return el;
+    }
+    function updateSections() {
+      if (!refs.sec1) return;
+      var e = validate();
+      var done = {
+        1: !e.brand && !e.model && !e.year,
+        2: !e.paint && !e.color && !e.trans && !e.fuel,
+        3: !e.price && !e.phone && !e.region,
+        4: !e.photos && !e.video && photos.length > 0 && !uploading(),
+      };
+      [1, 2, 3, 4].forEach(function (k) {
+        var el = refs["sec" + k];
+        if (!el || el.classList.contains("done") === done[k]) return;
+        el.classList.toggle("done", done[k]);
+        var st = el.querySelector(".step");
+        st.innerHTML = "";
+        if (done[k]) st.appendChild(icon("check")); else st.textContent = String(k);
+      });
+    }
+    function carName() {
+      if (S.brandId === 0) return S.fullName.trim();
+      var b = brandById(S.brandId);
+      if (!b) return "";
+      var mm = S.customModel ? S.modelText.trim() : ((b.models.find(function (x) { return x.id === S.modelId; }) || {}).name || "");
+      return (b.name + " " + mm).trim();
+    }
+    function updateSign() {
+      var name = carName();
+      refs.signCar.textContent = (name || "Moshinangiz") + (S.year ? ", " + S.year : "");
+      refs.signCar.classList.toggle("empty-v", !name);
+      var p = fmtNum(S.price);
+      refs.signPrice.textContent = p ? p + " $" : "Narxi ... $";
+      refs.signPrice.classList.toggle("empty-v", !p);
+      var ph = fmtPhone(S.phone);
+      refs.signPhone.textContent = ph || "+998 __ ___ __ __";
+      refs.signPhone.classList.toggle("empty-v", !ph);
+    }
+    function inp(key, attrs, errKey) { return textInput(S, key, attrs, function () { setError(refs, errKey || key, ""); touched(); }); }
+    function ta(key, attrs) { return textArea(S, key, attrs, touched); }
+    function chips(key, items, isActive, onPick, opts) {
+      return chipGroup("lbl-" + key, items, isActive, function (it) { onPick(it); setError(refs, key, ""); touched(); }, opts);
+    }
+
+    // Qog'oz
+    refs.signCar = h("p", { class: "sign-car" });
+    refs.signPrice = h("p", { class: "sign-price" });
+    refs.signPhone = h("p", { class: "sign-phone" });
+    if (isEdit) app.appendChild(h("h1", { class: "page", text: "E'lonni tahrirlash" }));
+    app.appendChild(h("div", { class: "sign-wrap" }, [
+      h("div", { class: "sign", "aria-label": "E'loningiz ko'rinishi" }, [h("p", { class: "sign-title", text: "SOTILADI" }), refs.signCar, refs.signPrice, refs.signPhone]),
+      h("p", { class: "sign-note", text: isEdit ? "O'zgarishlar admin tekshiruvidan so'ng kanaldagi e'longa tushadi." : "Pastdagi ma'lumotlarni to'ldiring — e'loningiz kanalda shu ma'lumotlar bilan chiqadi." }),
+    ]));
+
+    // --- Moshina ---
+    var modelField = h("div", { class: "slot" });
+    function renderModelField() {
+      modelField.innerHTML = "";
+      if (S.brandId === null) return;
+      if (S.brandId === 0) {
+        modelField.appendChild(field(refs, "model", "Marka va model", inp("fullName", { placeholder: "Masalan: Changan UNI-V", maxlength: "60", autocomplete: "off", "aria-labelledby": "lbl-model" }, "model")));
         return;
       }
-      chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
-}
-
-async function readJson(req) {
-  const buf = await readBody(req, MAX_JSON_BYTES);
-  if (!buf.length) return {};
-  return JSON.parse(buf.toString("utf8"));
-}
-
-const int = (v, def = null) => { const n = parseInt(String(v ?? "").replace(/[^\d-]/g, ""), 10); return Number.isFinite(n) ? n : def; };
-
-function startWebApp(deps) {
-  const {
-    bot, db, catalog, InputFile, mainMenu,
-    ADMIN_ID, LOG_CHANNEL_ID, WEBAPP_URL,
-    checkCanPostAd, submitNewAdToAdmin, sanitizeText, normalizePhone, parseAdPrice,
-    requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
-    estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
-    VIP_PRICE, VIP_CARD, VIP_CARD_NAME, logUserAction, getAdVotes,
-  } = deps;
-
-  const PORT = Number(process.env.PORT) || 3000;
-  const BOT_TOKEN = process.env.BOT_TOKEN;
-  const STATIC_DIR = path.join(__dirname, "webapp");
-  const CHANNEL_URL = "https://t.me/engarzonidamoshina";
-  const PHOTO_KEY = crypto.createHmac("sha256", "photo-links").update(String(BOT_TOKEN)).digest();
-
-  const uploads = new Map();        // token -> { userId, kind, fileId, createdAt }
-  const uploadCounters = new Map(); // userId -> [timestamps]
-  const busy = new Set();           // bir vaqtda ikki marta yuborilmasligi uchun: "userId:amal"
-  const photoCache = new Map();     // "adId:idx:w" -> Buffer (eng eskisi birinchi o'chiriladi)
-  const recentLogs = new Map();     // "userId|kalit" -> vaqt (bir xil amal logga qayta-qayta yozilmasin)
-  const trackCounters = new Map();  // userId -> [timestamps] (/api/track ni suiiste'mol qilmaslik uchun)
-
-  setInterval(() => {
-    const now = Date.now();
-    for (const [token, u] of uploads) if (now - u.createdAt > UPLOAD_TTL_MS) uploads.delete(token);
-    for (const [uid, list] of uploadCounters) {
-      const fresh = list.filter(t => now - t < UPLOAD_WINDOW_MS);
-      if (fresh.length) uploadCounters.set(uid, fresh); else uploadCounters.delete(uid);
-    }
-    for (const [k, t] of recentLogs) if (now - t > 30 * 60 * 1000) recentLogs.delete(k);
-    for (const [uid, list] of trackCounters) if (!list.some(t => now - t < 60 * 1000)) trackCounters.delete(uid);
-  }, 10 * 60 * 1000).unref();
-
-  // ---------- Yordamchilar ----------
-  const photoSig = (adId) => crypto.createHmac("sha256", PHOTO_KEY).update(String(adId)).digest("hex").slice(0, 16);
-  const photoUrl = (adId, idx, w) => `/api/photo/${adId}/${idx}?w=${w}&s=${photoSig(adId)}`;
-  const photoList = (ad) => String(ad.photoId || "").split(",").filter(Boolean);
-  const channelLink = (ad) => (ad.channelMsgId ? `${CHANNEL_URL}/${ad.channelMsgId}` : null);
-  const digits = (s) => String(s ?? "").replace(/\D/g, "");
-  const spaced = (n) => String(digits(n) || "0").replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  const money = (n) => `${spaced(n)}$`;
-  const adLabel = (ad) => `#${ad.id} ${ad.carDetails}${ad.year ? `, ${ad.year}` : ""}${digits(ad.price) ? `, ${money(ad.price)}` : ""}`;
-
-  // Admin log-kanaliga (botdagi kuzatuv bilan bitta xabarga) "📱" belgisi bilan yozadi.
-  // dedupeKey — shu amal windowMs ichida takrorlansa, qayta yozilmaydi.
-  function logLine(user, text, dedupeKey = null, windowMs = 10 * 60 * 1000) {
-    if (!logUserAction || !text) return;
-    if (dedupeKey) {
-      const k = `${user.id}|${dedupeKey}`, now = Date.now(), t = recentLogs.get(k);
-      if (t && now - t < windowMs) return;
-      recentLogs.set(k, now);
-    }
-    logUserAction({ id: user.id, first_name: user.first_name, username: user.username }, `📱 ${text}`);
-  }
-
-  async function once(key, fn) {
-    if (busy.has(key)) return { ok: false, error: "Amal bajarilmoqda, biroz kuting..." };
-    busy.add(key);
-    try { return await fn(); } finally { busy.delete(key); }
-  }
-
-  function takeUpload(token, userId, kind) {
-    const u = uploads.get(String(token || ""));
-    if (!u || u.userId !== userId || (kind && u.kind !== kind)) return null;
-    return u;
-  }
-
-  // Bozor narxiga solishtirish (kanaldagi belgi bilan bir xil qoida: shu model, ±2 yil, kamida 3 ta)
-  async function priceBadges(items) {
-    const modelIds = [...new Set(items.map(a => a.model_id).filter(Boolean))];
-    const out = new Map();
-    if (!modelIds.length) return out;
-    const [rows] = await db.execute(
-      `SELECT model_id, year, price FROM ads WHERE status = 'active' AND model_id IN (${modelIds.map(() => "?").join(",")}) AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000`,
-      modelIds
-    );
-    for (const ad of items) {
-      if (!ad.model_id) continue;
-      const y = int(ad.year, 0);
-      const same = rows.filter(r => r.model_id === ad.model_id && Math.abs(int(r.year, 0) - y) <= 2).map(r => int(r.price, 0));
-      if (same.length < 3) continue;
-      const avg = same.reduce((a, b) => a + b, 0) / same.length;
-      const diff = Math.round(((int(ad.price, 0) - avg) / avg) * 100);
-      if (diff <= -5) out.set(ad.id, { type: "cheap", pct: Math.abs(diff), text: `Bozordan ${Math.abs(diff)}% arzon` });
-      else if (diff < 10) out.set(ad.id, { type: "market", text: "Bozor narxida" });
-    }
-    return out;
-  }
-
-  async function favoriteSet(userId, ids) {
-    if (!ids.length) return new Set();
-    const [rows] = await db.execute(`SELECT adId FROM favorites WHERE userId = ? AND adId IN (${ids.map(() => "?").join(",")})`, [userId, ...ids]);
-    return new Set(rows.map(r => Number(r.adId)));
-  }
-
-  function card(ad, badges, favs) {
-    const photos = photoList(ad);
-    return {
-      id: ad.id, title: ad.carDetails, price: digits(ad.price), year: String(ad.year || ""),
-      probeg: ad.probeg, region: ad.region, trans: ad.transmission, fuel: ad.fuel,
-      photo: photos.length ? photoUrl(ad.id, 0, 480) : null, photosCount: photos.length,
-      badge: badges ? badges.get(ad.id) || null : null,
-      isFav: favs ? favs.has(Number(ad.id)) : false,
-      hasNasiya: !!(ad.nasiya && ad.nasiya !== "Yo'q"),
-      status: ad.status, soldPrice: ad.sold_price ? digits(ad.sold_price) : null,
-      createdAt: ad.created_at, channelUrl: channelLink(ad),
-    };
-  }
-
-  // ---------- Bozor: qidiruv ----------
-  async function handleSearch(req, res, user, url) {
-    const q = url.searchParams;
-    const where = ["status = 'active'"];
-    const params = [];
-    const brandId = int(q.get("brandId"));
-    const modelId = int(q.get("modelId"));
-    let modelName = null;
-
-    if (modelId) {
-      const m = catalog.modelById(modelId);
-      if (m) {
-        modelName = m.name;
-        const f = catalog.modelFilter(m.id, m.name);
-        where.push(f.sql); params.push(...f.params);
+      var b = brandById(S.brandId);
+      var custom = h("div", { class: "reveal" });
+      function renderCustom() {
+        custom.innerHTML = "";
+        if (S.customModel) custom.appendChild(inp("modelText", { placeholder: b.name + " modelini yozing", maxlength: "60", autocomplete: "off", "aria-labelledby": "lbl-model" }, "model"));
       }
-    } else if (brandId) {
-      const b = catalog.brandById(brandId);
-      if (b) { where.push("(brand_id = ? OR (brand_id IS NULL AND carDetails LIKE ?))"); params.push(b.id, `${b.name}%`); }
+      modelField.appendChild(field(refs, "model", "Model", h("div", null, [
+        chips("model", function () { return b.models.concat([{ id: -1, name: "Ro'yxatda yo'q", dashed: true }]); },
+          function (x) { return x.id === -1 ? S.customModel : (!S.customModel && S.modelId === x.id); },
+          function (x) {
+            if (x.id === -1) { S.customModel = true; S.modelId = null; } else { S.customModel = false; S.modelId = x.id; }
+            renderCustom();
+            if (S.customModel) setTimeout(function () { var i = document.getElementById("in-modelText"); if (i) i.focus(); }, 30);
+          }, { collapse: 12 }),
+        custom,
+      ])));
+      renderCustom();
     }
-    const text = sanitizeText(q.get("q"), 60);
-    if (text) { where.push("carDetails LIKE ?"); params.push(`%${text}%`); }
-    const minPrice = int(q.get("minPrice")), maxPrice = int(q.get("maxPrice"));
-    if (minPrice) { where.push("CAST(price AS UNSIGNED) >= ?"); params.push(minPrice); }
-    if (maxPrice) { where.push("CAST(price AS UNSIGNED) <= ?"); params.push(maxPrice); }
-    const yearFrom = int(q.get("yearFrom")), yearTo = int(q.get("yearTo"));
-    if (yearFrom) { where.push("CAST(year AS UNSIGNED) >= ?"); params.push(yearFrom); }
-    if (yearTo) { where.push("CAST(year AS UNSIGNED) <= ?"); params.push(yearTo); }
-    const opts = catalog.AD_OPTIONS;
-    const logParts = []; // admin log uchun qisqa tavsif
-    const region = q.get("region"); if (region && opts.regions.includes(region)) { where.push("region = ?"); params.push(region); logParts.push(region); }
-    const trans = q.get("trans"); if (trans && opts.transmissions.includes(trans)) { where.push("transmission = ?"); params.push(trans); logParts.push(trans); }
-    const fuel = q.get("fuel"); if (fuel && opts.fuels.includes(fuel)) { where.push("fuel = ?"); params.push(fuel); logParts.push(fuel); }
-    if (q.get("nasiya") === "1") { where.push("nasiya IS NOT NULL AND nasiya <> 'Yo''q'"); logParts.push("nasiyaga"); }
+    var probegInput = inp("probeg", { inputmode: "numeric", placeholder: "85000", maxlength: "9", autocomplete: "off" }, "year");
+    function syncSalon() { probegInput.disabled = S.salon; probegInput.placeholder = S.salon ? "0" : "85000"; if (S.salon) { probegInput.value = ""; S.probeg = ""; setError(refs, "year", ""); } }
+    syncSalon();
+    var yearRow = h("div", { class: "field" }, [h("div", { class: "row2" }, [
+      h("div", null, [h("span", { class: "label", id: "lbl-year", text: "Yili" }), selectBox(S, "year", yearOptions(), "Tanlang", function () { setError(refs, "year", ""); touched(); })]),
+      h("div", null, [h("span", { class: "label", id: "lbl-probeg", text: "Probeg" }), h("div", { class: "input-suffix" }, [probegInput, h("span", { text: "km" })])]),
+    ]), h("p", { class: "error" })]);
+    refs.f_year = yearRow;
 
-    const sorts = { new: "created_at DESC, id DESC", price_asc: "CAST(price AS UNSIGNED) ASC, id DESC", price_desc: "CAST(price AS UNSIGNED) DESC, id DESC" };
-    const order = sorts[q.get("sort")] || sorts.new;
-    const page = Math.max(1, int(q.get("page"), 1));
-    const whereSql = where.join(" AND ");
+    app.appendChild(secTitle(1, "Moshina"));
+    app.appendChild(h("div", { class: "group" }, [
+      field(refs, "brand", "Marka", chips("brand", function () { return catalog.brands.concat([{ id: 0, name: "Boshqa marka", dashed: true }]); },
+        function (b) { return S.brandId === b.id; },
+        function (b) { if (S.brandId !== b.id) { S.modelId = null; S.customModel = false; S.modelText = ""; } S.brandId = b.id; renderModelField(); }, { collapse: 9 })),
+      modelField,
+      yearRow,
+      h("div", { class: "field" }, [switchRow(S, "salon", "Yangi, salondan", "Probeg 0 km deb yoziladi", function () { syncSalon(); touched(); })]),
+    ]));
+    renderModelField();
 
-    const [[cnt]] = await db.execute(`SELECT COUNT(*) AS total FROM ads WHERE ${whereSql}`, params);
-    const [rows] = await db.execute(
-      `SELECT id, carDetails, brand_id, model_id, price, year, probeg, region, transmission, fuel, photoId, nasiya, status, sold_price, created_at, channelMsgId FROM ads WHERE ${whereSql} ORDER BY ${order} LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
-      params
-    );
-    const [badges, favs] = await Promise.all([priceBadges(rows), favoriteSet(user.id, rows.map(r => Number(r.id)))]);
-
-    // Qidiruv statistikasi (botdagi kabi): model tanlangan bo'lsa, faqat 1-sahifada
-    if (modelId && page === 1 && modelName) {
-      db.execute("INSERT INTO search_logs (query, model_id) VALUES (?, ?)", [modelName.toLowerCase(), modelId]).catch(() => {});
+    // --- Holati ---
+    var opts = catalog.options;
+    function simple(list) { return function () { return list.map(function (n) { return { name: n }; }); }; }
+    var colorCustom = h("div", { class: "reveal" });
+    function renderColorCustom() {
+      colorCustom.innerHTML = "";
+      if (S.color === "__other") colorCustom.appendChild(inp("colorCustom", { placeholder: "Rangini yozing", maxlength: "30", "aria-labelledby": "lbl-color" }, "color"));
     }
-    // Admin log: faqat 1-sahifa va biror filtr tanlangan bo'lsa (bo'sh bozorni ochish "Ilovani ochdi" da ko'rinadi)
-    if (page === 1) {
-      const head = [];
-      const mm = modelId ? catalog.modelById(modelId) : null;
-      if (mm) head.push(`${mm.brandName} ${mm.name}`);
-      else if (brandId && catalog.brandById(brandId)) head.push(catalog.brandById(brandId).name);
-      if (text) head.push(`"${text}"`);
-      if (minPrice || maxPrice) head.push(minPrice && maxPrice ? `${money(minPrice)}–${money(maxPrice)}` : minPrice ? `${money(minPrice)} dan` : `${money(maxPrice)} gacha`);
-      if (yearFrom || yearTo) head.push(yearFrom && yearTo ? `${yearFrom}–${yearTo} yil` : yearFrom ? `${yearFrom} yildan` : `${yearTo} yilgacha`);
-      const sortName = { price_asc: "arzonidan", price_desc: "qimmatidan" }[q.get("sort")];
-      const parts = head.concat(logParts, sortName ? [sortName] : []);
-      if (parts.length) logLine(user, `Qidirdi: ${parts.join(" · ")} → ${Number(cnt.total)} ta e'lon`, `search:${parts.join("|")}`, 2 * 60 * 1000);
+    app.appendChild(secTitle(2, "Holati"));
+    app.appendChild(h("div", { class: "group" }, [
+      field(refs, "paint", "Kraska", chips("paint", simple(opts.paints), function (it) { return S.paint === it.name; }, function (it) { S.paint = it.name; })),
+      field(refs, "color", "Rangi", h("div", null, [
+        chips("color", function () { return opts.colors.map(function (n) { return { name: n }; }).concat([{ name: "Boshqa rang", other: true, dashed: true }]); },
+          function (it) { return it.other ? S.color === "__other" : S.color === it.name; },
+          function (it) { S.color = it.other ? "__other" : it.name; renderColorCustom(); }),
+        colorCustom,
+      ])),
+      field(refs, "trans", "Korobka", chips("trans", simple(opts.transmissions), function (it) { return S.trans === it.name; }, function (it) { S.trans = it.name; })),
+      field(refs, "fuel", "Yoqilg'i", chips("fuel", simple(opts.fuels), function (it) { return S.fuel === it.name; }, function (it) { S.fuel = it.name; })),
+    ]));
+    renderColorCustom();
+
+    // --- Narx va aloqa ---
+    app.appendChild(secTitle(3, "Narx va aloqa"));
+    app.appendChild(h("div", { class: "group" }, [
+      field(refs, "price", "Narxi", h("div", { class: "input-suffix" }, [inp("price", { inputmode: "numeric", placeholder: "Masalan: 8500", maxlength: "7", autocomplete: "off" }), h("span", { text: "$" })])),
+      field(refs, "phone", "Telefon", inp("phone", { type: "tel", inputmode: "tel", placeholder: "90 123 45 67", maxlength: "28", autocomplete: "tel" }), "Xaridorlar shu raqamga qo'ng'iroq qiladi."),
+      field(refs, "region", "Viloyat", selectBox(S, "region", opts.regions, "Tanlang", function () { setError(refs, "region", ""); touched(); })),
+    ]));
+
+    // --- Rasm va video ---
+    refs.photoGrid = h("div", { class: "photos" });
+    refs.photoInput = h("input", { type: "file", accept: "image/*", multiple: true, class: "file-input", "aria-label": "Rasm qo'shish" });
+    refs.photoInput.addEventListener("change", function () { addPhotos(refs.photoInput.files); refs.photoInput.value = ""; });
+    refs.videoBox = h("div", { class: "photos" });
+    refs.videoInput = h("input", { type: "file", accept: "video/*", class: "file-input", "aria-label": "Video qo'shish" });
+    refs.videoInput.addEventListener("change", function () { if (refs.videoInput.files[0]) setVideo(refs.videoInput.files[0]); refs.videoInput.value = ""; });
+    app.appendChild(secTitle(4, "Rasm va video"));
+    app.appendChild(h("div", { class: "group" }, [
+      field(refs, "photos", "Rasmlar, 1 tadan 6 tagacha", h("div", null, [refs.photoGrid, refs.photoInput]), "Birinchi rasm asosiy bo'ladi. Old, orqa, yon, salon va spidometrni suratga oling."),
+      field(refs, "video", "Video (ixtiyoriy)", h("div", null, [refs.videoBox, refs.videoInput]), "30 soniyalik obzor video bo'lsa, moshina tezroq sotiladi. 49 MB gacha."),
+    ]));
+
+    // --- Qo'shimcha ---
+    var nasiyaReveal = h("div", { class: "reveal" });
+    function renderNasiya() {
+      nasiyaReveal.innerHTML = "";
+      if (S.nasiya) nasiyaReveal.appendChild(ta("nasiyaTerms", { "aria-label": "Nasiya shartlari", "aria-labelledby": null, placeholder: "Masalan: 50% oldindan, qolgani 6 oyga. Bo'sh qoldirsangiz «shartlari kelishiladi» deb yoziladi.", maxlength: "200", rows: "2" }));
     }
-    sendJson(res, 200, {
-      ok: true, total: Number(cnt.total), page, pages: Math.max(1, Math.ceil(Number(cnt.total) / PAGE_SIZE)),
-      items: rows.map(r => card(r, badges, favs)),
-    });
-  }
+    var extras = [
+      field(refs, "history", "Moshina tarixi (ixtiyoriy)", ta("history", { placeholder: "Masalan: 2 yil oldin metan o'rnatilgan, moyi har 7500 km da almashtirilgan.", maxlength: "400" })),
+      field(refs, "barter", "Barter (ixtiyoriy)", inp("barter", { placeholder: "Masalan: Cobalt ga almashaman", maxlength: "150" }), "Bo'sh qoldirsangiz, faqat naqd deb yoziladi."),
+      h("div", { class: "field" }, [switchRow(S, "nasiya", "Nasiyaga beraman", "Bo'lib to'lash xaridorlarni ko'paytiradi", function () { renderNasiya(); touched(); }), nasiyaReveal]),
+    ];
+    if (me.isDealer) extras.push(field(refs, "offer", "Maxsus taklif (avtosalon)", ta("offer", { placeholder: "Aksiya, kredit, sovg'a. Masalan: 12 oygacha 0% bo'lib to'lash!", maxlength: "300" })));
+    extras.push(h("div", { class: "field" }, [switchRow(S, "urgent", "Shoshilinch sotiladi", "Bozor narxidan arzonroq va tez sotmoqchi bo'lsangiz", touched)]));
+    app.appendChild(secTitle(5, "Qo'shimcha", "ixtiyoriy"));
+    app.appendChild(h("div", { class: "group" }, extras));
+    renderNasiya();
 
-  // E'lon sahifasidagi «narx shkalasi» uchun: shu model (±2 yil) faol e'lonlari narxi (kamida 3 ta bo'lsa)
-  async function marketStats(ad) {
-    if (!ad.model_id) return null;
-    const [rows] = await db.execute(
-      "SELECT id, year, price FROM ads WHERE status = 'active' AND model_id = ? AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000",
-      [ad.model_id]
-    );
-    const y = int(ad.year, 0);
-    const prices = rows.filter(r => Math.abs(int(r.year, 0) - y) <= 2).map(r => int(r.price, 0)).filter(Boolean);
-    if (prices.length < 3) return null;
-    const avg = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
-    return { count: prices.length, avg, min: Math.min(...prices), max: Math.max(...prices) };
-  }
-  // «O'xshash e'lonlar»: shu model, yili eng yaqinlari
-  async function similarAds(ad, user) {
-    if (!ad.model_id) return [];
-    const [rows] = await db.execute(
-      "SELECT a.* FROM ads a WHERE a.status = 'active' AND a.model_id = ? AND a.id <> ? ORDER BY ABS(CAST(a.year AS SIGNED) - ?) ASC, a.created_at DESC LIMIT 8",
-      [ad.model_id, ad.id, int(ad.year, 0)]
-    );
-    if (!rows.length) return [];
-    const [badges, favs] = await Promise.all([priceBadges(rows), favoriteSet(user.id, rows.map(r => Number(r.id)))]);
-    return rows.map(r => card(r, badges, favs));
-  }
-
-  // ---------- Bozor: bitta e'lon ----------
-  async function handleAdDetail(req, res, user, adId) {
-    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
-    const ad = rows[0];
-    const isOwner = ad && (Number(ad.userId) === user.id || user.id === ADMIN_ID);
-    if (!ad || (!["active", "sold"].includes(ad.status) && !isOwner)) return sendJson(res, 404, { ok: false, error: "E'lon topilmadi yoki o'chirilgan." });
-
-    const [[dealer]] = await db.execute("SELECT is_dealer, dealer_name, dealer_paused FROM users WHERE id = ?", [ad.userId]);
-    const [[saves]] = await db.execute("SELECT COUNT(*) AS cnt FROM favorites WHERE adId = ?", [ad.id]);
-    const [badges, favs, market, similar] = await Promise.all([
-      priceBadges([ad]), favoriteSet(user.id, [Number(ad.id)]),
-      marketStats(ad).catch(() => null), similarAds(ad, user).catch(() => []),
-    ]);
-    const photos = photoList(ad);
-    logLine(user, `E'lonni ko'rdi: ${adLabel(ad)}${ad.status === "sold" ? " (sotilgan)" : ""}`, `ad:${ad.id}`);
-    sendJson(res, 200, {
-      ok: true,
-      ad: {
-        ...card(ad, badges, favs),
-        paint: ad.paint, color: ad.color, phone: ad.phone,
-        history: ad.history && ad.history !== "Ko'rsatilmagan" ? ad.history : null,
-        barter: ad.barter && ad.barter !== "Yo'q" ? ad.barter : null,
-        nasiya: ad.nasiya && ad.nasiya !== "Yo'q" ? ad.nasiya : null,
-        dealerOffer: ad.dealer_offer || null,
-        photos: photos.map((_, i) => photoUrl(ad.id, i, 1080)),
-        thumbs: photos.map((_, i) => photoUrl(ad.id, i, 480)),
-        hasVideo: !!ad.videoId,
-        dealer: dealer && dealer.is_dealer === 1 && dealer.dealer_paused !== 1 ? dealer.dealer_name : null,
-        saves: Number(saves.cnt), isOwner: !!isOwner,
-        market, // { count, avg, min, max } yoki null
-      },
-      similar,
-    });
-  }
-
-  // ---------- Rasm proksi (bot tokeni brauzerga chiqmaydi) ----------
-  async function handlePhoto(req, res, adId, idx, url) {
-    if (url.searchParams.get("s") !== photoSig(adId)) { res.writeHead(403); return res.end(); }
-    const w = [240, 480, 1080].includes(int(url.searchParams.get("w"))) ? int(url.searchParams.get("w")) : 480;
-    const key = `${adId}:${idx}:${w}`;
-    let buf = photoCache.get(key);
-    if (!buf) {
-      const [rows] = await db.execute("SELECT photoId FROM ads WHERE id = ?", [adId]);
-      const fileId = rows[0] ? photoList(rows[0])[idx] : null;
-      if (!fileId || !axios) { res.writeHead(404); return res.end(); }
-      const file = await bot.api.getFile(fileId);
-      const resp = await axios.get(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`, { responseType: "arraybuffer", timeout: 15000 });
-      buf = Buffer.from(resp.data);
-      if (sharp) {
-        try { buf = await sharp(buf).rotate().resize({ width: w, withoutEnlargement: true }).jpeg({ quality: 78 }).toBuffer(); } catch (e) {}
-      }
-      photoCache.set(key, buf);
-      if (photoCache.size > PHOTO_CACHE_MAX) photoCache.delete(photoCache.keys().next().value);
-    }
-    res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400", "Content-Length": buf.length });
-    res.end(buf);
-  }
-
-  // ---------- Foydalanuvchi holati ----------
-  async function handleMe(req, res, user, url) {
-    await db.execute("INSERT IGNORE INTO users (id, first_name, username) VALUES (?, ?, ?)", [
-      user.id, String(user.first_name || "").slice(0, 255), user.username ? `@${user.username}` : "",
-    ]).catch(() => {});
-
-    let subscribed = user.id === ADMIN_ID;
-    if (!subscribed) {
-      try {
-        const member = await bot.api.getChatMember(deps.CHANNEL_ID, user.id);
-        subscribed = ["creator", "administrator", "member"].includes(member.status);
-      } catch (e) {}
-    }
-    const check = subscribed ? await checkCanPostAd(user.id) : { ok: false, code: "not_subscribed", message: "Kanalimizga obuna bo'ling." };
-    const [[u]] = await db.execute("SELECT is_dealer, dealer_paused, dealer_name, dealer_phone, free_ups FROM users WHERE id = ?", [user.id]);
-    const [lastRows] = await db.execute("SELECT phone FROM ads WHERE userId = ? ORDER BY id DESC LIMIT 1", [user.id]);
-    if (url && url.searchParams.get("open") === "1") {
-      // Qayerdan kelgani (kanal postidagi tugma) — reklama samarasini ko'rish uchun
-      const src = String(url.searchParams.get("src") || "");
-      let from = "";
-      const adSrc = src.match(/^ad_(\d{1,10})$/);
-      if (adSrc) from = ` — kanaldagi #${adSrc[1]} e'lon tugmasidan`;
-      else if (src === "new") from = " — kanaldagi «E'lon berish» tugmasidan";
-      else if (src === "evaluate") from = " — kanaldagi «Baholash» tugmasidan";
-      logLine(user, (subscribed ? "Ilovani ochdi" : "Ilovani ochdi (kanalga obuna emas)") + from, `open:${from ? src : ""}`, 60 * 1000);
-    }
-    sendJson(res, 200, {
-      ok: true,
-      user: { id: user.id, first_name: user.first_name || "" },
-      subscribed,
-      canPost: check.ok,
-      code: check.code || null,
-      adLimit: check.limit != null ? check.limit : null, // admin paneldagi «E'lon limiti» (0 = cheksiz)
-      message: check.ok ? null : stripHtml(check.message),
-      isDealer: !!(u && u.is_dealer === 1 && u.dealer_paused !== 1),
-      dealerName: u?.dealer_name || null,
-      dealerPhone: u?.dealer_phone || null,
-      dealerPending: !!(u && u.is_dealer !== 1 && u.dealer_name),
-      freeUps: u?.free_ups || 0,
-      lastPhone: lastRows[0]?.phone || null,
-      channelUrl: CHANNEL_URL,
-      vip: { price: VIP_PRICE, card: VIP_CARD, cardName: VIP_CARD_NAME },
-    });
-  }
-
-  // ---------- Fayl yuklash: POST /api/upload?kind=photo|video ----------
-  async function handleUpload(req, res, user, url) {
-    const kind = url.searchParams.get("kind") === "video" ? "video" : "photo";
-    const type = String(req.headers["content-type"] || "");
-    if (kind === "photo" && !/^image\//.test(type)) return sendJson(res, 400, { ok: false, error: "Faqat rasm yuklash mumkin." });
-    if (kind === "video" && !/^video\//.test(type)) return sendJson(res, 400, { ok: false, error: "Faqat video yuklash mumkin." });
-
-    const now = Date.now();
-    const recent = (uploadCounters.get(user.id) || []).filter(t => now - t < UPLOAD_WINDOW_MS);
-    if (recent.length >= UPLOADS_PER_WINDOW) return sendJson(res, 429, { ok: false, error: "Juda ko'p fayl yuklandi. Birozdan keyin urinib ko'ring." });
-
-    let buf;
-    try {
-      buf = await readBody(req, kind === "video" ? MAX_VIDEO_BYTES : MAX_PHOTO_BYTES);
-    } catch (e) {
-      return sendJson(res, e.status || 400, { ok: false, error: kind === "video" ? "Video 49 MB dan katta bo'lmasin." : "Rasm juda katta." });
-    }
-    if (!buf.length) return sendJson(res, 400, { ok: false, error: "Fayl bo'sh." });
-    recent.push(now);
-    uploadCounters.set(user.id, recent);
-
-    // Telegram'ga yuklab file_id olamiz, keyin log-kanaldagi xabarni o'chiramiz (file_id o'chmaydi)
-    let msg;
-    try {
-      if (kind === "photo") {
-        msg = await bot.api.sendPhoto(LOG_CHANNEL_ID, new InputFile(buf, "photo.jpg"), { disable_notification: true });
-      } else {
-        const ext = type.includes("quicktime") ? "mov" : "mp4";
-        msg = await bot.api.sendVideo(LOG_CHANNEL_ID, new InputFile(buf, `video.${ext}`), { disable_notification: true, supports_streaming: true });
-      }
-    } catch (e) {
-      console.error("Mini App: faylni Telegram'ga yuklashda xato:", e.message);
-      return sendJson(res, 502, { ok: false, error: "Faylni yuklab bo'lmadi. Qayta urinib ko'ring." });
-    }
-    const fileId = kind === "photo" ? msg.photo?.[msg.photo.length - 1]?.file_id : (msg.video?.file_id || msg.document?.file_id);
-    bot.api.deleteMessage(LOG_CHANNEL_ID, msg.message_id).catch(() => {});
-    if (!fileId) return sendJson(res, 502, { ok: false, error: "Faylni qayta ishlab bo'lmadi." });
-
-    const token = crypto.randomBytes(16).toString("hex");
-    uploads.set(token, { userId: user.id, kind, fileId, createdAt: now });
-    sendJson(res, 200, { ok: true, token, kind });
-  }
-
-  // Formadan kelgan ma'lumotni botdagi bilan bir xil "ad" obyektiga aylantiradi.
-  // existing — tahrirlanayotgan e'lon (rasmlar "old:0" kabi eski rasmga ishora qilishi mumkin)
-  function buildAd(body, user, isDealer, existing = null) {
-    const opts = catalog.AD_OPTIONS;
-    const err = (m) => ({ error: m });
-    const ad = { urgent: !!body.urgent };
-
-    const brandId = Number(body.brandId);
-    if (brandId > 0) {
-      const brand = catalog.brandById(brandId);
-      if (!brand) return err("Marka topilmadi. Sahifani yangilang.");
-      ad.brand = brand.name;
-      ad.brand_id = brand.id;
-      const modelId = Number(body.modelId);
-      if (modelId > 0) {
-        const model = catalog.modelById(modelId);
-        if (!model || model.brandId !== brand.id) return err("Model topilmadi. Qaytadan tanlang.");
-        ad.model = model.name;
-        ad.model_id = model.id;
-      } else {
-        const text = sanitizeText(body.modelText, 60);
-        if (text.length < 1) return err("Modelni tanlang yoki yozing.");
-        const found = catalog.findModel(brand.id, text);
-        ad.model = found ? found.name : text;
-        ad.model_id = found ? found.id : null;
-      }
-    } else {
-      const text = sanitizeText(body.fullName, 60);
-      if (text.length < 2) return err("Moshina markasi va modelini yozing (masalan: Changan UNI-K).");
-      ad.brand = "Boshqa";
-      ad.model = text;
-      ad.brand_id = null;
-      ad.model_id = null; // umumiy funksiya to'liq nomdan aniqlashga harakat qiladi
-    }
-
-    const year = parseInt(body.year, 10);
-    const maxYear = new Date().getFullYear() + 1;
-    if (!year || year < 1985 || year > maxYear) return err("Yilini to'g'ri tanlang.");
-    ad.year = String(year);
-
-    if (body.salon) {
-      ad.probeg = "Salon";
-    } else {
-      const km = parseInt(String(body.probeg || "").replace(/\D/g, ""), 10);
-      if (isNaN(km) || km < 0 || km > 3000000) return err("Probegni km da kiriting (masalan: 35000) yoki «Salon» ni belgilang.");
-      ad.probeg = String(km);
-    }
-
-    if (!opts.paints.includes(body.paint)) return err("Kraska holatini tanlang.");
-    ad.paint = body.paint;
-    const color = opts.colors.includes(body.color) ? body.color : sanitizeText(body.color, 30);
-    if (!color) return err("Rangini tanlang yoki yozing.");
-    ad.color = color;
-    if (!opts.transmissions.includes(body.trans)) return err("Korobka turini tanlang.");
-    ad.trans = body.trans;
-    if (!opts.fuels.includes(body.fuel)) return err("Yoqilg'i turini tanlang.");
-    ad.fuel = body.fuel;
-
-    const price = parseAdPrice(body.price);
-    if (price.error) return err(stripHtml(price.error));
-    ad.price = price.value;
-
-    const phone = normalizePhone(body.phone);
-    if (!phone) return err("Telefon raqamni to'g'ri kiriting (masalan: 90 123 45 67).");
-    ad.phone = phone;
-
-    if (!opts.regions.includes(body.region)) return err("Viloyatni tanlang.");
-    ad.region = body.region;
-
-    ad.history = sanitizeText(body.history, 400) || "Ko'rsatilmagan";
-    ad.barter = sanitizeText(body.barter, 150) || "Yo'q";
-    ad.nasiya = body.nasiya ? (sanitizeText(body.nasiyaTerms, 200) || "Bor (shartlari kelishiladi)") : "Yo'q";
-    ad.dealer_offer = isDealer ? (sanitizeText(body.offer, 300) || null) : null;
-
-    // Rasm va video: yangi yuklangan (token) yoki tahrirda eski ("old:<raqam>" / "old")
-    const oldPhotos = existing ? photoList(existing) : [];
-    const refs = Array.isArray(body.photos) ? body.photos.slice(0, 6) : [];
-    if (refs.length === 0) return err("Kamida 1 ta rasm yuklang.");
-    ad.photos = [];
-    const usedTokens = [];
-    for (const r of refs) {
-      const s = String(r || "");
-      if (s.startsWith("old:")) {
-        const fid = oldPhotos[int(s.slice(4), -1)];
-        if (!fid) return err("Eski rasmlardan biri topilmadi. Sahifani yangilang.");
-        ad.photos.push(fid);
-        continue;
-      }
-      const u = takeUpload(s, user.id, "photo");
-      if (!u) return { error: "Rasmlardan biri eskirgan, qayta yuklanmoqda...", code: "upload_expired" };
-      ad.photos.push(u.fileId);
-      usedTokens.push(s);
-    }
-    ad.videoId = null;
-    if (body.video === "old" && existing && existing.videoId) {
-      ad.videoId = existing.videoId;
-    } else if (body.video) {
-      const u = takeUpload(body.video, user.id, "video");
-      if (!u) return { error: "Video eskirgan, qayta yuklanmoqda...", code: "upload_expired" };
-      ad.videoId = u.fileId;
-      usedTokens.push(String(body.video));
-    }
-    return { ad, tokens: usedTokens };
-  }
-
-  function notifyUser(userId, html) {
-    bot.api.sendMessage(userId, html, { parse_mode: "HTML", reply_markup: mainMenu }).catch(() => {});
-  }
-
-  // ---------- E'lon berish: POST /api/ads ----------
-  async function handleSubmit(req, res, user) {
-    const r = await once(`${user.id}:submit`, async () => {
-      const body = await readJson(req);
-      const check = await checkCanPostAd(user.id);
-      if (!check.ok) return { status: 403, ok: false, code: check.code, error: stripHtml(check.message) };
-      const built = buildAd(body, user, check.isDealer);
-      if (built.error) return { status: 400, ok: false, error: built.error, code: built.code || null };
-      const adId = await submitNewAdToAdmin({ ad: built.ad, userId: user.id, firstName: user.first_name, source: "miniapp" });
-      built.tokens.forEach(t => uploads.delete(t));
-      const carName = catalog.carName(built.ad.brand, built.ad.model);
-      notifyUser(user.id, `✅ <b>E'loningiz adminga muvaffaqiyatli yuborildi!</b>\n\n🚗 ${carName}\n🆔 ID: ${adId}\n\nTekshiruvdan so'ng kanalga joylanadi.`);
-      logLine(user, `E'lon yubordi: ${carName} (ID: ${adId})`);
-      return { ok: true, adId };
-    });
-    sendJson(res, r.status || (r.ok ? 200 : 400), r);
-  }
-
-  // ---------- Mening e'lonlarim ----------
-  async function handleMyAds(req, res, user) {
-    const [rows] = await db.execute(
-      "SELECT * FROM ads WHERE userId = ? AND status IN ('active', 'sold', 'pending') ORDER BY FIELD(status, 'pending', 'active', 'sold'), created_at DESC",
-      [user.id]
-    );
-    const [[u]] = await db.execute("SELECT free_ups FROM users WHERE id = ?", [user.id]);
-    const [editRows] = await db.execute("SELECT oldAdId FROM ad_edits WHERE userId = ?", [user.id]);
-    const editing = new Set(editRows.map(e => Number(e.oldAdId)));
-    const badges = await priceBadges(rows.filter(r => r.status === "active"));
-    // Kanaldagi «Narxga baho» reaksiyalari (🔥 arzon · 👍 normal · 🤔 qimmat) — faqat faol e'lonlar uchun
-    const votes = new Map();
-    if (getAdVotes) {
-      await Promise.all(rows.filter(r => r.status === "active").map(async (r) => {
-        const v = await getAdVotes(r.id, r.channelMsgId);
-        if (v) votes.set(Number(r.id), v);
-      }));
-    }
-    logLine(user, `Mening e'lonlarimni ochdi (${rows.length} ta)`, "my");
-    sendJson(res, 200, {
-      ok: true, freeUps: u?.free_ups || 0,
-      items: rows.map(r => ({ ...card(r, badges, null), editPending: editing.has(Number(r.id)), votes: votes.get(Number(r.id)) || null })),
-    });
-  }
-
-  // Tahrirlash uchun e'lonning to'liq ma'lumoti (formani to'ldirish)
-  async function handleMyAdGet(req, res, user, adId) {
-    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ?", [adId, user.id]);
-    const ad = rows[0];
-    if (!ad) return sendJson(res, 404, { ok: false, error: "E'lon topilmadi." });
-    const m = ad.model_id ? catalog.modelById(ad.model_id) : null;
-    let brandId = 0, modelId = null, modelText = "", fullName = "";
-    if (m) { brandId = m.brandId; modelId = m.id; }
-    else if (ad.brand_id && catalog.brandById(ad.brand_id) && String(ad.carDetails).toLowerCase().startsWith(catalog.brandById(ad.brand_id).name.toLowerCase() + " ")) {
-      brandId = ad.brand_id; modelText = String(ad.carDetails).slice(catalog.brandById(ad.brand_id).name.length + 1);
-    } else { fullName = ad.carDetails; }
-    const opts = catalog.AD_OPTIONS;
-    sendJson(res, 200, {
-      ok: true,
-      ad: {
-        id: ad.id, status: ad.status, brandId, modelId, modelText, customModel: !!modelText, fullName,
-        year: String(ad.year || ""), salon: ad.probeg === "Salon", probeg: ad.probeg === "Salon" ? "" : digits(ad.probeg),
-        paint: opts.paints.includes(ad.paint) ? ad.paint : "",
-        color: opts.colors.includes(ad.color) ? ad.color : (ad.color ? "__other" : ""), colorCustom: opts.colors.includes(ad.color) ? "" : (ad.color || ""),
-        trans: ad.transmission, fuel: ad.fuel, price: digits(ad.price), phone: String(ad.phone || "").replace(/^998/, ""),
-        region: ad.region, history: ad.history && ad.history !== "Ko'rsatilmagan" ? ad.history : "",
-        barter: ad.barter && ad.barter !== "Yo'q" ? ad.barter : "",
-        nasiya: !!(ad.nasiya && ad.nasiya !== "Yo'q"), nasiyaTerms: ad.nasiya && !["Yo'q", "Bor (shartlari kelishiladi)"].includes(ad.nasiya) ? ad.nasiya : "",
-        offer: ad.dealer_offer || "", urgent: false,
-        photos: photoList(ad).map((_, i) => ({ ref: `old:${i}`, url: photoUrl(ad.id, i, 480) })),
-        hasVideo: !!ad.videoId,
-      },
-    });
-  }
-
-  async function handleMyAdAction(req, res, user, adId, action) {
-    const r = await once(`${user.id}:${action}:${adId}`, async () => {
-      const body = await readJson(req);
-      if (action === "sold") {
-        const out = await requestSoldToAdmin({ adId, userId: user.id, firstName: user.first_name, soldPrice: digits(body.price) || null });
-        if (out.ok) logLine(user, `«Sotildi» so'rovi yubordi (ID: ${adId}${out.soldPrice ? `, ${money(out.soldPrice)}` : ""})`);
-        return out.ok ? { ok: true, soldPrice: out.soldPrice } : { ok: false, error: stripHtml(out.error) };
-      }
-      if (action === "price") {
-        const out = await changeAdPrice({ adId, userId: user.id, newPrice: body.price });
-        if (out.ok) logLine(user, `Narxni o'zgartirdi (ID: ${adId}): ${money(out.oldPrice)} → ${money(out.newPrice)}`);
-        return out.ok ? { ok: true, newPrice: out.newPrice, dropped: out.dropped } : { ok: false, error: stripHtml(out.error) };
-      }
-      if (action === "edit") {
-        const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ?", [adId, user.id]);
-        if (!rows[0] || rows[0].status !== "active") return { ok: false, error: "Faqat faol e'lonni tahrirlash mumkin." };
-        const check = await checkCanPostAd(user.id).catch(() => ({}));
-        const built = buildAd(body, user, !!check.isDealer, rows[0]);
-        if (built.error) return { ok: false, error: built.error, code: built.code || null };
-        const out = await submitAdEditToAdmin({ adId, ad: built.ad, userId: user.id, firstName: user.first_name, source: "miniapp" });
-        if (!out.ok) return { ok: false, error: stripHtml(out.error) };
-        built.tokens.forEach(t => uploads.delete(t));
-        notifyUser(user.id, `✅ <b>Tahrirlangan e'lon adminga yuborildi!</b>\n\nTekshiruvdan so'ng kanaldagi e'lon yangilanadi.`);
-        logLine(user, `Tahrir yubordi (ID: ${adId})`);
-        return { ok: true, editId: out.editId };
-      }
-      if (action === "vip") {
-        const u = takeUpload(body.token, user.id, "photo");
-        if (!u) return { ok: false, error: "Chek rasmini qayta yuklang." };
-        const out = await submitVipRequest({ adId, userId: user.id, firstName: user.first_name, username: user.username, screenshotFileId: u.fileId });
-        if (!out.ok) return { ok: false, error: stripHtml(out.error) };
-        uploads.delete(String(body.token));
-        logLine(user, `VIP to'lov chekini yubordi (ID: ${adId})`);
-        return { ok: true };
-      }
-      if (action === "up") {
-        const out = await useFreeUp({ adId, userId: user.id });
-        if (out.ok) logLine(user, `Bepul UP ishlatdi (ID: ${adId})`);
-        return out.ok ? { ok: true, freeUpsLeft: out.freeUpsLeft } : { ok: false, error: stripHtml(out.error) };
-      }
-      return { ok: false, error: "Noma'lum amal." };
-    });
-    sendJson(res, r.ok ? 200 : 400, r);
-  }
-
-  // ---------- Saqlanganlar ----------
-  async function handleFavorites(req, res, user) {
-    const [rows] = await db.execute(
-      "SELECT a.* FROM favorites f JOIN ads a ON a.id = f.adId WHERE f.userId = ? AND a.status IN ('active', 'sold') ORDER BY f.created_at DESC",
-      [user.id]
-    );
-    const badges = await priceBadges(rows.filter(r => r.status === "active"));
-    const favs = new Set(rows.map(r => Number(r.id)));
-    logLine(user, `Saqlanganlarni ochdi (${rows.length} ta)`, "fav");
-    sendJson(res, 200, { ok: true, items: rows.map(r => card(r, badges, favs)) });
-  }
-  async function handleFavoriteToggle(req, res, user, adId) {
-    const body = await readJson(req);
-    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
-    const ad = rows[0];
-    if (body.on) {
-      if (!ad || ad.status !== "active") return sendJson(res, 404, { ok: false, error: "E'lon faol emas." });
-      await db.execute("INSERT IGNORE INTO favorites (userId, adId) VALUES (?, ?)", [user.id, adId]);
-      logLine(user, `Saqladi ❤️: ${adLabel(ad)}`);
-    } else {
-      await db.execute("DELETE FROM favorites WHERE userId = ? AND adId = ?", [user.id, adId]);
-      logLine(user, `Saqlanganlardan olib tashladi: ${ad ? adLabel(ad) : `#${adId}`}`);
-    }
-    sendJson(res, 200, { ok: true, isFav: !!body.on });
-  }
-
-  // ---------- Obunalar (qidiruv bo'yicha xabarnoma) ----------
-  async function handleAlerts(req, res, user) {
-    const [rows] = await db.execute("SELECT * FROM alerts WHERE userId = ? ORDER BY id DESC", [user.id]);
-    logLine(user, `Obunalarini ochdi (${rows.length} ta)`, "alerts");
-    sendJson(res, 200, {
-      ok: true,
-      items: rows.map(a => ({ id: a.id, title: alertTitle(a), maxPrice: a.maxPrice, modelId: a.model_id || null })),
-    });
-  }
-  function alertTitle(a) {
-    const m = a.model_id ? catalog.modelById(a.model_id) : null;
-    return m ? `${m.brandName} ${m.name}` : String(a.query || "").replace(/^./, c => c.toUpperCase());
-  }
-  async function handleAlertCreate(req, res, user) {
-    const body = await readJson(req);
-    const m = int(body.modelId) ? catalog.modelById(int(body.modelId)) : null;
-    const query = m ? m.name.toLowerCase() : sanitizeText(body.query, 60).toLowerCase();
-    if (!query) return sendJson(res, 400, { ok: false, error: "Avval moshina modelini tanlang." });
-    const maxPrice = Math.min(int(body.maxPrice, 999999) || 999999, 999999);
-    const [[cnt]] = await db.execute("SELECT COUNT(*) AS c FROM alerts WHERE userId = ?", [user.id]);
-    if (Number(cnt.c) >= 20) return sendJson(res, 400, { ok: false, error: "Ko'pi bilan 20 ta obuna bo'lishi mumkin. Keraksizlarini o'chiring." });
-    await db.execute("INSERT INTO alerts (userId, query, maxPrice, model_id) VALUES (?, ?, ?, ?)", [user.id, query, maxPrice, m ? m.id : null]);
-    logLine(user, `Obuna bo'ldi 🔔: ${alertTitle({ query, model_id: m ? m.id : null })}${maxPrice < 999999 ? `, ${money(maxPrice)} gacha` : ""}`);
-    sendJson(res, 200, { ok: true });
-  }
-  async function handleAlertDelete(req, res, user, alertId) {
-    const [rows] = await db.execute("SELECT * FROM alerts WHERE id = ? AND userId = ?", [alertId, user.id]);
-    await db.execute("DELETE FROM alerts WHERE id = ? AND userId = ?", [alertId, user.id]);
-    if (rows[0]) logLine(user, `Obunani o'chirdi: ${alertTitle(rows[0])}`);
-    sendJson(res, 200, { ok: true });
-  }
-
-  // ---------- Xizmatlar ----------
-  async function handleEvaluate(req, res, user) {
-    const body = await readJson(req);
-    let modelId = null, model = "", title = "";
-    const m = int(body.modelId) ? catalog.modelById(int(body.modelId)) : null;
-    if (m) { modelId = m.id; model = m.name; title = `${m.brandName} ${m.name}`; }
-    else {
-      const text = sanitizeText(body.text, 60);
-      if (!text) return sendJson(res, 400, { ok: false, error: "Moshina modelini tanlang yoki yozing." });
-      const hit = catalog.matchCarDetails(text);
-      modelId = hit.modelId; model = text; title = text;
-    }
-    const year = int(body.year);
-    if (!year) return sendJson(res, 400, { ok: false, error: "Yilini tanlang." });
-    const out = await estimateCarPrice({ modelId, model, year });
-    logLine(user, `Narx aniqladi: ${title}, ${year} → ${out.ok ? `${money(out.minPrice)}–${money(out.maxPrice)} (${out.count} ta e'lon)` : "ma'lumot topilmadi"}`);
-    sendJson(res, 200, { ok: true, title, year, ...(out.ok ? { found: true, minPrice: out.minPrice, maxPrice: out.maxPrice, count: out.count } : { found: false }) });
-  }
-
-  async function handleDealer(req, res, user) {
-    const r = await once(`${user.id}:dealer`, async () => {
-      const body = await readJson(req);
-      const out = await submitDealerApplication({ userId: user.id, firstName: user.first_name, username: user.username, name: body.name, phone: body.phone });
-      if (out.ok) logLine(user, `Avtosalon arizasi yubordi: ${out.dealerName}`);
-      return out.ok ? { ok: true } : { ok: false, code: out.code || null, error: stripHtml(out.error) };
-    });
-    sendJson(res, r.ok ? 200 : 400, r);
-  }
-
-  async function handleSalonStatus(req, res, user) {
-    const st = await getSalonAdStatus(user.id);
-    logLine(user, "Salon reklamasi bo'limini ochdi", "salon");
-    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dealerName: st.dealerName, dealerPhone: st.dealerPhone });
-  }
-  async function handleSalonSubmit(req, res, user) {
-    const r = await once(`${user.id}:salon`, async () => {
-      const body = await readJson(req);
-      const u = takeUpload(body.media, user.id, null);
-      if (!u) return { ok: false, error: "Rasm yoki videoni qayta yuklang." };
-      const out = await submitSalonAd({
-        userId: user.id, adText: sanitizeText(body.text, 900), mediaType: u.kind, mediaId: u.fileId,
-        location: sanitizeText(body.location, 200), phone: sanitizeText(body.phone, 100),
+    // ---- Rasmlar ----
+    function addPhotos(fileList) {
+      var files = Array.prototype.slice.call(fileList || []);
+      var free = 6 - photos.length;
+      if (files.length > free) toast("Ko'pi bilan 6 ta rasm. Ortiqchasi qo'shilmadi.");
+      files.slice(0, free).forEach(function (file) {
+        if (!/^image\//.test(file.type)) return;
+        var p = { key: ++keySeq, file: file, url: URL.createObjectURL(file), status: "uploading", progress: 0 };
+        photos.push(p);
+        startPhotoUpload(p);
       });
-      if (!out.ok) return { ok: false, code: out.code || null, error: stripHtml(out.error) };
-      uploads.delete(String(body.media));
-      notifyUser(user.id, "✅ <b>Reklamangiz adminga yuborildi!</b>\n\nTekshiruvdan so'ng kanalga joylanadi.");
-      logLine(user, "Salon reklamasi yubordi");
-      return { ok: true };
-    });
-    sendJson(res, r.ok ? 200 : 400, r);
-  }
-
-  // ---------- Faqat ilova ichida bo'ladigan bosishlar (admin log uchun): POST /api/track ----------
-  async function handleTrack(req, res, user) {
-    const body = await readJson(req);
-    const now = Date.now();
-    const recent = (trackCounters.get(user.id) || []).filter(t => now - t < 60 * 1000);
-    if (recent.length >= 30) return sendJson(res, 200, { ok: true }); // daqiqasiga 30 tadan ortig'i yozilmaydi
-    recent.push(now);
-    trackCounters.set(user.id, recent);
-
-    const event = String(body.event || "");
-    const adId = int(body.adId);
-    let ad = null;
-    if (adId && ["call", "copy_phone", "channel"].includes(event)) {
-      const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
-      ad = rows[0] || null;
+      setError(refs, "photos", ""); touched();
+      renderPhotos();
     }
-    const adText = ad ? adLabel(ad) : `#${adId}`;
-    let text = null, key = null, win = 10 * 60 * 1000;
-    if (event === "call" && adId) { text = `Qo'ng'iroq tugmasini bosdi 📞: ${adText}`; key = `call:${adId}`; win = 2 * 60 * 1000; }
-    else if (event === "copy_phone" && adId) { text = `Sotuvchi raqamini nusxaladi: ${adText}`; key = `copy:${adId}`; win = 2 * 60 * 1000; }
-    else if (event === "channel" && adId) { text = `Kanalda ko'rishni bosdi: ${adText}`; key = `channel:${adId}`; }
-    else if (event === "share_ad" && adId) { text = `E'lonni ulashishni bosdi: ${adText}`; key = `share_ad:${adId}`; }
-    else if (event === "share_ref") { text = "Taklif havolasini ulashishni bosdi"; key = "share"; win = 60 * 1000; }
-    else if (event === "form_open") { text = "E'lon berish formasini ochdi"; key = "form"; win = 60 * 1000; }
-    else if (event === "form_blocked") {
-      const why = { pending: "oldingi e'loni tekshiruvda", limit: "faol e'lonlar chegarasiga yetgan", banned: "bloklangan" }[body.code] || "ruxsat yo'q";
-      text = `E'lon berishga urindi — ${why}`; key = "form_blocked"; win = 60 * 1000;
-    } else if (event === "credit") {
-      const price = int(body.price), down = int(body.down), months = int(body.months);
-      const rate = Math.min(Math.max(parseFloat(body.rate) || 0, 0), 100);
-      const cur = (n) => (body.cur === "uzs" ? `${spaced(n)} so'm` : money(n));
-      if (price && months) text = `Kredit hisobladi: ${cur(price)}, boshlang'ich ${cur(down)}, ${months} oy, ${rate}%`;
+    function startPhotoUpload(p) {
+      if (p.ref) return Promise.resolve();
+      p.status = "uploading"; p.progress = 0; p.token = null;
+      var ready = p.blob ? Promise.resolve(p.blob) : compressImage(p.file).then(function (b) { p.blob = b; return b; });
+      return ready.then(function (blob) { return upload("photo", blob, function (f) { p.progress = f; paintThumb(p); }); })
+        .then(function (r) {
+          if (photos.indexOf(p) === -1) return;
+          if (r.ok) { p.status = "done"; p.token = r.token; } else { p.status = "error"; p.error = r.error; }
+          renderPhotos();
+        });
     }
-    if (text) logLine(user, text, key, win);
-    sendJson(res, 200, { ok: true });
-  }
-
-  // ---------- Marshrutlar ----------
-  const routes = [
-    ["GET", /^\/api\/me$/, (q, s, u, m, url) => handleMe(q, s, u, url)],
-    ["POST", /^\/api\/track$/, (q, s, u) => handleTrack(q, s, u)],
-    ["GET", /^\/api\/ads$/, (q, s, u, m, url) => handleSearch(q, s, u, url)],
-    ["POST", /^\/api\/ads$/, (q, s, u) => handleSubmit(q, s, u)],
-    ["GET", /^\/api\/ads\/(\d+)$/, (q, s, u, m) => handleAdDetail(q, s, u, int(m[1]))],
-    ["POST", /^\/api\/upload$/, (q, s, u, m, url) => handleUpload(q, s, u, url)],
-    ["GET", /^\/api\/my\/ads$/, (q, s, u) => handleMyAds(q, s, u)],
-    ["GET", /^\/api\/my\/ads\/(\d+)$/, (q, s, u, m) => handleMyAdGet(q, s, u, int(m[1]))],
-    ["POST", /^\/api\/my\/ads\/(\d+)\/(sold|price|edit|vip|up)$/, (q, s, u, m) => handleMyAdAction(q, s, u, int(m[1]), m[2])],
-    ["GET", /^\/api\/favorites$/, (q, s, u) => handleFavorites(q, s, u)],
-    ["POST", /^\/api\/favorites\/(\d+)$/, (q, s, u, m) => handleFavoriteToggle(q, s, u, int(m[1]))],
-    ["GET", /^\/api\/alerts$/, (q, s, u) => handleAlerts(q, s, u)],
-    ["POST", /^\/api\/alerts$/, (q, s, u) => handleAlertCreate(q, s, u)],
-    ["DELETE", /^\/api\/alerts\/(\d+)$/, (q, s, u, m) => handleAlertDelete(q, s, u, int(m[1]))],
-    ["POST", /^\/api\/evaluate$/, (q, s, u) => handleEvaluate(q, s, u)],
-    ["GET", /^\/api\/referral$/, async (q, s, u) => { logLine(u, "Taklif (bepul UP) bo'limini ochdi", "ref"); sendJson(s, 200, await getReferralInfo(u.id)); }],
-    ["POST", /^\/api\/dealer$/, (q, s, u) => handleDealer(q, s, u)],
-    ["GET", /^\/api\/salon-ad$/, (q, s, u) => handleSalonStatus(q, s, u)],
-    ["POST", /^\/api\/salon-ad$/, (q, s, u) => handleSalonSubmit(q, s, u)],
-  ];
-
-  const server = http.createServer(async (req, res) => {
-    let url;
-    try { url = new URL(req.url, "http://localhost"); } catch (e) { res.writeHead(400); return res.end(); }
-    const p = url.pathname;
-
-    try {
-      if (req.method === "GET" && STATIC_FILES[p]) {
-        const file = path.join(STATIC_DIR, STATIC_FILES[p]);
-        const body = fs.readFileSync(file);
-        const ext = path.extname(file);
-        res.writeHead(200, { "Content-Type": STATIC_TYPES[ext], "Cache-Control": ext === ".woff" ? "public, max-age=2592000, immutable" : "no-cache" });
-        return res.end(body);
-      }
-      if (req.method === "GET" && p === "/health") { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end("ok"); }
-      if (req.method === "GET" && p === "/api/catalog") {
-        const year = new Date().getFullYear();
-        return sendJson(res, 200, { ok: true, brands: catalog.get().brands, options: catalog.AD_OPTIONS, years: { min: 1985, max: year + 1 } });
-      }
-      const pm = req.method === "GET" && p.match(/^\/api\/photo\/(\d+)\/(\d)$/);
-      if (pm) return await handlePhoto(req, res, int(pm[1]), int(pm[2]), url);
-
-      if (p.startsWith("/api/")) {
-        const user = validateInitData(req.headers["x-telegram-init-data"], BOT_TOKEN);
-        if (!user) return sendJson(res, 401, { ok: false, error: "Ilovani Telegram ichida, bot orqali oching." });
-        for (const [method, re, handler] of routes) {
-          const m = req.method === method && p.match(re);
-          if (m) return await handler(req, res, user, m, url);
+    function paintThumb(p) { var bar = app.querySelector('[data-key="' + p.key + '"] .bar i'); if (bar) bar.style.width = Math.round(p.progress * 100) + "%"; }
+    function renderPhotos() {
+      var g = refs.photoGrid; g.innerHTML = "";
+      photos.forEach(function (p, i) {
+        var kids = [h("img", { src: p.url, alt: "Rasm " + (i + 1) })];
+        if (i === 0) kids.push(h("span", { class: "main-tag", text: "Asosiy" }));
+        if (p.status === "uploading") kids.push(h("div", { class: "veil" }, ["Yuklanmoqda"]), h("div", { class: "bar" }, [h("i", { style: "width:" + Math.round(p.progress * 100) + "%" })]));
+        if (p.status === "error") kids.push(h("button", { type: "button", class: "veil", onclick: function () { startPhotoUpload(p); renderPhotos(); } }, ["Yuklanmadi. Qayta urinish uchun bosing"]));
+        kids.push(h("button", { type: "button", class: "remove", "aria-label": "Rasmni o'chirish", text: "×", onclick: function () {
+          photos.splice(photos.indexOf(p), 1); if (p.file) URL.revokeObjectURL(p.url); renderPhotos(); haptic("select"); touched();
+        } }));
+        g.appendChild(h("div", { class: "thumb", "data-key": String(p.key) }, kids));
+      });
+      if (photos.length < 6) g.appendChild(h("button", { type: "button", class: "add-tile", onclick: function () { refs.photoInput.click(); } }, [h("b", { text: "+" }), photos.length ? "Yana qo'shish" : "Rasm qo'shish"]));
+      updateSections();
+    }
+    function setVideo(file) {
+      if (!/^video\//.test(file.type)) return toast("Bu video fayl emas.");
+      if (file.size > 49 * 1024 * 1024) return toast("Video 49 MB dan katta. Qisqaroq video tanlang.");
+      if (video && video.url) URL.revokeObjectURL(video.url);
+      video = { key: ++keySeq, file: file, url: URL.createObjectURL(file), status: "uploading", progress: 0 };
+      renderVideo(); startVideoUpload(video); touched();
+    }
+    function startVideoUpload(v) {
+      if (v.old) return Promise.resolve();
+      v.status = "uploading"; v.progress = 0; v.token = null;
+      return upload("video", v.file, function (f) { v.progress = f; paintThumb(v); }).then(function (r) {
+        if (video !== v) return;
+        if (r.ok) { v.status = "done"; v.token = r.token; } else { v.status = "error"; v.error = r.error; toast(r.error || "Video yuklanmadi."); }
+        renderVideo();
+      });
+    }
+    function renderVideo() {
+      var box = refs.videoBox; box.innerHTML = "";
+      if (video) {
+        var v = video, kids;
+        if (v.old) kids = [h("span", { text: "Hozirgi video saqlanadi" })];
+        else {
+          kids = [h("video", { src: v.url, muted: true, playsinline: true, preload: "metadata" })];
+          if (v.status === "uploading") kids.push(h("div", { class: "veil" }, ["Yuklanmoqda"]), h("div", { class: "bar" }, [h("i", { style: "width:" + Math.round(v.progress * 100) + "%" })]));
+          if (v.status === "error") kids.push(h("button", { type: "button", class: "veil", onclick: function () { startVideoUpload(v); renderVideo(); } }, ["Yuklanmadi. Qayta urinish uchun bosing"]));
         }
+        kids.push(h("button", { type: "button", class: "remove", "aria-label": "Videoni o'chirish", text: "×", onclick: function () { if (v.url) URL.revokeObjectURL(v.url); video = null; renderVideo(); touched(); } }));
+        box.appendChild(h("div", { class: "thumb" + (v.old ? " oldvideo" : ""), "data-key": String(v.key) }, kids));
+      } else {
+        box.appendChild(h("button", { type: "button", class: "add-tile", onclick: function () { refs.videoInput.click(); } }, [h("b", { text: "+" }), "Video qo'shish"]));
       }
-      sendJson(res, 404, { ok: false, error: "Topilmadi" });
-    } catch (e) {
-      if (e instanceof SyntaxError) return sendJson(res, 400, { ok: false, error: "Ma'lumot noto'g'ri yuborildi." });
-      console.error("Mini App xatosi:", req.method, p, e);
-      if (!res.headersSent) sendJson(res, 500, { ok: false, error: "Serverda xatolik. Birozdan keyin qayta urinib ko'ring." });
     }
-  });
+    renderPhotos(); renderVideo();
 
-  server.listen(PORT, () => {
-    console.log(`📱 Mini App serveri ishga tushdi: port ${PORT}${WEBAPP_URL ? ` (${WEBAPP_URL})` : ""}`);
-  });
-  return server;
-}
+    // ---- Tekshirish va yuborish ----
+    function validate() {
+      var errs = {};
+      if (S.brandId === null) errs.brand = "Markani tanlang.";
+      else if (S.brandId === 0 && S.fullName.trim().length < 2) errs.model = "Marka va modelni yozing.";
+      else if (S.brandId > 0 && !S.modelId && !(S.customModel && S.modelText.trim())) errs.model = S.customModel ? "Model nomini yozing." : "Modelni tanlang.";
+      var yp = [];
+      if (!S.year) yp.push("yilini tanlang");
+      if (!S.salon && !digits(S.probeg)) yp.push("probegni yozing yoki «Yangi, salondan» ni yoqing");
+      if (yp.length) errs.year = yp.join(", ").replace(/^./, function (c) { return c.toUpperCase(); }) + ".";
+      if (!S.paint) errs.paint = "Kraska holatini tanlang.";
+      if (!S.color || (S.color === "__other" && !S.colorCustom.trim())) errs.color = "Rangini tanlang.";
+      if (!S.trans) errs.trans = "Korobka turini tanlang.";
+      if (!S.fuel) errs.fuel = "Yoqilg'i turini tanlang.";
+      var price = Number(digits(S.price));
+      if (!price) errs.price = "Narxni yozing.";
+      else if (price < 300) errs.price = "Narx juda past. Dollarda yozing, masalan 8500.";
+      else if (price > 500000) errs.price = "Narx juda baland. Real narxni dollarda yozing.";
+      var ph = digits(S.phone).replace(/^(998)+/, "");
+      if (ph.length > 9) ph = ph.slice(-9);
+      if (ph.length !== 9) errs.phone = "Raqamni to'liq yozing, masalan 90 123 45 67.";
+      if (!S.region) errs.region = "Viloyatni tanlang.";
+      if (photos.length === 0) errs.photos = "Kamida 1 ta rasm qo'shing.";
+      else if (photos.some(function (p) { return p.status === "error"; })) errs.photos = "Yuklanmagan rasmni qayta yuklang yoki o'chiring.";
+      if (video && video.status === "error") errs.video = "Video yuklanmadi. Qayta urinib ko'ring yoki o'chiring.";
+      return errs;
+    }
+    function showErrors(errs) {
+      ["brand", "model", "year", "paint", "color", "trans", "fuel", "price", "phone", "region", "photos", "video"].forEach(function (k) { setError(refs, k, errs[k] || ""); });
+      var first = app.querySelector(".field.invalid");
+      if (first) first.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    function uploading() { return photos.some(function (p) { return p.status === "uploading"; }) || (video && video.status === "uploading"); }
+    function waitUploads() {
+      if (!uploading()) return Promise.resolve();
+      return new Promise(function (resolve) { var t = setInterval(function () { if (!uploading()) { clearInterval(t); resolve(); } }, 300); });
+    }
+    function payload() {
+      return {
+        brandId: S.brandId, modelId: S.customModel ? null : S.modelId, modelText: S.customModel ? S.modelText : "",
+        fullName: S.fullName, year: S.year, salon: S.salon, probeg: S.probeg,
+        paint: S.paint, color: S.color === "__other" ? S.colorCustom : S.color, trans: S.trans, fuel: S.fuel,
+        price: S.price, phone: S.phone, region: S.region, history: S.history, barter: S.barter,
+        nasiya: S.nasiya, nasiyaTerms: S.nasiyaTerms, offer: S.offer, urgent: S.urgent,
+        photos: photos.map(function (p) { return p.ref || p.token; }),
+        video: video ? (video.old ? "old" : video.token) : null,
+      };
+    }
+    function submit() {
+      if (submitting) return;
+      var errs = validate();
+      if (Object.keys(errs).length) { showErrors(errs); haptic("error"); return; }
+      showErrors({});
+      submitting = true;
+      mainBusy(true, uploading() ? "Rasmlar yuklanmoqda..." : "Yuborilmoqda...");
+      waitUploads().then(function () {
+        var errs2 = validate();
+        if (Object.keys(errs2).length) { submitting = false; mainBusy(false); showErrors(errs2); haptic("error"); return; }
+        mainBusy(true, "Yuborilmoqda...");
+        send(true);
+      });
+    }
+    function send(allowRetry) {
+      var url = isEdit ? "/api/my/ads/" + editAd.id + "/edit" : "/api/ads";
+      return api(url, { json: payload() }).then(function (r) {
+        if (r.ok) { done(r.adId); return; }
+        if (r.code === "upload_expired" && allowRetry) {
+          mainBusy(true, "Rasmlar qayta yuklanmoqda...");
+          var jobs = photos.map(startPhotoUpload);
+          if (video) jobs.push(startVideoUpload(video));
+          return Promise.all(jobs).then(function () { return send(false); });
+        }
+        submitting = false; mainBusy(false); haptic("error");
+        if (r.code && ["pending", "limit", "banned", "not_subscribed"].indexOf(r.code) !== -1) {
+          setMain(null); app.innerHTML = "";
+          app.appendChild(messageScreen("E'lon berib bo'lmaydi", r.error, [h("button", { type: "button", class: "btn", text: "Mening e'lonlarim", onclick: function () { replaceTo("/my"); } })]));
+          return;
+        }
+        toast(r.error || "Yuborib bo'lmadi. Qayta urinib ko'ring.");
+      });
+    }
+    function done(adId) {
+      haptic("success");
+      if (!isEdit) { try { localStorage.removeItem(draftKey()); } catch (e) {} }
+      setClosingConfirm(false);
+      setMain(null);
+      // Yana e'lon bera oladimi — serverdan so'raymiz (admin va avtosalonlar uchun cheklov yo'q,
+      // oddiy foydalanuvchi esa oldingi e'loni tasdiqlanguncha kutadi — botdagi qoida)
+      (isEdit ? Promise.resolve() : refreshMe()).then(function () {
+        app.innerHTML = "";
+        var actions = [];
+        if (!isEdit && me.canPost) actions.push(h("button", { type: "button", class: "btn", onclick: openNewForm }, [icon("plus"), "Yana e'lon berish"]));
+        actions.push(h("button", { type: "button", class: "btn" + (actions.length ? " ghost" : ""), text: "Mening e'lonlarim", onclick: function () { replaceTo("/my"); } }));
+        actions.push(h("button", { type: "button", class: "btn ghost", text: "Bozorga qaytish", onclick: function () { replaceTo("/"); } }));
+        app.appendChild(messageScreen(
+          isEdit ? "Tahrir adminga yuborildi" : "E'lon adminga yuborildi",
+          isEdit ? "Tekshiruvdan so'ng kanaldagi e'lon yangilanadi." : "Tekshiruvdan so'ng kanalga joylanadi. Natijani bot sizga yozadi." + (adId ? " E'lon ID: " + adId + "." : "") +
+            (!me.canPost ? " Admin tasdiqlagach, keyingi e'lonni berishingiz mumkin." : ""),
+          actions,
+          "YUBORILDI"
+        ));
+      });
+    }
+    setMain(isEdit ? "Tahrirni yuborish" : "Adminga yuborish", submit);
+    updateSign();
+    updateSections();
+    return function () { setClosingConfirm(false); };
+  }
 
-module.exports = { startWebApp, validateInitData };
+  function screenEdit(m) {
+    var id = Number(m[1]);
+    currentParent = "/my/ad/" + id;
+    app.appendChild(skeleton());
+    var alive = true;
+    api("/api/my/ads/" + id).then(function (r) {
+      if (!alive) return;
+      app.innerHTML = "";
+      if (!r.ok) { app.appendChild(messageScreen("E'lon topilmadi", r.error || "")); return; }
+      if (r.ad.status !== "active") { app.appendChild(messageScreen("Tahrirlab bo'lmaydi", "Faqat kanalda faol turgan e'lonni tahrirlash mumkin.")); return; }
+      inner = screenSell(m, new URLSearchParams(), r.ad);
+    });
+    var inner = null;
+    return function () { alive = false; if (inner) inner(); };
+  }
+
+  // =====================================================================
+  // 4. MENING (e'lonlarim, saqlanganlar, obunalar)
+  // =====================================================================
+  function statusPill(it) {
+    if (it.status === "pending") return h("span", { class: "pill pending", text: "Tekshirilmoqda" });
+    if (it.status === "sold") return h("span", { class: "pill sold", text: "Sotilgan" + (it.soldPrice ? ": " + fmtPrice(it.soldPrice) : "") });
+    if (it.editPending) return h("span", { class: "pill pending", text: "Tahrir tekshirilmoqda" });
+    return h("span", { class: "pill active", text: "Kanalda faol" });
+  }
+  // Kanaldagi «Narxga baho» reaksiyalari: 🔥 arzon · 👍 normal · 🤔 qimmat
+  function votesLine(it) {
+    var v = it.votes;
+    if (!v) return null;
+    return h("div", { class: "votes", title: "Kanalda narxingizga berilgan baho: 🔥 arzon · 👍 normal · 🤔 qimmat", text: "Kanalda: 🔥 " + v.fire + " · 👍 " + v.ok + " · 🤔 " + v.think });
+  }
+  function screenMy(m, query) {
+    var tab = query.get("tab") || "ads";
+    app.appendChild(h("h1", { class: "page", text: "Mening" }));
+    var seg = h("div", { class: "seg", role: "tablist" }, [["ads", "E'lonlarim"], ["fav", "Saqlangan"], ["alerts", "Obunalar"]].map(function (t) {
+      return h("button", { type: "button", role: "tab", "aria-selected": t[0] === tab ? "true" : "false", text: t[1], onclick: function () { replaceTo("/my?tab=" + t[0]); } });
+    }));
+    var body = h("div");
+    app.appendChild(seg); app.appendChild(body);
+    body.appendChild(skeleton());
+
+    if (tab === "ads") {
+      api("/api/my/ads").then(function (r) {
+        body.innerHTML = "";
+        if (!r.ok) return body.appendChild(emptyState("Yuklab bo'lmadi", r.error || ""));
+        if (r.freeUps > 0) body.appendChild(h("div", { class: "notice" }, [h("span", { text: "🚀" }), h("div", null, [h("b", { text: r.freeUps + " ta bepul UP bonusingiz bor" }), h("span", { class: "s", text: "Faol e'lonni oching va «Bepul UP» ni bosing — e'lon kanalda yangi qatorga chiqadi." })])]));
+        if (!r.items.length) return body.appendChild(emptyState("Hali e'loningiz yo'q", "Moshinangizni bepul joylang — minglab xaridor kutmoqda.", "E'lon berish", function () { go("/new"); }, "car"));
+        body.appendChild(h("button", { type: "button", class: "btn new-ad", onclick: function () { go("/new"); } }, [icon("plus"), "Yangi e'lon berish"]));
+        var list = h("div", { class: "list" });
+        r.items.forEach(function (it) {
+          list.appendChild(h("button", { type: "button", class: "my-row", onclick: function () { go(it.status === "active" ? "/my/ad/" + it.id : "/ad/" + it.id); } }, [
+            it.photo ? h("img", { src: it.photo, alt: "" }) : h("span", { class: "noimg" }),
+            h("span", { class: "body" }, [h("div", { class: "t", text: it.title + (it.year ? ", " + it.year : "") }), h("div", { class: "p", text: fmtPrice(it.price) }), votesLine(it), statusPill(it)]),
+            h("span", { class: "chev" }, [icon("chev")]),
+          ]));
+        });
+        body.appendChild(list);
+      });
+    } else if (tab === "fav") {
+      api("/api/favorites").then(function (r) {
+        body.innerHTML = "";
+        if (!r.ok) return body.appendChild(emptyState("Yuklab bo'lmadi", r.error || ""));
+        if (!r.items.length) return body.appendChild(emptyState("Saqlanganlar yo'q", "E'londagi ♡ belgisini bosing — narxi tushsa, bot sizga darhol xabar beradi.", "Bozorga o'tish", function () { replaceTo("/"); }, "heart"));
+        var grid = h("div", { class: "cards" });
+        r.items.forEach(function (it) { grid.appendChild(adCard(it, function (x, on) { if (!on) grid.removeChild(grid.children[r.items.indexOf(x)]) && r.items.splice(r.items.indexOf(x), 1); })); });
+        body.appendChild(grid);
+      });
+    } else {
+      renderAlerts(body);
+    }
+  }
+  function renderAlerts(body) {
+    api("/api/alerts").then(function (r) {
+      body.innerHTML = "";
+      if (!r.ok) return body.appendChild(emptyState("Yuklab bo'lmadi", r.error || ""));
+      body.appendChild(h("p", { class: "page-sub", text: "Shu moshinalardan biri kanalga chiqishi bilan bot sizga yozadi." }));
+      if (r.items.length) {
+        var list = h("div", { class: "list" });
+        r.items.forEach(function (a) {
+          list.appendChild(listItem({
+            icon: "bell", color: "#ff9500", title: a.title, sub: a.maxPrice && a.maxPrice < 999999 ? fmtPrice(a.maxPrice) + " gacha" : "Istalgan narxda", chev: false,
+            end: "O'chirish",
+            onclick: function () {
+              confirmBox("«" + a.title + "» obunasini o'chirasizmi?").then(function (ok) {
+                if (!ok) return;
+                api("/api/alerts/" + a.id, { method: "DELETE" }).then(function (res) { if (res.ok) { toast("Obuna o'chirildi"); renderAlerts(body); } else toast(res.error || "Xatolik"); });
+              });
+            },
+          }));
+        });
+        body.appendChild(list);
+      } else {
+        body.appendChild(emptyState("Obunalar yo'q", "Qidirayotgan moshinangizni qo'shing — bozorga chiqsa birinchi bo'lib bilasiz.", null, null, "bell"));
+      }
+      body.appendChild(h("div", { class: "actions" }, [h("button", { type: "button", class: "btn secondary", onclick: function () { addAlertSheet(function () { renderAlerts(body); }); } }, [icon("plus"), "Obuna qo'shish"])]));
+    });
+  }
+  function addAlertSheet(onDone) {
+    var st = { brandId: null, modelId: null, maxPrice: "" };
+    var modelBox = h("div");
+    function renderModels() {
+      modelBox.innerHTML = "";
+      var b = st.brandId ? brandById(st.brandId) : null;
+      if (!b) return;
+      modelBox.appendChild(h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-amodel", text: "Model" }),
+        chipGroup("lbl-amodel", function () { return b.models; }, function (x) { return st.modelId === x.id; }, function (x) { st.modelId = x.id; })]));
+    }
+    openSheet("Obuna qo'shish", [
+      h("div", { class: "group" }, [
+        h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-abrand", text: "Marka" }),
+          chipGroup("lbl-abrand", function () { return catalog.brands; }, function (b) { return st.brandId === b.id; }, function (b) { st.brandId = b.id; st.modelId = null; renderModels(); })]),
+        modelBox,
+        h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-maxPrice", text: "Narxi ko'pi bilan ($, ixtiyoriy)" }), textInput(st, "maxPrice", { inputmode: "numeric", placeholder: "Masalan: 9000" })]),
+      ]),
+      h("div", { class: "actions" }, [h("button", { type: "button", class: "btn", text: "Obuna bo'lish", onclick: function () {
+        if (!st.modelId) return toast("Marka va modelni tanlang");
+        api("/api/alerts", { json: { modelId: st.modelId, maxPrice: digits(st.maxPrice) || 999999 } }).then(function (r) {
+          if (!r.ok) return toast(r.error || "Xatolik");
+          closeSheet(); haptic("success"); toast("Obuna qo'shildi"); onDone();
+        });
+      } })]),
+    ]);
+  }
+
+  // ---------- Bitta e'lonni boshqarish ----------
+  function screenManage(m) {
+    var id = Number(m[1]);
+    app.appendChild(skeleton());
+    var alive = true;
+    function load() {
+      Promise.all([api("/api/my/ads"), refreshMe()]).then(function (res) {
+        if (!alive) return;
+        var r = res[0];
+        app.innerHTML = "";
+        var it = r.ok ? r.items.find(function (x) { return x.id === id; }) : null;
+        if (!it) { app.appendChild(messageScreen("E'lon topilmadi", "Bu e'lon o'chirilgan yoki sizga tegishli emas.")); return; }
+        app.appendChild(h("div", { class: "list", style: "margin-top:4px" }, [h("button", { type: "button", class: "my-row", onclick: function () { go("/ad/" + id); } }, [
+          it.photo ? h("img", { src: it.photo, alt: "" }) : h("span", { class: "noimg" }),
+          h("span", { class: "body" }, [h("div", { class: "t", text: it.title + (it.year ? ", " + it.year : "") }), h("div", { class: "p", text: fmtPrice(it.price) }), votesLine(it), statusPill(it)]),
+          h("span", { class: "chev" }, [icon("chev")]),
+        ])]));
+        if (it.status !== "active") { app.appendChild(h("p", { class: "page-sub", style: "margin-top:12px", text: it.status === "pending" ? "E'lon admin tekshiruvida. Tasdiqlangach shu yerdan boshqarasiz." : "E'lon sotilgan deb belgilangan." })); return; }
+        if (it.editPending) app.appendChild(h("div", { class: "notice", style: "margin-top:12px" }, [h("span", { text: "⏳" }), h("div", null, [h("b", { text: "Tahriringiz admin tekshiruvida" }), h("span", { class: "s", text: "Tasdiqlangach kanaldagi e'lon yangilanadi." })])]));
+
+        app.appendChild(h("p", { class: "group-title", text: "Amallar" }));
+        var items = [
+          listItem({ icon: "check", color: "#34c759", title: "Sotildi deb belgilash", sub: "Admin tasdiqlagach kanalda «Sotildi» bo'ladi", onclick: soldSheet }),
+          listItem({ icon: "down", color: "#ff9500", title: "Narxni o'zgartirish", sub: "Narx tushsa, saqlaganlarga xabar boradi", onclick: priceSheet }),
+          listItem({ icon: "edit", color: "#007aff", title: "To'liq tahrirlash", sub: "Rasm, matn va boshqa ma'lumotlar", onclick: function () { go("/edit/" + id); } }),
+          listItem({ icon: "star", color: "#ffb300", title: "VIP qilish", sub: "Kanal tepasiga qadaladi, " + fmtNum(me.vip.price) + " so'm", onclick: function () { go("/vip/" + id); } }),
+        ];
+        if (me.freeUps > 0) items.push(listItem({ icon: "up", color: "#af52de", title: "Bepul UP", sub: "E'lon kanalda yangi qatorga chiqadi", end: me.freeUps + " ta", onclick: doUp }));
+        if (it.channelUrl) items.push(listItem({ icon: "eye", color: "#8e8e93", title: "Kanalda ko'rish", onclick: function () { openLink(it.channelUrl); } }));
+        app.appendChild(h("div", { class: "list" }, items));
+
+        function soldSheet() {
+          var st = { price: "" };
+          function send(withPrice) {
+            api("/api/my/ads/" + id + "/sold", { json: { price: withPrice ? digits(st.price) : null } }).then(function (res) {
+              if (!res.ok) return toast(res.error || "Xatolik");
+              closeSheet(); haptic("success");
+              toast("So'rov adminga yuborildi. Tasdiqlangach kanalda belgilanadi.");
+            });
+          }
+          openSheet("Moshina qanchaga sotildi?", [
+            h("p", { class: "page-sub", text: "Real sotuv narxi boshqa sotuvchilarga bozor narxini bilishda yordam beradi. Aytish shart emas." }),
+            h("div", { class: "group" }, [h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-soldp", text: "Sotilgan narx, $" }), textInput(st, "price", { inputmode: "numeric", placeholder: "Masalan: " + digits(it.price), "aria-labelledby": "lbl-soldp" })])]),
+            h("div", { class: "actions" }, [
+              h("button", { type: "button", class: "btn", text: "Yuborish", onclick: function () { if (!digits(st.price)) return toast("Narxni yozing yoki «Narxsiz yuborish» ni bosing"); send(true); } }),
+              h("button", { type: "button", class: "btn ghost", text: "Narxsiz yuborish", onclick: function () { send(false); } }),
+            ]),
+          ]);
+        }
+        function priceSheet() {
+          var st = { price: "" };
+          openSheet("Yangi narx", [
+            h("p", { class: "page-sub", text: "Hozirgi narx: " + fmtPrice(it.price) + ". Kanaldagi e'lon darhol yangilanadi." }),
+            h("div", { class: "group" }, [h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-newp", text: "Yangi narx, $" }), textInput(st, "price", { inputmode: "numeric", placeholder: "Masalan: 8200", "aria-labelledby": "lbl-newp" })])]),
+            h("div", { class: "actions" }, [h("button", { type: "button", class: "btn", text: "Narxni o'zgartirish", onclick: function (e) {
+              var btn = e.currentTarget; btn.disabled = true; btn.textContent = "Kanal yangilanmoqda...";
+              api("/api/my/ads/" + id + "/price", { json: { price: st.price } }).then(function (res) {
+                btn.disabled = false; btn.textContent = "Narxni o'zgartirish";
+                if (!res.ok) return toast(res.error || "Xatolik");
+                closeSheet(); haptic("success");
+                toast(res.dropped ? "Narx tushirildi. Kanalga «Qaynoq narx» chiqdi, saqlaganlarga xabar ketdi." : "Narx o'zgartirildi.");
+                load();
+              });
+            } })]),
+          ]);
+        }
+        function doUp() {
+          confirmBox("E'lonni kanalda yangi qatorga ko'taramizmi? 1 ta bonus ishlatiladi.").then(function (ok) {
+            if (!ok) return;
+            api("/api/my/ads/" + id + "/up", { json: {} }).then(function (res) {
+              if (!res.ok) return toast(res.error || "Xatolik");
+              haptic("success"); toast("E'lon kanalda yangi qatorga chiqdi!"); load();
+            });
+          });
+        }
+      });
+    }
+    load();
+    return function () { alive = false; };
+  }
+
+  // ---------- VIP ----------
+  function screenVip(m) {
+    var id = Number(m[1]);
+    currentParent = "/my/ad/" + id;
+    var shot = null; // { url, token, status }
+    app.appendChild(h("h1", { class: "page", text: "VIP e'lon" }));
+    app.appendChild(h("p", { class: "page-sub", text: "E'loningiz kanal tepasiga qadaladi va «VIP» belgisi bilan ajralib turadi — uni ko'proq xaridor ko'radi." }));
+    app.appendChild(h("div", { class: "result" }, [h("div", { class: "lbl", text: "Narxi" }), h("div", { class: "big", text: fmtNum(me.vip.price) + " so'm" })]));
+    app.appendChild(h("p", { class: "group-title", text: "To'lov tartibi" }));
+    app.appendChild(h("div", { class: "group" }, [h("div", { class: "field" }, [
+      h("ol", { class: "steps" }, [
+        h("li", { text: "Quyidagi kartaga " + fmtNum(me.vip.price) + " so'm o'tkazing." }),
+        h("li", { text: "To'lov chekining skrinshotini oling." }),
+        h("li", { text: "Skrinshotni shu yerga yuklab, «Chekni yuborish» ni bosing." }),
+      ]),
+      h("div", { class: "copy-box", style: "margin-top:12px" }, [h("code", { text: me.vip.card }), h("button", { type: "button", text: "Nusxa", onclick: function () { copyText(me.vip.card.replace(/\s/g, ""), "Karta raqami nusxalandi"); } })]),
+      h("p", { class: "help", text: "Karta egasi: " + me.vip.cardName }),
+    ])]));
+    var box = h("div", { class: "photos" });
+    var input = h("input", { type: "file", accept: "image/*", class: "file-input", "aria-label": "Chek rasmi" });
+    input.addEventListener("change", function () {
+      var file = input.files[0]; input.value = "";
+      if (!file) return;
+      shot = { url: URL.createObjectURL(file), status: "uploading" };
+      render();
+      compressImage(file).then(function (b) { return upload("photo", b); }).then(function (r) {
+        if (!shot) return;
+        if (r.ok) { shot.status = "done"; shot.token = r.token; } else { shot.status = "error"; toast(r.error || "Yuklanmadi"); }
+        render();
+      });
+    });
+    function render() {
+      box.innerHTML = "";
+      if (shot) {
+        box.appendChild(h("div", { class: "thumb" }, [h("img", { src: shot.url, alt: "Chek" }),
+          shot.status === "uploading" ? h("div", { class: "veil" }, ["Yuklanmoqda"]) : null,
+          shot.status === "error" ? h("div", { class: "veil" }, ["Yuklanmadi"]) : null,
+          h("button", { type: "button", class: "remove", "aria-label": "O'chirish", text: "×", onclick: function () { shot = null; render(); } })]));
+      } else box.appendChild(h("button", { type: "button", class: "add-tile", onclick: function () { input.click(); } }, [h("b", { text: "+" }), "Chek rasmi"]));
+    }
+    render();
+    app.appendChild(h("p", { class: "group-title", text: "To'lov cheki" }));
+    app.appendChild(h("div", { class: "group" }, [h("div", { class: "field" }, [box, input])]));
+    var busy = false;
+    setMain("Chekni yuborish", function () {
+      if (busy) return;
+      if (!shot || shot.status !== "done") return toast(shot && shot.status === "uploading" ? "Chek yuklanmoqda, biroz kuting" : "Avval chek rasmini yuklang");
+      busy = true; mainBusy(true);
+      api("/api/my/ads/" + id + "/vip", { json: { token: shot.token } }).then(function (r) {
+        busy = false; mainBusy(false);
+        if (!r.ok) return toast(r.error || "Xatolik");
+        haptic("success"); setMain(null); app.innerHTML = "";
+        app.appendChild(messageScreen("Chek adminga yuborildi", "To'lov tekshirilgach, e'loningiz VIP qilinib kanal tepasiga qadaladi. Natijani bot sizga yozadi.",
+          [h("button", { type: "button", class: "btn", text: "Mening e'lonlarim", onclick: function () { replaceTo("/my"); } })], "YUBORILDI"));
+      });
+    });
+  }
+
+  // =====================================================================
+  // 5. XIZMATLAR
+  // =====================================================================
+  function screenServices() {
+    app.appendChild(h("h1", { class: "page", text: "Xizmatlar" }));
+    app.appendChild(h("p", { class: "group-title", text: "Hisob-kitob" }));
+    app.appendChild(h("div", { class: "list" }, [
+      listItem({ icon: "tag", color: "#34c759", title: "Moshina narxini aniqlash", sub: "Bazadagi real e'lonlar asosida", onclick: function () { go("/evaluate"); } }),
+      listItem({ icon: "calc", color: "#5856d6", title: "Bo'lib to'lashni hisoblash", sub: "Oylik to'lov va ustama", onclick: function () { go("/credit"); } }),
+    ]));
+    app.appendChild(h("p", { class: "group-title", text: "Bonus va hamkorlik" }));
+    app.appendChild(h("div", { class: "list" }, [
+      listItem({ icon: "gift", color: "#ff2d55", title: "Bepul VIP (UP)", sub: "Do'st taklif qiling — har 5 tasiga 1 ta UP", end: me.freeUps ? me.freeUps + " ta" : null, onclick: function () { go("/referral"); } }),
+      listItem({ icon: "building", color: "#007aff", title: me.isDealer ? "Avtosalon: " + me.dealerName : "Avtosalon bo'lish", sub: me.isDealer ? "Cheksiz e'lon va «Ishonchli sotuvchi» belgisi" : "Doimiy sotuvchilar uchun bepul", onclick: function () { go("/dealer"); } }),
+      listItem({ icon: "megaphone", color: "#ff9500", title: "Salon reklamasi", sub: "Faqat avtosalonlar, kuniga 2 ta", onclick: function () { go("/salon-ad"); } }),
+    ]));
+    app.appendChild(h("p", { class: "group-title", text: "Kanal" }));
+    app.appendChild(h("div", { class: "list" }, [listItem({ icon: "send", color: "#2aabee", title: "Avto Bozor kanali", sub: "Barcha e'lonlar bir joyda", onclick: function () { openLink(me.channelUrl); } })]));
+  }
+
+  // ---------- Baholash ----------
+  function screenEvaluate() {
+    var st = { brandId: null, modelId: null, text: "", year: "" };
+    var refs = {};
+    app.appendChild(h("h1", { class: "page", text: "Moshina narxini aniqlash" }));
+    app.appendChild(h("p", { class: "page-sub", text: "Kanalimizdagi faol va sotilgan e'lonlar asosida o'rtacha bozor narxini hisoblaymiz." }));
+    var modelBox = h("div", { class: "slot" });
+    var resultBox = h("div");
+    function renderModels() {
+      modelBox.innerHTML = "";
+      if (st.brandId === null) return;
+      if (st.brandId === 0) { modelBox.appendChild(field(refs, "model", "Marka va model", textInput(st, "text", { placeholder: "Masalan: Changan UNI-V", maxlength: "60", "aria-labelledby": "lbl-model" }))); return; }
+      var b = brandById(st.brandId);
+      modelBox.appendChild(field(refs, "model", "Model", chipGroup("lbl-model", function () { return b.models; }, function (x) { return st.modelId === x.id; }, function (x) { st.modelId = x.id; setError(refs, "model", ""); }, { collapse: 12 })));
+    }
+    app.appendChild(h("div", { class: "group", style: "margin-top:12px" }, [
+      field(refs, "brand", "Marka", chipGroup("lbl-brand", function () { return catalog.brands.concat([{ id: 0, name: "Boshqa marka", dashed: true }]); }, function (b) { return st.brandId === b.id; }, function (b) { st.brandId = b.id; st.modelId = null; setError(refs, "brand", ""); renderModels(); }, { collapse: 9 })),
+      modelBox,
+      field(refs, "year", "Yili", selectBox(st, "year", yearOptions(), "Tanlang", function () { setError(refs, "year", ""); })),
+    ]));
+    app.appendChild(resultBox);
+    var busy = false;
+    setMain("Narxini aniqlash", function () {
+      if (busy) return;
+      if (st.brandId === null) return setError(refs, "brand", "Markani tanlang.");
+      if (st.brandId > 0 && !st.modelId) return setError(refs, "model", "Modelni tanlang.");
+      if (st.brandId === 0 && st.text.trim().length < 2) return setError(refs, "model", "Marka va modelni yozing.");
+      if (!st.year) return setError(refs, "year", "Yilini tanlang.");
+      busy = true; mainBusy(true, "Hisoblanmoqda...");
+      api("/api/evaluate", { json: { modelId: st.modelId, text: st.text, year: st.year } }).then(function (r) {
+        busy = false; mainBusy(false);
+        resultBox.innerHTML = "";
+        if (!r.ok) return toast(r.error || "Xatolik");
+        if (!r.found) {
+          resultBox.appendChild(h("div", { class: "result" }, [h("b", { text: r.year + " yil " + r.title }), h("p", { class: "lbl", text: "Bazamizda bu moshina uchun hali yetarli ma'lumot yo'q. Narx holatiga qarab turlicha bo'lishi mumkin." })]));
+        } else {
+          resultBox.appendChild(h("div", { class: "result" }, [
+            h("div", { class: "lbl", text: r.year + " yil " + r.title + ", bozordagi o'rtacha narx" }),
+            h("div", { class: "tag-price", text: fmtNum(r.minPrice) + " – " + fmtNum(r.maxPrice) + " $" }),
+            h("p", { class: "lbl", text: r.count + " ta e'lon asosida. Aniq narx kraska, probeg va umumiy holatga qarab o'zgaradi." }),
+            st.modelId ? h("button", { type: "button", class: "btn secondary", style: "margin-top:10px", text: "Shu moshinani sotish", onclick: function () {
+              var mm = modelById(st.modelId); go("/new?brandId=" + mm.brand.id + "&modelId=" + mm.id + "&year=" + st.year);
+            } }) : null,
+          ]));
+        }
+        resultBox.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  }
+
+  // ---------- Kredit kalkulyatori (botdagi formulalar bilan bir xil) ----------
+  function screenCredit() {
+    var st = { cur: "usd", price: "", down: "", months: "12", rate: "0" };
+    app.appendChild(h("h1", { class: "page", text: "Bo'lib to'lash kalkulyatori" }));
+    var curSeg = h("div", { class: "seg", role: "tablist", "aria-label": "Valyuta" });
+    function renderCur() {
+      curSeg.innerHTML = "";
+      [["usd", "Dollar ($)"], ["uzs", "So'm"]].forEach(function (c) {
+        curSeg.appendChild(h("button", { type: "button", role: "tab", "aria-selected": st.cur === c[0] ? "true" : "false", text: c[1], onclick: function () { st.cur = c[0]; renderCur(); calc(); } }));
+      });
+      if (refs.priceSuffix) { refs.priceSuffix.textContent = sign(); refs.downSuffix.textContent = sign(); }
+    }
+    var refs = {};
+    function sign() { return st.cur === "uzs" ? "so'm" : "$"; }
+    app.appendChild(curSeg);
+    refs.priceSuffix = h("span", { text: sign() }); refs.downSuffix = h("span", { text: sign() });
+    renderCur();
+    var monthsChips = chipGroup("lbl-months", function () { return ["6", "12", "18", "24", "36", "48", "60"].map(function (n) { return { name: n + " oy", v: n }; }); }, function (x) { return st.months === x.v; }, function (x) { st.months = x.v; monthsInput.value = x.v; calc(); });
+    var monthsInput = textInput(st, "months", { inputmode: "numeric", maxlength: "3", "aria-label": "Oylar soni" }, function () { monthsChips.rerender(); calc(); });
+    app.appendChild(h("div", { class: "group" }, [
+      h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-price", text: "Moshina narxi" }), h("div", { class: "input-suffix" }, [textInput(st, "price", { inputmode: "numeric", placeholder: "12000" }, calc), refs.priceSuffix])]),
+      h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-down", text: "Boshlang'ich to'lov" }), h("div", { class: "input-suffix" }, [textInput(st, "down", { inputmode: "numeric", placeholder: "0" }, calc), refs.downSuffix])]),
+      h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-months", text: "Muddat" }), monthsChips, h("div", { class: "reveal" }, [h("div", { class: "input-suffix" }, [monthsInput, h("span", { text: "oy" })])])]),
+      h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-rate", text: "Yillik foiz" }), h("div", { class: "input-suffix" }, [textInput(st, "rate", { inputmode: "decimal", placeholder: "0" }, calc), h("span", { text: "%" })]), h("p", { class: "help", text: "Sotuvchi foizsiz bersa 0 qoldiring. Bankdan olsangiz, bank foizini yozing." })]),
+    ]));
+    var out = h("div", { class: "result", "aria-live": "polite" });
+    app.appendChild(out);
+    function fmt(n) { var r = Math.round(n); return r.toLocaleString("en-US").replace(/,/g, " "); }
+    var lastCalc = null; // sahifadan chiqqanda oxirgi hisob logga yoziladi
+    function calc() {
+      out.innerHTML = "";
+      lastCalc = null;
+      var price = Number(digits(st.price)), down = Number(digits(st.down)), months = Number(digits(st.months));
+      var rate = parseFloat(String(st.rate).replace(",", ".").replace(/[^\d.]/g, "")) || 0;
+      if (!price) { out.appendChild(h("p", { class: "lbl", text: "Narx, boshlang'ich to'lov va muddatni kiriting — natija shu yerda chiqadi." })); return; }
+      if (down >= price) { out.appendChild(h("p", { class: "lbl", text: "Boshlang'ich to'lov moshina narxidan kam bo'lishi kerak." })); return; }
+      if (!months || months > 120) { out.appendChild(h("p", { class: "lbl", text: "Muddat 1 dan 120 oygacha bo'lishi kerak." })); return; }
+      var loan = price - down, monthly, total;
+      if (rate === 0) { monthly = loan / months; total = loan; }
+      else { var r = rate / 100 / 12; monthly = (loan * r * Math.pow(1 + r, months)) / (Math.pow(1 + r, months) - 1); total = monthly * months; }
+      var s = sign();
+      out.appendChild(h("div", { class: "lbl", text: "Oylik to'lov" }));
+      out.appendChild(h("div", { class: "big", text: fmt(monthly) + " " + s }));
+      var dl = h("dl", { class: "specs" });
+      [["Kreditga olinadi", fmt(loan) + " " + s], ["Muddat", months + " oy"], ["Yillik foiz", rate + "%"]].concat(rate > 0
+        ? [["Ustama (foiz)", fmt(total - loan) + " " + s], ["Jami to'lanadi", fmt(total + down) + " " + s]]
+        : [["Ustama", "Yo'q, foizsiz"]]).forEach(function (row) { dl.appendChild(h("dt", { text: row[0] })); dl.appendChild(h("dd", { text: row[1] })); });
+      out.appendChild(dl);
+      out.appendChild(h("p", { class: "help", text: "Bu taxminiy hisob. Aniq shartlarni bank yoki sotuvchi bilan aniqlashtiring." }));
+      lastCalc = { cur: st.cur, price: price, down: down, months: months, rate: rate };
+    }
+    calc();
+    return function () { if (lastCalc) logEvent("credit", lastCalc); };
+  }
+
+  // ---------- Referal ----------
+  function screenReferral() {
+    app.appendChild(h("h1", { class: "page", text: "Bepul VIP (UP)" }));
+    app.appendChild(h("p", { class: "page-sub", text: "Do'stlaringizni botga taklif qiling: har 5 ta do'st uchun e'loningizni kanalda tekinga yangi qatorga ko'tarasiz." }));
+    var body = h("div"); body.appendChild(skeleton()); app.appendChild(body);
+    api("/api/referral").then(function (r) {
+      body.innerHTML = "";
+      if (!r.ok) return body.appendChild(emptyState("Yuklab bo'lmadi", r.error || ""));
+      var doneInCycle = 5 - r.left;
+      body.appendChild(h("div", { class: "stat-row", style: "margin-top:12px" }, [
+        h("div", { class: "stat" }, [h("b", { text: String(r.referralCount) }), h("span", { text: "taklif qilgan do'stlar" })]),
+        h("div", { class: "stat" }, [h("b", { text: String(r.freeUps) }), h("span", { text: "ishlatilmagan UP bonus" })]),
+      ]));
+      body.appendChild(h("div", { class: "result" }, [
+        h("div", { class: "lbl", text: "Keyingi bonusgacha " + r.left + " ta do'st qoldi" }),
+        h("div", { class: "progress", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "5", "aria-valuenow": String(doneInCycle) }, [h("i", { style: "width:" + (doneInCycle / 5 * 100) + "%" })]),
+        h("p", { class: "help", text: "Taklif havolangiz:" }),
+        h("div", { class: "copy-box" }, [h("code", { text: r.refLink }), h("button", { type: "button", text: "Nusxa", onclick: function () { copyText(r.refLink, "Havola nusxalandi"); } })]),
+      ]));
+      if (r.freeUps > 0) body.appendChild(h("div", { class: "actions" }, [h("button", { type: "button", class: "btn secondary", text: "Bonusni ishlatish: Mening e'lonlarim", onclick: function () { go("/my"); } })]));
+      setMain("Do'stlarga yuborish", function () { logEvent("share_ref"); openLink(r.shareUrl); });
+    });
+  }
+
+  // ---------- Avtosalon bo'lish ----------
+  function screenDealer() {
+    app.appendChild(h("h1", { class: "page", text: "Avtosalon bo'lish" }));
+    if (me.isDealer) {
+      app.appendChild(messageScreen("Siz tasdiqlangan avtosalonsiz", (me.dealerName || "") + " nomi e'lonlaringizda «Ishonchli sotuvchi» belgisi bilan chiqadi. Cheksiz e'lon berishingiz va salon reklamasi joylashingiz mumkin.",
+        [h("button", { type: "button", class: "btn", text: "Salon reklamasi berish", onclick: function () { go("/salon-ad"); } })]));
+      return;
+    }
+    var refs = {};
+    var st = { name: me.dealerName || "", phone: me.dealerPhone ? String(me.dealerPhone).replace(/^998/, "") : (me.lastPhone ? String(me.lastPhone).replace(/^998/, "") : "") };
+    if (me.dealerPending) app.appendChild(h("div", { class: "notice" }, [h("span", { text: "⏳" }), h("div", null, [h("b", { text: "Arizangiz ko'rib chiqilmoqda" }), h("span", { class: "s", text: "Tasdiqlangach bot sizga xabar beradi. Ma'lumot o'zgargan bo'lsa, qayta yuborishingiz mumkin." })])]));
+    app.appendChild(h("div", { class: "result", style: "margin-top:8px" }, [
+      h("b", { text: "Doimiy sotuvchilar uchun bepul imkoniyatlar" }),
+      h("ul", { class: "steps" }, [h("li", { text: "E'lonlarda «Ishonchli sotuvchi» belgisi" }), h("li", { text: "Cheksiz e'lon" + (me.adLimit ? " (oddiy foydalanuvchiga " + me.adLimit + " ta)" : "") }), h("li", { text: "Aksiya va kredit takliflari uchun alohida maydon" }), h("li", { text: "Kanalda salon reklamasi, kuniga 2 ta" })]),
+    ]));
+    app.appendChild(h("div", { class: "group", style: "margin-top:16px" }, [
+      field(refs, "name", "Salon yoki biznes nomi", textInput(st, "name", { placeholder: "Masalan: Avto Lider", maxlength: "80" }, function () { setError(refs, "name", ""); })),
+      field(refs, "phone", "Bog'lanish uchun telefon", textInput(st, "phone", { type: "tel", inputmode: "tel", placeholder: "90 123 45 67", maxlength: "28" }, function () { setError(refs, "phone", ""); })),
+    ]));
+    var busy = false;
+    setMain("Ariza yuborish", function () {
+      if (busy) return;
+      if (st.name.trim().length < 2) return setError(refs, "name", "Nomni yozing.");
+      var ph = digits(st.phone).replace(/^(998)+/, ""); if (ph.length > 9) ph = ph.slice(-9);
+      if (ph.length !== 9) return setError(refs, "phone", "Raqamni to'liq yozing, masalan 90 123 45 67.");
+      busy = true; mainBusy(true);
+      api("/api/dealer", { json: st }).then(function (r) {
+        busy = false; mainBusy(false);
+        if (!r.ok) return toast(r.error || "Xatolik");
+        haptic("success"); setMain(null); me.dealerPending = true; me.dealerName = st.name;
+        app.innerHTML = "";
+        app.appendChild(messageScreen("Ariza adminga yuborildi", "Tez orada ko'rib chiqamiz. Tasdiqlangach bot sizga xabar beradi va barcha imkoniyatlar ochiladi.", [h("button", { type: "button", class: "btn", text: "Xizmatlarga qaytish", onclick: function () { replaceTo("/services"); } })], "YUBORILDI"));
+      });
+    });
+  }
+
+  // ---------- Salon reklamasi ----------
+  function screenSalonAd() {
+    app.appendChild(h("h1", { class: "page", text: "Salon reklamasi" }));
+    var body = h("div"); body.appendChild(skeleton()); app.appendChild(body);
+    var alive = true;
+    api("/api/salon-ad").then(function (r) {
+      if (!alive) return;
+      body.innerHTML = "";
+      if (!r.ok) return body.appendChild(emptyState("Yuklab bo'lmadi", r.error || ""));
+      if (!r.allowed) {
+        body.appendChild(messageScreen(r.code === "limit" ? "Bugungi limit tugadi" : "Faqat avtosalonlar uchun", r.message,
+          r.code === "not_dealer" ? [h("button", { type: "button", class: "btn", text: "Avtosalon bo'lish", onclick: function () { replaceTo("/dealer"); } })] : []));
+        return;
+      }
+      var refs = {};
+      var st = { text: "", location: "", phone: r.dealerPhone ? "+" + r.dealerPhone : "" };
+      var media = null;
+      body.appendChild(h("p", { class: "page-sub", text: (r.dealerName || "Saloningiz") + " — bugun yana " + (2 - r.todayCount) + " ta reklama bera olasiz. Admin tasdiqlagach kanalga chiqadi." }));
+      var mediaBox = h("div", { class: "photos" });
+      var input = h("input", { type: "file", accept: "image/*,video/*", class: "file-input", "aria-label": "Rasm yoki video" });
+      input.addEventListener("change", function () {
+        var file = input.files[0]; input.value = "";
+        if (!file) return;
+        var isVideo = /^video\//.test(file.type);
+        if (isVideo && file.size > 49 * 1024 * 1024) return toast("Video 49 MB dan katta.");
+        media = { url: URL.createObjectURL(file), isVideo: isVideo, status: "uploading" };
+        renderMedia(); setError(refs, "media", "");
+        (isVideo ? Promise.resolve(file) : compressImage(file)).then(function (b) { return upload(isVideo ? "video" : "photo", b); }).then(function (res) {
+          if (!media) return;
+          if (res.ok) { media.status = "done"; media.token = res.token; } else { media.status = "error"; toast(res.error || "Yuklanmadi"); }
+          renderMedia();
+        });
+      });
+      function renderMedia() {
+        mediaBox.innerHTML = "";
+        if (media) {
+          mediaBox.appendChild(h("div", { class: "thumb" }, [media.isVideo ? h("video", { src: media.url, muted: true, playsinline: true, preload: "metadata" }) : h("img", { src: media.url, alt: "" }),
+            media.status === "uploading" ? h("div", { class: "veil" }, ["Yuklanmoqda"]) : null,
+            media.status === "error" ? h("div", { class: "veil" }, ["Yuklanmadi"]) : null,
+            h("button", { type: "button", class: "remove", "aria-label": "O'chirish", text: "×", onclick: function () { media = null; renderMedia(); } })]));
+        } else mediaBox.appendChild(h("button", { type: "button", class: "add-tile", onclick: function () { input.click(); } }, [h("b", { text: "+" }), "Rasm yoki video"]));
+      }
+      renderMedia();
+      body.appendChild(h("div", { class: "group" }, [
+        field(refs, "text", "Reklama matni", textArea(st, "text", { placeholder: "Aksiya, kredit shartlari, bonuslar. Masalan: Kia Sportage 60 oygacha 0% foizli bo'lib to'lash!", maxlength: "900", rows: "5" }, function () { setError(refs, "text", ""); })),
+        field(refs, "media", "Video yoki rasm", h("div", null, [mediaBox, input]), "Video ko'proq e'tibor tortadi. 1 ta video yoki 1 ta rasm."),
+        field(refs, "location", "Salon manzili", textInput(st, "location", { placeholder: "Masalan: Samarqand, Gazli shossesi", maxlength: "200" })),
+        field(refs, "phone", "Telefon", textInput(st, "phone", { placeholder: "+998 90 123 45 67", maxlength: "100" }), "Bir nechta raqamni vergul bilan yozish mumkin."),
+      ]));
+      var busy = false;
+      setMain("Reklamani yuborish", function () {
+        if (busy) return;
+        if (st.text.trim().length < 10) return setError(refs, "text", "Matn juda qisqa.");
+        if (!media) return setError(refs, "media", "Rasm yoki video qo'shing.");
+        if (media.status !== "done") return toast(media.status === "uploading" ? "Fayl yuklanmoqda, biroz kuting" : "Faylni qayta yuklang");
+        busy = true; mainBusy(true);
+        api("/api/salon-ad", { json: { text: st.text, location: st.location, phone: st.phone, media: media.token } }).then(function (res) {
+          busy = false; mainBusy(false);
+          if (!res.ok) return toast(res.error || "Xatolik");
+          haptic("success"); setMain(null); app.innerHTML = "";
+          app.appendChild(messageScreen("Reklama adminga yuborildi", "Tekshiruvdan so'ng kanalga joylanadi.", [h("button", { type: "button", class: "btn", text: "Xizmatlarga qaytish", onclick: function () { replaceTo("/services"); } })], "YUBORILDI"));
+        });
+      });
+    });
+    return function () { alive = false; };
+  }
+
+  // =====================================================================
+  // Navigatsiya
+  // =====================================================================
+  var TABS = [
+    { key: "market", path: "/", label: "Bozor", icon: "search" },
+    { key: "sell", path: "/new", label: "E'lon berish", icon: "plus", sell: true },
+    { key: "my", path: "/my", label: "Mening", icon: "user" },
+    { key: "services", path: "/services", label: "Xizmatlar", icon: "grid" },
+  ];
+  function renderTabbar(activeKey) {
+    tabbar.innerHTML = "";
+    var inner = h("div", { class: "tabbar-in" });
+    TABS.forEach(function (t) {
+      inner.appendChild(h("button", { type: "button", class: "tab" + (t.sell ? " sell" : ""), "aria-current": t.key === activeKey ? "page" : null, onclick: function () {
+        if (t.key === activeKey) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+        haptic("select");
+        if (t.sell) go(t.path); else replaceTo(t.path);
+      } }, [t.sell ? h("span", { class: "dot" }, [icon(t.icon)]) : icon(t.icon), t.label]));
+    });
+    tabbar.appendChild(inner);
+  }
+
+  var ROUTES = [
+    [/^\/$/, screenMarket, { tab: "market" }],
+    [/^\/ad\/(\d+)$/, screenAd, { parent: "/" }],
+    [/^\/new$/, screenNew, { parent: "/" }],
+    [/^\/my$/, screenMy, { tab: "my" }],
+    [/^\/my\/ad\/(\d+)$/, screenManage, { parent: "/my" }],
+    [/^\/edit\/(\d+)$/, screenEdit, { parent: "/my" }],
+    [/^\/vip\/(\d+)$/, screenVip, { parent: "/my" }],
+    [/^\/services$/, screenServices, { tab: "services" }],
+    [/^\/evaluate$/, screenEvaluate, { parent: "/services" }],
+    [/^\/credit$/, screenCredit, { parent: "/services" }],
+    [/^\/referral$/, screenReferral, { parent: "/services" }],
+    [/^\/dealer$/, screenDealer, { parent: "/services" }],
+    [/^\/salon-ad$/, screenSalonAd, { parent: "/services" }],
+  ];
+  var cleanup = null;
+  function render() {
+    var raw = location.hash.slice(1) || "/";
+    var qi = raw.indexOf("?");
+    var path = qi === -1 ? raw : raw.slice(0, qi);
+    var query = new URLSearchParams(qi === -1 ? "" : raw.slice(qi + 1));
+    if (cleanup) { try { cleanup(); } catch (e) {} cleanup = null; }
+    hideActionBar();
+    closeSheet();
+    setMain(null);
+    var route = null, match = null;
+    for (var i = 0; i < ROUTES.length; i++) { match = path.match(ROUTES[i][0]); if (match) { route = ROUTES[i]; break; } }
+    if (!route) { replaceTo("/"); return; }
+    var meta = route[2];
+    currentParent = meta.parent || "/";
+    var isTab = !!meta.tab;
+    document.body.classList.toggle("has-tabbar", isTab);
+    tabbar.hidden = !isTab;
+    if (isTab) renderTabbar(meta.tab);
+    if (inTelegram && tg.BackButton) { if (isTab) tg.BackButton.hide(); else tg.BackButton.show(); }
+    app.innerHTML = "";
+    if (route[1] !== screenMarket) window.scrollTo(0, 0);
+    cleanup = route[1](match, query) || null;
+  }
+
+  // =====================================================================
+  // Ishga tushirish
+  // =====================================================================
+  function gate(title, text, actions) {
+    tabbar.hidden = true; document.body.classList.remove("has-tabbar");
+    if (inTelegram && tg.BackButton) tg.BackButton.hide();
+    setMain(null);
+    app.innerHTML = "";
+    app.appendChild(messageScreen(title, text, actions));
+  }
+  var openLogged = false; // "Ilovani ochdi" logga faqat bir marta yozilsin
+  // Kanal postidagi havola: t.me/arzonida_bot?startapp=ad_634 → ilova shu e'lonni ochadi
+  var startParam = "";
+  try { startParam = String((tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || new URLSearchParams(location.search).get("tgWebAppStartParam") || ""); } catch (e) {}
+  if (!/^[a-z0-9_]{1,40}$/i.test(startParam)) startParam = "";
+  var startApplied = false;
+  function startRoute(p) {
+    var m = /^ad_(\d+)$/.exec(p);
+    if (m) return "/ad/" + m[1];
+    return { "new": "/new", evaluate: "/evaluate", my: "/my", services: "/services", credit: "/credit" }[p] || null;
+  }
+  function boot() {
+    app.innerHTML = ""; app.appendChild(skeleton());
+    if (!inTelegram) {
+      gate("Ilovani Telegramda oching", "Bu sahifa @arzonida_bot ichida ishlaydi. Botga kiring va pastdagi «📱 Ilova» tugmasini bosing.");
+      return;
+    }
+    var mePath = openLogged ? "/api/me" : "/api/me?open=1" + (startParam ? "&src=" + encodeURIComponent(startParam) : "");
+    openLogged = true;
+    Promise.all([api("/api/catalog"), api(mePath)]).then(function (res) {
+      var c = res[0], m = res[1];
+      if (!c.ok || !m.ok) { gate("Ma'lumotni yuklab bo'lmadi", (m && m.error) || (c && c.error) || "Qayta urinib ko'ring.", [h("button", { type: "button", class: "btn", text: "Qayta urinish", onclick: boot })]); return; }
+      catalog = c; me = m;
+      if (!m.subscribed) {
+        gate("Avval kanalga obuna bo'ling", "Botdan foydalanish uchun Avto Bozor kanaliga obuna bo'ling — barcha e'lonlar shu yerda chiqadi.", [
+          h("button", { type: "button", class: "btn", text: "Kanalga obuna bo'lish", onclick: function () { openLink(m.channelUrl); } }),
+          h("button", { type: "button", class: "btn ghost", text: "Obuna bo'ldim, tekshirish", onclick: boot }),
+        ]);
+        return;
+      }
+      // Havola orqali ochilgan bo'lsa — kerakli sahifaga (faqat bir marta, bosh sahifada turgan bo'lsa)
+      if (!startApplied) {
+        startApplied = true;
+        var target = startRoute(startParam);
+        if (target && (location.hash.slice(1) || "/") === "/") location.replace("#" + target);
+      }
+      if (!window.__routerOn) { window.__routerOn = true; window.addEventListener("hashchange", render); }
+      render();
+    });
+  }
+  boot();
+})();
