@@ -36,8 +36,12 @@ const UPLOADS_PER_WINDOW = 30;              // bitta foydalanuvchi 30 daqiqada e
 const UPLOAD_WINDOW_MS = 30 * 60 * 1000;
 const PAGE_SIZE = 20;
 const PHOTO_CACHE_MAX = 400;
-const STATIC_FILES = { "/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/app.css": "app.css" };
-const STATIC_TYPES = { ".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
+const STATIC_FILES = {
+  "/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/app.css": "app.css",
+  // Shriftlar o'zimizda (Google Fonts'ga bog'liq emas — sekin internetda ham tez ochiladi)
+  "/fonts/onest.woff": "fonts/onest.woff", "/fonts/unbounded.woff": "fonts/unbounded.woff", "/fonts/permanent-marker.woff": "fonts/permanent-marker.woff",
+};
+const STATIC_TYPES = { ".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff": "font/woff" };
 
 // Telegram initData imzosini tekshiradi. To'g'ri bo'lsa foydalanuvchi obyektini qaytaradi.
 // https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
@@ -118,7 +122,7 @@ function startWebApp(deps) {
     checkCanPostAd, submitNewAdToAdmin, sanitizeText, normalizePhone, parseAdPrice,
     requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
     estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
-    VIP_PRICE, VIP_CARD, VIP_CARD_NAME, logUserAction,
+    VIP_PRICE, VIP_CARD, VIP_CARD_NAME, logUserAction, getAdVotes,
   } = deps;
 
   const PORT = Number(process.env.PORT) || 3000;
@@ -291,6 +295,31 @@ function startWebApp(deps) {
     });
   }
 
+  // E'lon sahifasidagi «narx shkalasi» uchun: shu model (±2 yil) faol e'lonlari narxi (kamida 3 ta bo'lsa)
+  async function marketStats(ad) {
+    if (!ad.model_id) return null;
+    const [rows] = await db.execute(
+      "SELECT id, year, price FROM ads WHERE status = 'active' AND model_id = ? AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000",
+      [ad.model_id]
+    );
+    const y = int(ad.year, 0);
+    const prices = rows.filter(r => Math.abs(int(r.year, 0) - y) <= 2).map(r => int(r.price, 0)).filter(Boolean);
+    if (prices.length < 3) return null;
+    const avg = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
+    return { count: prices.length, avg, min: Math.min(...prices), max: Math.max(...prices) };
+  }
+  // «O'xshash e'lonlar»: shu model, yili eng yaqinlari
+  async function similarAds(ad, user) {
+    if (!ad.model_id) return [];
+    const [rows] = await db.execute(
+      "SELECT a.* FROM ads a WHERE a.status = 'active' AND a.model_id = ? AND a.id <> ? ORDER BY ABS(CAST(a.year AS SIGNED) - ?) ASC, a.created_at DESC LIMIT 8",
+      [ad.model_id, ad.id, int(ad.year, 0)]
+    );
+    if (!rows.length) return [];
+    const [badges, favs] = await Promise.all([priceBadges(rows), favoriteSet(user.id, rows.map(r => Number(r.id)))]);
+    return rows.map(r => card(r, badges, favs));
+  }
+
   // ---------- Bozor: bitta e'lon ----------
   async function handleAdDetail(req, res, user, adId) {
     const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
@@ -300,7 +329,10 @@ function startWebApp(deps) {
 
     const [[dealer]] = await db.execute("SELECT is_dealer, dealer_name, dealer_paused FROM users WHERE id = ?", [ad.userId]);
     const [[saves]] = await db.execute("SELECT COUNT(*) AS cnt FROM favorites WHERE adId = ?", [ad.id]);
-    const [badges, favs] = await Promise.all([priceBadges([ad]), favoriteSet(user.id, [Number(ad.id)])]);
+    const [badges, favs, market, similar] = await Promise.all([
+      priceBadges([ad]), favoriteSet(user.id, [Number(ad.id)]),
+      marketStats(ad).catch(() => null), similarAds(ad, user).catch(() => []),
+    ]);
     const photos = photoList(ad);
     logLine(user, `E'lonni ko'rdi: ${adLabel(ad)}${ad.status === "sold" ? " (sotilgan)" : ""}`, `ad:${ad.id}`);
     sendJson(res, 200, {
@@ -317,7 +349,9 @@ function startWebApp(deps) {
         hasVideo: !!ad.videoId,
         dealer: dealer && dealer.is_dealer === 1 && dealer.dealer_paused !== 1 ? dealer.dealer_name : null,
         saves: Number(saves.cnt), isOwner: !!isOwner,
+        market, // { count, avg, min, max } yoki null
       },
+      similar,
     });
   }
 
@@ -360,13 +394,23 @@ function startWebApp(deps) {
     const check = subscribed ? await checkCanPostAd(user.id) : { ok: false, code: "not_subscribed", message: "Kanalimizga obuna bo'ling." };
     const [[u]] = await db.execute("SELECT is_dealer, dealer_paused, dealer_name, dealer_phone, free_ups FROM users WHERE id = ?", [user.id]);
     const [lastRows] = await db.execute("SELECT phone FROM ads WHERE userId = ? ORDER BY id DESC LIMIT 1", [user.id]);
-    if (url && url.searchParams.get("open") === "1") logLine(user, subscribed ? "Ilovani ochdi" : "Ilovani ochdi (kanalga obuna emas)", "open", 60 * 1000);
+    if (url && url.searchParams.get("open") === "1") {
+      // Qayerdan kelgani (kanal postidagi tugma) — reklama samarasini ko'rish uchun
+      const src = String(url.searchParams.get("src") || "");
+      let from = "";
+      const adSrc = src.match(/^ad_(\d{1,10})$/);
+      if (adSrc) from = ` — kanaldagi #${adSrc[1]} e'lon tugmasidan`;
+      else if (src === "new") from = " — kanaldagi «E'lon berish» tugmasidan";
+      else if (src === "evaluate") from = " — kanaldagi «Baholash» tugmasidan";
+      logLine(user, (subscribed ? "Ilovani ochdi" : "Ilovani ochdi (kanalga obuna emas)") + from, `open:${from ? src : ""}`, 60 * 1000);
+    }
     sendJson(res, 200, {
       ok: true,
       user: { id: user.id, first_name: user.first_name || "" },
       subscribed,
       canPost: check.ok,
       code: check.code || null,
+      adLimit: check.limit != null ? check.limit : null, // admin paneldagi «E'lon limiti» (0 = cheksiz)
       message: check.ok ? null : stripHtml(check.message),
       isDealer: !!(u && u.is_dealer === 1 && u.dealer_paused !== 1),
       dealerName: u?.dealer_name || null,
@@ -559,10 +603,18 @@ function startWebApp(deps) {
     const [editRows] = await db.execute("SELECT oldAdId FROM ad_edits WHERE userId = ?", [user.id]);
     const editing = new Set(editRows.map(e => Number(e.oldAdId)));
     const badges = await priceBadges(rows.filter(r => r.status === "active"));
+    // Kanaldagi «Narxga baho» reaksiyalari (🔥 arzon · 👍 normal · 🤔 qimmat) — faqat faol e'lonlar uchun
+    const votes = new Map();
+    if (getAdVotes) {
+      await Promise.all(rows.filter(r => r.status === "active").map(async (r) => {
+        const v = await getAdVotes(r.id, r.channelMsgId);
+        if (v) votes.set(Number(r.id), v);
+      }));
+    }
     logLine(user, `Mening e'lonlarimni ochdi (${rows.length} ta)`, "my");
     sendJson(res, 200, {
       ok: true, freeUps: u?.free_ups || 0,
-      items: rows.map(r => ({ ...card(r, badges, null), editPending: editing.has(Number(r.id)) })),
+      items: rows.map(r => ({ ...card(r, badges, null), editPending: editing.has(Number(r.id)), votes: votes.get(Number(r.id)) || null })),
     });
   }
 
@@ -772,10 +824,11 @@ function startWebApp(deps) {
     if (event === "call" && adId) { text = `Qo'ng'iroq tugmasini bosdi 📞: ${adText}`; key = `call:${adId}`; win = 2 * 60 * 1000; }
     else if (event === "copy_phone" && adId) { text = `Sotuvchi raqamini nusxaladi: ${adText}`; key = `copy:${adId}`; win = 2 * 60 * 1000; }
     else if (event === "channel" && adId) { text = `Kanalda ko'rishni bosdi: ${adText}`; key = `channel:${adId}`; }
+    else if (event === "share_ad" && adId) { text = `E'lonni ulashishni bosdi: ${adText}`; key = `share_ad:${adId}`; }
     else if (event === "share_ref") { text = "Taklif havolasini ulashishni bosdi"; key = "share"; win = 60 * 1000; }
     else if (event === "form_open") { text = "E'lon berish formasini ochdi"; key = "form"; win = 60 * 1000; }
     else if (event === "form_blocked") {
-      const why = { pending: "oldingi e'loni tekshiruvda", limit: "3 ta faol e'lon chegarasi", banned: "bloklangan" }[body.code] || "ruxsat yo'q";
+      const why = { pending: "oldingi e'loni tekshiruvda", limit: "faol e'lonlar chegarasiga yetgan", banned: "bloklangan" }[body.code] || "ruxsat yo'q";
       text = `E'lon berishga urindi — ${why}`; key = "form_blocked"; win = 60 * 1000;
     } else if (event === "credit") {
       const price = int(body.price), down = int(body.down), months = int(body.months);
@@ -819,7 +872,8 @@ function startWebApp(deps) {
       if (req.method === "GET" && STATIC_FILES[p]) {
         const file = path.join(STATIC_DIR, STATIC_FILES[p]);
         const body = fs.readFileSync(file);
-        res.writeHead(200, { "Content-Type": STATIC_TYPES[path.extname(file)], "Cache-Control": "no-cache" });
+        const ext = path.extname(file);
+        res.writeHead(200, { "Content-Type": STATIC_TYPES[ext], "Cache-Control": ext === ".woff" ? "public, max-age=2592000, immutable" : "no-cache" });
         return res.end(body);
       }
       if (req.method === "GET" && p === "/health") { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end("ok"); }

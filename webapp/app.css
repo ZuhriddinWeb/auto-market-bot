@@ -208,6 +208,7 @@ select.input {
 .my-row .body { flex: 1; min-width: 0; }
 .my-row .t { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .my-row .p { font-weight: 700; }
+.my-row .votes { font-size: 13px; color: var(--hint); margin: 1px 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pill { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 9px; margin-top: 3px; }
 .pill.active { background: rgba(31,157,85,.14); color: var(--good); }
 .pill.pending { background: rgba(240,160,0,.16); color: #b77900; }
