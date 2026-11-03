@@ -247,6 +247,8 @@ select.input {
 .card .cnt { position: absolute; left: 7px; bottom: 7px; background: rgba(9,14,22,.62); color: #fff; font-size: 11px; font-weight: 600; padding: 2px 7px 2px 5px; border-radius: 7px; display: inline-flex; align-items: center; gap: 3px; }
 .card .cnt svg { width: 12px; height: 12px; }
 .card .deal { position: absolute; left: 7px; top: 7px; background: var(--deal); color: #fff; font-size: 11.5px; font-weight: 700; padding: 3px 7px; border-radius: 7px; }
+.card .vip { position: absolute; left: 7px; top: 7px; background: #ffc83d; color: #121826; font-size: 11.5px; font-weight: 700; padding: 3px 8px; border-radius: 7px; }
+.card.is-vip { box-shadow: inset 0 0 0 2px #ffc83d; }
 .card .info { padding: 9px 11px 12px; display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .card .price { font: 600 16px/1.25 var(--display); letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
 .card .title { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -225,6 +225,17 @@ function startWebApp(deps) {
     };
   }
 
+  // VIP: admin to'lovni tasdiqlagan e'lonlar (oxirgi VIP_TOP_DAYS kun ichida)
+  const VIP_TOP_DAYS = Number(process.env.VIP_TOP_DAYS) || 7;
+  async function activeVipIds() {
+    try {
+      const [rows] = await db.execute(
+        `SELECT DISTINCT adId FROM vip_requests WHERE status = 'approved' AND created_at >= NOW() - INTERVAL ${VIP_TOP_DAYS} DAY`
+      );
+      return rows.map(r => Number(r.adId)).filter(Boolean);
+    } catch (e) { return []; }
+  }
+
   // ---------- Bozor: qidiruv ----------
   async function handleSearch(req, res, user, url) {
     const q = url.searchParams;
@@ -261,14 +272,17 @@ function startWebApp(deps) {
     if (q.get("nasiya") === "1") { where.push("nasiya IS NOT NULL AND nasiya <> 'Yo''q'"); logParts.push("nasiyaga"); }
 
     const sorts = { new: "created_at DESC, id DESC", price_asc: "CAST(price AS UNSIGNED) ASC, id DESC", price_desc: "CAST(price AS UNSIGNED) DESC, id DESC" };
-    const order = sorts[q.get("sort")] || sorts.new;
+    // ⭐ VIP e'lonlar har doim birinchi (to'lov tasdiqlangandan keyin VIP_TOP_DAYS kun davomida)
+    const vipIds = await activeVipIds();
+    const vipOrder = vipIds.length ? `(id IN (${vipIds.map(() => "?").join(",")})) DESC, ` : "";
+    const order = vipOrder + (sorts[q.get("sort")] || sorts.new);
     const page = Math.max(1, int(q.get("page"), 1));
     const whereSql = where.join(" AND ");
 
     const [[cnt]] = await db.execute(`SELECT COUNT(*) AS total FROM ads WHERE ${whereSql}`, params);
     const [rows] = await db.execute(
       `SELECT id, carDetails, brand_id, model_id, price, year, probeg, region, transmission, fuel, photoId, nasiya, status, sold_price, created_at, channelMsgId FROM ads WHERE ${whereSql} ORDER BY ${order} LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
-      params
+      params.concat(vipIds)
     );
     const [badges, favs] = await Promise.all([priceBadges(rows), favoriteSet(user.id, rows.map(r => Number(r.id)))]);
 
@@ -291,7 +305,7 @@ function startWebApp(deps) {
     }
     sendJson(res, 200, {
       ok: true, total: Number(cnt.total), page, pages: Math.max(1, Math.ceil(Number(cnt.total) / PAGE_SIZE)),
-      items: rows.map(r => card(r, badges, favs)),
+      items: rows.map(r => ({ ...card(r, badges, favs), isVip: vipIds.includes(Number(r.id)) })),
     });
   }
 

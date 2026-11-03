@@ -393,13 +393,13 @@
     });
     var ph = h("div", { class: "ph" }, [
       it.photo ? h("img", { src: it.photo, alt: it.title, loading: "lazy" }) : null,
-      it.badge && it.badge.type === "cheap" ? h("span", { class: "deal", text: it.badge.pct + "% arzon" }) : null,
+      it.isVip ? h("span", { class: "vip", text: "★ VIP" }) : (it.badge && it.badge.type === "cheap" ? h("span", { class: "deal", text: it.badge.pct + "% arzon" }) : null),
       it.photosCount > 1 ? h("span", { class: "cnt", "aria-label": it.photosCount + " ta rasm" }, [icon("camera"), String(it.photosCount)]) : null,
       it.status === "sold" ? h("div", { class: "sold-veil" }, [h("span", { text: "SOTILDI" })]) : null,
       it.status === "active" ? heart : null,
     ]);
     var meta = [it.year, fmtKm(it.probeg)].filter(Boolean).join(", ");
-    return h("div", { class: "card" + (mini ? " mini" : ""), role: "link", tabindex: "0", onclick: function () { go("/ad/" + it.id); }, onkeydown: function (e) { if (e.key === "Enter") go("/ad/" + it.id); } }, [
+    return h("div", { class: "card" + (mini ? " mini" : "") + (it.isVip ? " is-vip" : ""), role: "link", tabindex: "0", onclick: function () { go("/ad/" + it.id); }, onkeydown: function (e) { if (e.key === "Enter") go("/ad/" + it.id); } }, [
       ph,
       h("div", { class: "info" }, [
         h("div", { class: "price", text: fmtPrice(it.status === "sold" && it.soldPrice ? it.soldPrice : it.price) }),
