@@ -392,7 +392,8 @@
       });
     });
     var ph = h("div", { class: "ph" }, [
-      it.photo ? h("img", { src: it.photo, alt: it.title, loading: "lazy" }) : null,
+      it.photo ? h("img", { src: it.photo, alt: it.title, loading: "lazy", decoding: "async", onerror: function () { this.remove(); } }) : null,
+      it.photo ? null : h("span", { class: "ph-empty" }, [icon("camera")]),
       it.isVip ? h("span", { class: "vip", text: "★ VIP" }) : (it.badge && it.badge.type === "cheap" ? h("span", { class: "deal", text: it.badge.pct + "% arzon" }) : null),
       it.photosCount > 1 ? h("span", { class: "cnt", "aria-label": it.photosCount + " ta rasm" }, [icon("camera"), String(it.photosCount)]) : null,
       it.status === "sold" ? h("div", { class: "sold-veil" }, [h("span", { text: "SOTILDI" })]) : null,
@@ -405,7 +406,7 @@
         h("div", { class: "price", text: fmtPrice(it.status === "sold" && it.soldPrice ? it.soldPrice : it.price) }),
         h("div", { class: "title", text: it.title }),
         h("div", { class: "meta", text: meta }),
-        mini ? null : h("div", { class: "foot" }, [plate(it.region), it.hasNasiya ? h("span", { class: "tagline", text: "Nasiya" }) : null]),
+        mini ? null : h("div", { class: "foot" }, [plate(it.region), it.hasNasiya ? h("span", { class: "tagline", text: "Nasiya" }) : null, it.createdAt ? h("span", { class: "when", text: relDay(it.createdAt).replace(" oldin", "").replace("1 yildan ko'proq", "1 yil+") }) : null]),
       ]),
     ]);
   }
@@ -874,7 +875,7 @@
     if (isEdit) app.appendChild(h("h1", { class: "page", text: "E'lonni tahrirlash" }));
     app.appendChild(h("div", { class: "sign-wrap" }, [
       h("div", { class: "sign", "aria-label": "E'loningiz ko'rinishi" }, [h("p", { class: "sign-title", text: "SOTILADI" }), refs.signCar, refs.signPrice, refs.signPhone]),
-      h("p", { class: "sign-note", text: isEdit ? "O'zgarishlar admin tekshiruvidan so'ng kanaldagi e'longa tushadi." : "Pastdagi ma'lumotlarni to'ldiring — e'loningiz kanalda shu ma'lumotlar bilan chiqadi." }),
+      h("p", { class: "sign-note", text: isEdit ? "O'zgarishlar admin tekshiruvidan so'ng kanaldagi e'longa tushadi." : "Pastdagi ma'lumotlarni to'ldiring — e'loningiz kanalda shu ma'lumotlar bilan chiqadi." + (me.paidAds ? " E'lon joylash: " + fmtNum(me.adPrice) + " so'm." : "") }),
     ]));
 
     // --- Moshina ---
@@ -984,6 +985,46 @@
     app.appendChild(h("div", { class: "group" }, extras));
     renderNasiya();
 
+    // --- 💳 To'lov (admin «E'lonlarni pullikka o'tkazish» ni yoqqan bo'lsa) ---
+    var paid = !isEdit && !!me.paidAds;
+    var receipt = null; // { url, status, token }
+    refs.receiptBox = h("div", { class: "photos" });
+    refs.receiptInput = h("input", { type: "file", accept: "image/*", class: "file-input", "aria-label": "To'lov cheki" });
+    refs.receiptInput.addEventListener("change", function () {
+      var file = refs.receiptInput.files[0]; refs.receiptInput.value = "";
+      if (!file) return;
+      var rc = receipt = { url: URL.createObjectURL(file), status: "uploading" };
+      setError(refs, "receipt", ""); renderReceipt();
+      compressImage(file).then(function (b) { return upload("photo", b); }).then(function (r) {
+        if (receipt !== rc) return;
+        if (r.ok) { rc.status = "done"; rc.token = r.token; } else { rc.status = "error"; toast(r.error || "Chek yuklanmadi"); }
+        renderReceipt();
+      });
+    });
+    function renderReceipt() {
+      var box = refs.receiptBox; box.innerHTML = "";
+      if (receipt) {
+        box.appendChild(h("div", { class: "thumb" }, [h("img", { src: receipt.url, alt: "To'lov cheki" }),
+          receipt.status === "uploading" ? h("div", { class: "veil" }, ["Yuklanmoqda"]) : null,
+          receipt.status === "error" ? h("div", { class: "veil" }, ["Yuklanmadi"]) : null,
+          h("button", { type: "button", class: "remove", "aria-label": "Chekni o'chirish", text: "×", onclick: function () { receipt = null; renderReceipt(); } })]));
+      } else box.appendChild(h("button", { type: "button", class: "add-tile", onclick: function () { refs.receiptInput.click(); } }, [h("b", { text: "+" }), "Chek rasmi"]));
+    }
+    if (paid) {
+      app.appendChild(secTitle(6, "To'lov"));
+      app.appendChild(h("div", { class: "group" }, [
+        h("div", { class: "field" }, [
+          h("span", { class: "label", text: "E'lon joylash narxi" }),
+          h("div", { class: "pay-sum", text: fmtNum(me.adPrice) + " so'm" }),
+          h("p", { class: "help", text: "Kartaga o'tkazing va chek skrinshotini yuklang. Admin e'lonni tasdiqlagach, kanalga chiqadi." }),
+          h("div", { class: "copy-box", style: "margin-top:10px" }, [h("code", { text: me.vip.card }), h("button", { type: "button", text: "Nusxa", onclick: function () { copyText(me.vip.card.replace(/\s/g, ""), "Karta raqami nusxalandi"); } })]),
+          h("p", { class: "help", text: "Karta egasi: " + me.vip.cardName }),
+        ]),
+        field(refs, "receipt", "To'lov cheki", h("div", null, [refs.receiptBox, refs.receiptInput])),
+      ]));
+      renderReceipt();
+    }
+
     // ---- Rasmlar ----
     function addPhotos(fileList) {
       var files = Array.prototype.slice.call(fileList || []);
@@ -1084,14 +1125,15 @@
       if (photos.length === 0) errs.photos = "Kamida 1 ta rasm qo'shing.";
       else if (photos.some(function (p) { return p.status === "error"; })) errs.photos = "Yuklanmagan rasmni qayta yuklang yoki o'chiring.";
       if (video && video.status === "error") errs.video = "Video yuklanmadi. Qayta urinib ko'ring yoki o'chiring.";
+      if (paid && (!receipt || receipt.status === "error")) errs.receipt = "To'lov chekini yuklang.";
       return errs;
     }
     function showErrors(errs) {
-      ["brand", "model", "year", "paint", "color", "trans", "fuel", "price", "phone", "region", "photos", "video"].forEach(function (k) { setError(refs, k, errs[k] || ""); });
+      ["brand", "model", "year", "paint", "color", "trans", "fuel", "price", "phone", "region", "photos", "video", "receipt"].forEach(function (k) { setError(refs, k, errs[k] || ""); });
       var first = app.querySelector(".field.invalid");
       if (first) first.scrollIntoView({ behavior: "smooth", block: "center" });
     }
-    function uploading() { return photos.some(function (p) { return p.status === "uploading"; }) || (video && video.status === "uploading"); }
+    function uploading() { return photos.some(function (p) { return p.status === "uploading"; }) || (video && video.status === "uploading") || (paid && receipt && receipt.status === "uploading"); }
     function waitUploads() {
       if (!uploading()) return Promise.resolve();
       return new Promise(function (resolve) { var t = setInterval(function () { if (!uploading()) { clearInterval(t); resolve(); } }, 300); });
@@ -1105,6 +1147,7 @@
         nasiya: S.nasiya, nasiyaTerms: S.nasiyaTerms, offer: S.offer, urgent: S.urgent,
         photos: photos.map(function (p) { return p.ref || p.token; }),
         video: video ? (video.old ? "old" : video.token) : null,
+        receipt: paid && receipt ? receipt.token : null,
       };
     }
     function submit() {
@@ -1137,6 +1180,7 @@
           app.appendChild(messageScreen("E'lon berib bo'lmaydi", r.error, [h("button", { type: "button", class: "btn", text: "Mening e'lonlarim", onclick: function () { replaceTo("/my"); } })]));
           return;
         }
+        if (r.code === "receipt_required") { showErrors({ receipt: r.error }); return; }
         toast(r.error || "Yuborib bo'lmadi. Qayta urinib ko'ring.");
       });
     }
@@ -1659,20 +1703,69 @@
         } else mediaBox.appendChild(h("button", { type: "button", class: "add-tile", onclick: function () { input.click(); } }, [h("b", { text: "+" }), "Rasm yoki video"]));
       }
       renderMedia();
+      // 💳 Tarif (pullik rejimda)
+      var plan = null, receipt = null;
+      var planBox = h("div");
+      var receiptBox = h("div", { class: "photos" });
+      var receiptInput = h("input", { type: "file", accept: "image/*", class: "file-input", "aria-label": "To'lov cheki" });
+      receiptInput.addEventListener("change", function () {
+        var file = receiptInput.files[0]; receiptInput.value = "";
+        if (!file) return;
+        var rc = receipt = { url: URL.createObjectURL(file), status: "uploading" };
+        setError(refs, "receipt", ""); renderPay();
+        compressImage(file).then(function (b) { return upload("photo", b); }).then(function (res) {
+          if (receipt !== rc) return;
+          if (res.ok) { rc.status = "done"; rc.token = res.token; } else { rc.status = "error"; toast(res.error || "Chek yuklanmadi"); }
+          renderPay();
+        });
+      });
+      var planOpts = (r.credits > 0 ? [{ key: "credit", name: "Paketdan (" + r.credits + " ta qoldi)" }] : [])
+        .concat((r.plans || []).map(function (p) { return { key: p.key, name: p.title + " — " + fmtNum(p.price) + " so'm", price: p.price }; }));
+      if (r.credits > 0) plan = "credit";
+      function renderPay() {
+        planBox.innerHTML = "";
+        if (!r.paid) return;
+        planBox.appendChild(field(refs, "plan", "Tarif", chipGroup("lbl-plan", function () { return planOpts; }, function (x) { return plan === x.key; }, function (x) { plan = x.key; setError(refs, "plan", ""); renderPay(); })));
+        if (plan && plan !== "credit") {
+          var sel = planOpts.filter(function (x) { return x.key === plan; })[0];
+          receiptBox.innerHTML = "";
+          if (receipt) {
+            receiptBox.appendChild(h("div", { class: "thumb" }, [h("img", { src: receipt.url, alt: "To'lov cheki" }),
+              receipt.status === "uploading" ? h("div", { class: "veil" }, ["Yuklanmoqda"]) : null,
+              receipt.status === "error" ? h("div", { class: "veil" }, ["Yuklanmadi"]) : null,
+              h("button", { type: "button", class: "remove", "aria-label": "Chekni o'chirish", text: "×", onclick: function () { receipt = null; renderPay(); } })]));
+          } else receiptBox.appendChild(h("button", { type: "button", class: "add-tile", onclick: function () { receiptInput.click(); } }, [h("b", { text: "+" }), "Chek rasmi"]));
+          planBox.appendChild(h("div", { class: "field" }, [
+            h("span", { class: "label", text: "To'lov" }),
+            h("div", { class: "pay-sum", text: fmtNum(sel.price) + " so'm" }),
+            h("div", { class: "copy-box", style: "margin-top:10px" }, [h("code", { text: r.card }), h("button", { type: "button", text: "Nusxa", onclick: function () { copyText(String(r.card).replace(/\s/g, ""), "Karta raqami nusxalandi"); } })]),
+            h("p", { class: "help", text: "Karta egasi: " + r.cardName + ". O'tkazgach, chek skrinshotini yuklang." }),
+          ]));
+          planBox.appendChild(field(refs, "receipt", "To'lov cheki", h("div", null, [receiptBox, receiptInput])));
+        }
+      }
       body.appendChild(h("div", { class: "group" }, [
         field(refs, "text", "Reklama matni", textArea(st, "text", { placeholder: "Aksiya, kredit shartlari, bonuslar. Masalan: Kia Sportage 60 oygacha 0% foizli bo'lib to'lash!", maxlength: "900", rows: "5" }, function () { setError(refs, "text", ""); })),
         field(refs, "media", "Video yoki rasm", h("div", null, [mediaBox, input]), "Video ko'proq e'tibor tortadi. 1 ta video yoki 1 ta rasm."),
         field(refs, "location", "Salon manzili", textInput(st, "location", { placeholder: "Masalan: Samarqand, Gazli shossesi", maxlength: "200" })),
         field(refs, "phone", "Telefon", textInput(st, "phone", { placeholder: "+998 90 123 45 67", maxlength: "100" }), "Bir nechta raqamni vergul bilan yozish mumkin."),
       ]));
+      if (r.paid) { body.appendChild(h("p", { class: "group-title", text: "Tarif va to'lov" })); body.appendChild(h("div", { class: "group" }, [planBox])); renderPay(); }
       var busy = false;
       setMain("Reklamani yuborish", function () {
         if (busy) return;
         if (st.text.trim().length < 10) return setError(refs, "text", "Matn juda qisqa.");
         if (!media) return setError(refs, "media", "Rasm yoki video qo'shing.");
         if (media.status !== "done") return toast(media.status === "uploading" ? "Fayl yuklanmoqda, biroz kuting" : "Faylni qayta yuklang");
+        if (r.paid) {
+          if (!plan) { setError(refs, "plan", "Tarifni tanlang."); return; }
+          if (plan !== "credit") {
+            if (!receipt || receipt.status === "error") { setError(refs, "receipt", "To'lov chekini yuklang."); return; }
+            if (receipt.status !== "done") return toast("Chek yuklanmoqda, biroz kuting");
+          }
+        }
         busy = true; mainBusy(true);
-        api("/api/salon-ad", { json: { text: st.text, location: st.location, phone: st.phone, media: media.token } }).then(function (res) {
+        api("/api/salon-ad", { json: { text: st.text, location: st.location, phone: st.phone, media: media.token, plan: r.paid ? plan : null, receipt: receipt && plan !== "credit" ? receipt.token : null } }).then(function (res) {
           busy = false; mainBusy(false);
           if (!res.ok) return toast(res.error || "Xatolik");
           haptic("success"); setMain(null); app.innerHTML = "";

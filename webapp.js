@@ -123,6 +123,7 @@ function startWebApp(deps) {
     requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
     estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
     VIP_PRICE, VIP_CARD, VIP_CARD_NAME, logUserAction, getAdVotes,
+    getPrice, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS,
   } = deps;
 
   const PORT = Number(process.env.PORT) || 3000;
@@ -433,7 +434,10 @@ function startWebApp(deps) {
       freeUps: u?.free_ups || 0,
       lastPhone: lastRows[0]?.phone || null,
       channelUrl: CHANNEL_URL,
-      vip: { price: VIP_PRICE, card: VIP_CARD, cardName: VIP_CARD_NAME },
+      vip: { price: getPrice ? String(getPrice("vip")) : VIP_PRICE, card: VIP_CARD, cardName: VIP_CARD_NAME },
+      // 💳 Pullik rejimlar va narxlar (admin panel → «💰 Narxlar va to'lovlar»)
+      paidAds: !!(paidAdsOn && paidAdsOn() && user.id !== ADMIN_ID),
+      adPrice: getPrice ? getPrice("ad") : null,
     });
   }
 
@@ -597,7 +601,14 @@ function startWebApp(deps) {
       if (!check.ok) return { status: 403, ok: false, code: check.code, error: stripHtml(check.message) };
       const built = buildAd(body, user, check.isDealer);
       if (built.error) return { status: 400, ok: false, error: built.error, code: built.code || null };
-      const adId = await submitNewAdToAdmin({ ad: built.ad, userId: user.id, firstName: user.first_name, source: "miniapp" });
+      let receiptFileId = null;
+      if (paidAdsOn && paidAdsOn() && user.id !== ADMIN_ID) {
+        const rc = takeUpload(body.receipt, user.id, "photo");
+        if (!rc) return { status: 400, ok: false, code: "receipt_required", error: "To'lov chekini (skrinshot) yuklang." };
+        receiptFileId = rc.fileId;
+        uploads.delete(String(body.receipt));
+      }
+      const adId = await submitNewAdToAdmin({ ad: built.ad, userId: user.id, firstName: user.first_name, source: "miniapp", receiptFileId });
       built.tokens.forEach(t => uploads.delete(t));
       const carName = catalog.carName(built.ad.brand, built.ad.model);
       notifyUser(user.id, `✅ <b>E'loningiz adminga muvaffaqiyatli yuborildi!</b>\n\n🚗 ${carName}\n🆔 ID: ${adId}\n\nTekshiruvdan so'ng kanalga joylanadi.`);
@@ -797,17 +808,27 @@ function startWebApp(deps) {
   async function handleSalonStatus(req, res, user) {
     const st = await getSalonAdStatus(user.id);
     logLine(user, "Salon reklamasi bo'limini ochdi", "salon");
-    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dealerName: st.dealerName, dealerPhone: st.dealerPhone });
+    const paid = !!(paidSalonOn && paidSalonOn() && user.id !== ADMIN_ID);
+    const plans = paid ? Object.entries(SALON_PLANS).map(([key, p]) => ({ key, title: p.title, price: getPrice(p.priceKey) })) : [];
+    const credits = paid && getSalonCredits ? await getSalonCredits(user.id) : 0;
+    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dealerName: st.dealerName, dealerPhone: st.dealerPhone, paid, plans, credits, card: VIP_CARD, cardName: VIP_CARD_NAME });
   }
   async function handleSalonSubmit(req, res, user) {
     const r = await once(`${user.id}:salon`, async () => {
       const body = await readJson(req);
       const u = takeUpload(body.media, user.id, null);
       if (!u) return { ok: false, error: "Rasm yoki videoni qayta yuklang." };
+      const plan = ["single", "pack5", "pin", "credit"].includes(body.plan) ? body.plan : null;
+      let receiptId = null;
+      if (plan && plan !== "credit") {
+        const rc = takeUpload(body.receipt, user.id, "photo");
+        if (rc) { receiptId = rc.fileId; }
+      }
       const out = await submitSalonAd({
         userId: user.id, adText: sanitizeText(body.text, 900), mediaType: u.kind, mediaId: u.fileId,
-        location: sanitizeText(body.location, 200), phone: sanitizeText(body.phone, 100),
+        location: sanitizeText(body.location, 200), phone: sanitizeText(body.phone, 100), plan, receiptId,
       });
+      if (out.ok && body.receipt) uploads.delete(String(body.receipt));
       if (!out.ok) return { ok: false, code: out.code || null, error: stripHtml(out.error) };
       uploads.delete(String(body.media));
       notifyUser(user.id, "✅ <b>Reklamangiz adminga yuborildi!</b>\n\nTekshiruvdan so'ng kanalga joylanadi.");

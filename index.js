@@ -49,7 +49,7 @@ function isGlobalAction(ctx) {
 }
 const ADMIN_ID = Number(process.env.ADMIN_ID);
 // VIP xizmat sozlamalari (osongina o'zgartiring)
-const VIP_PRICE = "25000"; // so'mda
+const VIP_PRICE = "25000"; // so'mda — faqat boshlang'ich qiymat; haqiqiy narx admin panelda: getPrice("vip")
 const VIP_CARD = "9860 0466 2632 6469"; // O'z kartangizni yozing
 const VIP_CARD_NAME = "Zuhriddin Mustafoyev"; // Karta egasi
 const CHANNEL_ID = process.env.CHANNEL_ID.startsWith("@")
@@ -225,6 +225,14 @@ const dbReady = (async () => {
       "ALTER TABLE ads ADD COLUMN sold_price VARCHAR(255) DEFAULT NULL",
       // Reaksiya kelganda e'lonni kanal xabari ID si bo'yicha tez topish uchun
       "ALTER TABLE ads ADD INDEX idx_ads_channel_msg (channelMsgId)",
+      // To'lovlar: pullik e'lon cheki, salon reklamasi tarifi va paket qoldig'i
+      "ALTER TABLE ads ADD COLUMN paid_amount INT DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN receiptId TEXT DEFAULT NULL",
+      "ALTER TABLE salon_ads ADD COLUMN plan VARCHAR(20) DEFAULT NULL",
+      "ALTER TABLE salon_ads ADD COLUMN price INT DEFAULT NULL",
+      "ALTER TABLE salon_ads ADD COLUMN receiptId TEXT DEFAULT NULL",
+      "ALTER TABLE salon_ads ADD COLUMN pin_until TIMESTAMP NULL DEFAULT NULL",
+      "ALTER TABLE users ADD COLUMN salon_credits INT DEFAULT 0",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -278,6 +286,26 @@ async function setAutoOn(key, on) {
 }
 // 📏 Oddiy foydalanuvchi bir vaqtda nechta FAOL e'lon bera oladi (0 = cheksiz). Admin panelda o'zgartiriladi.
 const DEFAULT_AD_LIMIT = 3;
+// 💰 NARXLAR (so'mda) — admin panel → «💰 Narxlar va to'lovlar» dan o'zgartiriladi
+const PRICE_DEFAULTS = { vip: 25000, salon_single: 50000, salon_pack5: 200000, salon_pin: 80000, ad: 20000 };
+const PRICE_TITLES = {
+  vip: "🌟 VIP e'lon", salon_single: "📢 Salon: 1 ta post", salon_pack5: "📦 Salon: 5 ta post paketi",
+  salon_pin: "📌 Salon: post + 24 soat qadash", ad: "📝 Oddiy e'lon (pullik rejimda)",
+};
+function getPrice(key) {
+  const v = parseInt(botSettings.get(`price:${key}`), 10);
+  return Number.isFinite(v) && v > 0 ? v : PRICE_DEFAULTS[key];
+}
+const somFmt = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " so'm";
+// Oddiy e'lonlar pullikmi (sukut: bepul) va salon reklamasi pullikmi (sukut: pullik)
+function paidAdsOn() { return botSettings.get("paid:ads") === "1"; }
+function paidSalonOn() { return botSettings.get("paid:salon") !== "0"; }
+// Salon reklamasi tariflari
+const SALON_PLANS = {
+  single: { title: "1 ta post", priceKey: "salon_single" },
+  pack5: { title: "5 ta post paketi", priceKey: "salon_pack5" },
+  pin: { title: "Post + 24 soat qadash", priceKey: "salon_pin" },
+};
 function getAdLimit() {
   const v = botSettings.get("limit:active_ads");
   const n = v === undefined || v === "" ? DEFAULT_AD_LIMIT : parseInt(v, 10);
@@ -406,6 +434,23 @@ async function checkChannelReactions() {
     // tarmoq xatosi — oldingi holat qoladi
   }
 }
+
+// 💰 Admin «✏️ ... narxi» ni bosib, yangi narxni yozganda
+bot.use(async (ctx, next) => {
+  if (!adminPriceEdit || !ctx.from || ctx.from.id !== ADMIN_ID || !ctx.message || !ctx.message.text) return next();
+  const key = adminPriceEdit;
+  const t = ctx.message.text.trim();
+  if (t === "/cancel") { adminPriceEdit = null; return ctx.reply("Bekor qilindi."); }
+  const n = parseInt(t.replace(/[\s'.,]/g, ""), 10);
+  if (!/^[\d\s'.,]+$/.test(t) || !n) { adminPriceEdit = null; return next(); } // boshqa narsa yozildi — odatdagidek
+  if (n < 1000 || n > 100000000) return ctx.reply("❗️ Narx 1 000 dan 100 000 000 so'mgacha bo'lishi kerak. Qayta yozing yoki /cancel.");
+  adminPriceEdit = null;
+  try { await setBotSetting(`price:${key}`, n); }
+  catch (e) { return ctx.reply("❌ Saqlab bo'lmadi, qayta urinib ko'ring."); }
+  const { text, kb } = pricesView();
+  await ctx.reply(`✅ ${PRICE_TITLES[key]}: <b>${somFmt(n)}</b>`, { parse_mode: "HTML" });
+  return ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+});
 
 // Reaksiya soni keldi — boshqa middleware'larga o'tkazmaymiz (bu yerda foydalanuvchi yo'q)
 bot.use(async (ctx, next) => {
@@ -1130,7 +1175,8 @@ function resolveAdIds(ad) {
 }
 
 // Yangi e'lonni bazaga (pending) yozadi va adminga tasdiqlash uchun yuboradi. adId qaytaradi.
-async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot" }) {
+// receiptFileId — pullik rejimda to'lov cheki (rasm file_id). Admin e'lonni tasdiqlasa — to'lov qabul qilingan bo'ladi.
+async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot", receiptFileId = null }) {
   resolveAdIds(ad);
   const fullCarName = catalog.carName(ad.brand, ad.model);
   const priceBadge = await getPreviewPriceBadge(ad);
@@ -1140,10 +1186,11 @@ async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot" }) {
   const countText = `\n\n📦 <b>Tasdiq kutayotganlar soni: ${pAds.count + pEdits.count + 1} ta</b>`;
 
   const [result] = await db.execute(
-    `INSERT INTO ads (userId, carDetails, brand_id, model_id, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, dealer_offer, videoId, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [userId, fullCarName, ad.brand_id || null, ad.model_id || null, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.dealer_offer || null, ad.videoId || null, source]
+    `INSERT INTO ads (userId, carDetails, brand_id, model_id, year, probeg, paint, color, transmission, fuel, price, phone, region, photoId, history, barter, nasiya, dealer_offer, videoId, source, paid_amount, receiptId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [userId, fullCarName, ad.brand_id || null, ad.model_id || null, ad.year, ad.probeg, ad.paint, ad.color, ad.trans, ad.fuel, ad.price, ad.phone, ad.region, ad.photos.join(","), ad.history || "Ko'rsatilmagan", ad.barter || "Yo'q", ad.nasiya || "Yo'q", ad.dealer_offer || null, ad.videoId || null, source, receiptFileId ? getPrice("ad") : null, receiptFileId || null]
   );
   const adId = result.insertId;
+  const paidText = receiptFileId ? `\n💳 <b>Pullik e'lon: ${somFmt(getPrice("ad"))}</b> — chek pastda. Qabul qilsangiz, to'lov tasdiqlangan bo'ladi.` : "";
 
   const urgentText = ad.urgent ? "\n\n🚨 <b>DIQQAT: Ushbu e'lon foydalanuvchi tomonidan SHOSHILINCH (Qaynoq narx) deb belgilangan!</b>" : "";
   const sourceText = source === "miniapp" ? "\n📱 <i>Mini App orqali yuborildi</i>" : "";
@@ -1159,7 +1206,7 @@ async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot" }) {
   }
 
   // Rasm izohi 1024 belgidan oshmasligi kerak — oshsa faqat admin ko'radigan matnda "Tarixi" ni qisqartiramiz
-  const makeCaption = (a) => `🆔 <b>ID: ${adId}</b>\n\n${buildAdCaption(a, priceBadge)}\n\n👤 Foydalanuvchi: ${userLink}${countText}${urgentText}${sourceText}`;
+  const makeCaption = (a) => `🆔 <b>ID: ${adId}</b>\n\n${buildAdCaption(a, priceBadge)}\n\n👤 Foydalanuvchi: ${userLink}${countText}${urgentText}${sourceText}${paidText}`;
   let adminCaption = makeCaption(ad);
   if (adminCaption.length > 1000 && ad.history && ad.history !== "Ko'rsatilmagan") {
     const keep = Math.max(40, ad.history.length - (adminCaption.length - 1000) - 1);
@@ -1175,6 +1222,12 @@ async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot" }) {
     if (ad.videoId) {
       await bot.api.sendVideo(ADMIN_ID, ad.videoId, { reply_to_message_id: adminMsg.message_id })
         .catch(e => console.error("Adminga video yuborishda xato:", e.message));
+    }
+    if (receiptFileId) {
+      await bot.api.sendPhoto(ADMIN_ID, receiptFileId, {
+        caption: `💳 <b>To'lov cheki</b> — e'lon ID: ${adId}, summa: ${somFmt(getPrice("ad"))}`, parse_mode: "HTML",
+        reply_parameters: { message_id: adminMsg.message_id, allow_sending_without_reply: true },
+      }).catch(e => console.error("Adminga chek yuborishda xato:", e.message));
     }
   } finally {
     if (fs.existsSync(adminCollage)) fs.unlinkSync(adminCollage);
@@ -1500,7 +1553,7 @@ async function submitVipRequest({ adId, userId, firstName, username, screenshotF
     `🌟 <b>YANGI VIP TO'LOV SO'ROVI!</b>\n\n` +
     `🚗 <b>Moshina:</b> ${ad.carDetails}\n` +
     `🆔 <b>E'lon ID:</b> ${ad.id}\n` +
-    `💰 <b>Summa:</b> ${VIP_PRICE} so'm\n` +
+    `💰 <b>Summa:</b> ${somFmt(getPrice("vip"))}\n` +
     `👤 <b>Foydalanuvchi:</b> <a href="tg://user?id=${userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a> (${usernameStr})\n\n` +
     `<i>Chekni tekshiring va tasdiqlang yoki rad eting:</i>`;
   await bot.api.sendPhoto(ADMIN_ID, screenshotFileId, {
@@ -1599,9 +1652,24 @@ async function getSalonAdStatus(userId) {
   return { ok: !error, code, error, user: user || null, todayCount, dealerName: user?.dealer_name || null, dealerPhone: user?.dealer_phone || null };
 }
 
-async function submitSalonAd({ userId, adText, mediaType, mediaId, location, phone }) {
+async function getSalonCredits(userId) {
+  const [[u]] = await db.execute("SELECT salon_credits FROM users WHERE id = ?", [userId]);
+  return Number(u && u.salon_credits) || 0;
+}
+// plan: "single" | "pack5" | "pin" (chek bilan) yoki "credit" (paketdan, chek kerak emas). Bepul rejimda — "free".
+async function submitSalonAd({ userId, adText, mediaType, mediaId, location, phone, plan = null, receiptId = null }) {
   const st = await getSalonAdStatus(userId);
   if (!st.ok) return { ok: false, code: st.code, error: st.error };
+  let price = null;
+  if (!paidSalonOn() || Number(userId) === ADMIN_ID) { plan = "free"; receiptId = null; }
+  else if (plan === "credit") {
+    const [r] = await db.execute("UPDATE users SET salon_credits = salon_credits - 1 WHERE id = ? AND salon_credits > 0", [userId]);
+    if (!r || !r.affectedRows) return { ok: false, code: "no_credits", error: "❗️ Paketingizda post qolmagan. Tarifni tanlab, to'lov qiling." };
+    receiptId = null;
+  } else if (SALON_PLANS[plan]) {
+    if (!receiptId) return { ok: false, code: "receipt_required", error: "❗️ To'lov chekini (skrinshot) yuboring." };
+    price = getPrice(SALON_PLANS[plan].priceKey);
+  } else return { ok: false, code: "plan_required", error: "❗️ Tarifni tanlang." };
   adText = String(adText || "").trim();
   if (adText.length < 10) return { ok: false, error: "❗️ Matn juda qisqa. Qaytadan urinib ko'ring." };
   if (!["photo", "video"].includes(mediaType) || !mediaId) return { ok: false, error: "❗️ Iltimos, video yoki rasm yuboring." };
@@ -1609,8 +1677,8 @@ async function submitSalonAd({ userId, adText, mediaType, mediaId, location, pho
   phone = String(phone || "").trim() || `+${st.dealerPhone}`;
 
   const [saveResult] = await db.execute(
-    "INSERT INTO salon_ads (userId, salonName, adText, mediaType, mediaId, location, phone, status) VALUES (?,?,?,?,?,?,?,'pending')",
-    [userId, st.dealerName, adText, mediaType, mediaId, location, phone]
+    "INSERT INTO salon_ads (userId, salonName, adText, mediaType, mediaId, location, phone, status, plan, price, receiptId) VALUES (?,?,?,?,?,?,?,'pending',?,?,?)",
+    [userId, st.dealerName, adText, mediaType, mediaId, location, phone, plan, price, receiptId]
   );
   const salonAdId = saveResult.insertId;
   const adminCaption =
@@ -1619,10 +1687,20 @@ async function submitSalonAd({ userId, adText, mediaType, mediaId, location, pho
     `${adText}\n\n` +
     `📍 <b>Manzil:</b> ${location}\n` +
     `📞 <b>Tel:</b> ${phone}\n\n` +
-    `👤 <a href="tg://user?id=${userId}">Profil</a> | 🆔 <code>${userId}</code>`;
+    `👤 <a href="tg://user?id=${userId}">Profil</a> | 🆔 <code>${userId}</code>` +
+    (plan === "credit" ? `\n\n🎟 <b>Paketdan</b> (to'lov oldin qilingan)` :
+     SALON_PLANS[plan] ? `\n\n💳 <b>${SALON_PLANS[plan].title}: ${somFmt(price)}</b> — chek pastda.` +
+       (plan === "pack5" ? " Tasdiqlasangiz, yana 4 ta post paketiga qo'shiladi." : plan === "pin" ? " Tasdiqlasangiz, 24 soatga qadaladi." : "") : "");
   const adminKb = new InlineKeyboard().text("✅ Tasdiqlash", `salon_approve:${salonAdId}`).text("❌ Rad etish", `salon_reject:${salonAdId}`);
-  if (mediaType === "video") await bot.api.sendVideo(ADMIN_ID, mediaId, { caption: adminCaption, parse_mode: "HTML", reply_markup: adminKb });
-  else await bot.api.sendPhoto(ADMIN_ID, mediaId, { caption: adminCaption, parse_mode: "HTML", reply_markup: adminKb });
+  const sent = mediaType === "video"
+    ? await bot.api.sendVideo(ADMIN_ID, mediaId, { caption: adminCaption.slice(0, 1024), parse_mode: "HTML", reply_markup: adminKb })
+    : await bot.api.sendPhoto(ADMIN_ID, mediaId, { caption: adminCaption.slice(0, 1024), parse_mode: "HTML", reply_markup: adminKb });
+  if (receiptId) {
+    await bot.api.sendPhoto(ADMIN_ID, receiptId, {
+      caption: `💳 Salon reklamasi to'lov cheki — ${SALON_PLANS[plan].title}, ${somFmt(price)}`,
+      reply_parameters: { message_id: sent.message_id, allow_sending_without_reply: true },
+    }).catch(e => console.error("Adminga chek yuborishda xato:", e.message));
+  }
   return { ok: true, salonAdId };
 }
 
@@ -1701,6 +1779,7 @@ const adminMenu = new InlineKeyboard()
   .text("🔔 7-kunlik UP xabar jo'natish", "admin_send_7day").row()
   .text("⏰ Avto-xabarlar (yoqish / o'chirish)", "admin_autoposts").row()
   .text("📏 E'lon limiti (foydalanuvchilar)", "admin_adlimit").row()
+  .text("💰 Narxlar va to'lovlar", "admin_prices").row()
   .text("🛠 Boshqa buyruqlar (Qo'llanma)", "admin_help").row()
   .text("❌ Yopish", "admin_close");
 
@@ -1845,6 +1924,56 @@ bot.callbackQuery(/^lim_set:(\d+)$/, async (ctx) => {
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
 });
 
+// =====================================================================
+// 💰 NARXLAR VA TO'LOVLAR: VIP, salon reklamasi tariflari, pullik e'lon rejimi
+// =====================================================================
+let adminPriceEdit = null; // admin hozir qaysi narxni yozyapti (masalan "vip")
+function pricesView() {
+  const ads = paidAdsOn(), salon = paidSalonOn();
+  const text =
+    "💰 <b>NARXLAR VA TO'LOVLAR</b>\n\n" +
+    `🌟 VIP e'lon: <b>${somFmt(getPrice("vip"))}</b>\n\n` +
+    `📢 <b>Salon reklamasi:</b> ${salon ? "💳 pullik" : "🆓 bepul"}\n` +
+    `• 1 ta post: <b>${somFmt(getPrice("salon_single"))}</b>\n` +
+    `• 5 ta post paketi: <b>${somFmt(getPrice("salon_pack5"))}</b>\n` +
+    `• Post + 24 soat qadash: <b>${somFmt(getPrice("salon_pin"))}</b>\n\n` +
+    `📝 <b>Oddiy e'lonlar:</b> ${ads ? `💳 pullik — <b>${somFmt(getPrice("ad"))}</b>` : `🆓 bepul <i>(yoqilsa: ${somFmt(getPrice("ad"))})</i>`}\n\n` +
+    "<i>Pullik rejimda foydalanuvchi kartaga o'tkazib, chek skrinshotini yuboradi (VIP dagidek). " +
+    "Siz e'lonni tasdiqlasangiz — to'lov qabul qilingan bo'ladi, rad etsangiz — pulni qaytarasiz. Siz (admin) uchun hammasi bepul.</i>";
+  const kb = new InlineKeyboard()
+    .text("✏️ VIP narxi", "pr_edit:vip").row()
+    .text("✏️ 1 post", "pr_edit:salon_single").text("✏️ 5 post", "pr_edit:salon_pack5").text("✏️ Qadash", "pr_edit:salon_pin").row()
+    .text("✏️ E'lon narxi", "pr_edit:ad").row()
+    .text(salon ? "🆓 Salon reklamasini bepul qilish" : "💳 Salon reklamasini pullik qilish", `pr_mode:salon:${salon ? 0 : 1}`).row()
+    .text(ads ? "🆓 E'lonlarni bepulga qaytarish" : "💳 E'lonlarni pullikka o'tkazish", `pr_mode:ads:${ads ? 0 : 1}`).row()
+    .text("🔙 Orqaga", "admin_back");
+  return { text, kb };
+}
+bot.callbackQuery("admin_prices", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  adminPriceEdit = null;
+  await ctx.answerCallbackQuery().catch(() => {});
+  const { text, kb } = pricesView();
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
+});
+bot.callbackQuery(/^pr_edit:(\w+)$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  const key = ctx.match[1];
+  if (!PRICE_DEFAULTS[key]) return ctx.answerCallbackQuery({ text: "Noma'lum narx" }).catch(() => {});
+  adminPriceEdit = key;
+  await ctx.answerCallbackQuery().catch(() => {});
+  await ctx.reply(`✏️ <b>${PRICE_TITLES[key]}</b>\nHozir: ${somFmt(getPrice(key))}\n\nYangi narxni so'mda raqam bilan yozing, masalan: <code>30000</code>\nBekor qilish: /cancel`, { parse_mode: "HTML" });
+});
+bot.callbackQuery(/^pr_mode:(ads|salon):([01])$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  const [, what, on] = ctx.match;
+  try { await setBotSetting(`paid:${what}`, on); }
+  catch (e) { return ctx.answerCallbackQuery({ text: "Saqlab bo'lmadi, qayta urinib ko'ring.", show_alert: true }).catch(() => {}); }
+  await ctx.answerCallbackQuery({ text: (what === "ads" ? "📝 E'lonlar: " : "📢 Salon reklamasi: ") + (on === "1" ? "pullik" : "bepul"), show_alert: true }).catch(() => {});
+  const { text, kb } = pricesView();
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
+});
+
 // 🏆 Konkurs Top-10
 bot.callbackQuery("admin_top", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
@@ -1941,7 +2070,7 @@ bot.callbackQuery("admin_vip", async (ctx) => {
 
     // 2. Jami daromad (tasdiqlangan VIP soni × narx)
     // VIP_PRICE dan raqamni ajratib olamiz (masalan "25 000" -> 25000)
-    const priceNum = parseInt(VIP_PRICE.replace(/\D/g, "")) || 0;
+    const priceNum = getPrice("vip");
     const totalIncome = (totalApproved.cnt * priceNum).toLocaleString("ru-RU");
 
     // 3. Eng ko'p VIP olgan mijozlar (foydalanuvchi bo'yicha guruhlab)
@@ -1960,7 +2089,7 @@ bot.callbackQuery("admin_vip", async (ctx) => {
     text += `⏳ Kutayotgan: <b>${totalPending.cnt} ta</b>\n`;
     text += `❌ Rad etilgan: <b>${totalRejected.cnt} ta</b>\n`;
     text += `💰 <b>Jami daromad: ~${totalIncome} so'm</b>\n`;
-    text += `<i>(${totalApproved.cnt} ta × ${VIP_PRICE} so'm)</i>\n\n`;
+    text += `<i>(${totalApproved.cnt} ta × ${somFmt(getPrice("vip"))}, hozirgi narx bo'yicha)</i>\n\n`;
     text += `━━━━━━━━━━━━━━━━━━\n`;
     text += `👥 <b>ENG KO'P VIP OLGAN MIJOZLAR:</b>\n\n`;
 
@@ -3629,9 +3758,33 @@ if (action === "submit_ad") {
             return; 
           }
 
+          // 💳 Pullik rejim: avval to'lov cheki (admin uchun bepul)
+          let receiptFileId = null;
+          const pay = await conversation.external(() => ({ on: paidAdsOn() && ctx.from.id !== ADMIN_ID, price: getPrice("ad") }));
+          if (pay.on) {
+            const payKb = new InlineKeyboard().text("❌ Bekor qilish", "cancel_pay");
+            await ctx.reply(
+              `💳 <b>E'lon joylash pullik: ${somFmt(pay.price)}</b>\n\n` +
+              `Quyidagi kartaga o'tkazing:\n<code>${VIP_CARD}</code>\n👤 ${VIP_CARD_NAME}\n\n` +
+              `📸 So'ng <b>to'lov chekini (skrinshot)</b> shu yerga rasm qilib yuboring — e'lon chek bilan birga adminga boradi.`,
+              { parse_mode: "HTML", reply_markup: payKb }
+            );
+            while (!receiptFileId) {
+              const pr = await conversation.waitFor(["message:photo", "message:text", "callback_query:data"]);
+              if (pr.message?.photo) { receiptFileId = pr.message.photo[pr.message.photo.length - 1].file_id; break; }
+              if (pr.callbackQuery) {
+                await pr.answerCallbackQuery().catch(() => {});
+                if (pr.callbackQuery.data === "cancel_pay") { if (ctx.session) ctx.session.editAdData = null; return ctx.reply("❌ <b>E'lon berish bekor qilindi.</b>", { parse_mode: "HTML", reply_markup: mainMenu }); }
+                continue;
+              }
+              if (cancelTexts.includes(pr.message.text)) { if (ctx.session) ctx.session.editAdData = null; return ctx.reply("❌ <b>E'lon berish bekor qilindi.</b>", { parse_mode: "HTML", reply_markup: mainMenu }); }
+              await ctx.reply("📸 Iltimos, to'lov chekini <b>rasm</b> qilib yuboring.", { parse_mode: "HTML", reply_markup: payKb });
+            }
+          }
+
           // Yangi e'lon: bazaga yozish + adminga yuborish umumiy funksiyada (Mini App ham shuni chaqiradi)
           await conversation.external(() =>
-            submitNewAdToAdmin({ ad, userId: ctx.from.id, firstName: ctx.from.first_name, source: "bot" })
+            submitNewAdToAdmin({ ad, userId: ctx.from.id, firstName: ctx.from.first_name, source: "bot", receiptFileId })
           );
 
           if (ctx.session) ctx.session.editAdData = null;
@@ -4046,9 +4199,51 @@ async function salonAdConversation(conversation, ctx) {
     phone = phoneRes.message.text.trim();
   }
 
+  // 5. 💳 Tarif va to'lov (pullik rejimda)
+  let plan = null, receiptId = null;
+  const payInfo = await conversation.external(async () => ({
+    on: paidSalonOn() && ctx.from.id !== ADMIN_ID, credits: await getSalonCredits(ctx.from.id),
+    prices: { single: getPrice("salon_single"), pack5: getPrice("salon_pack5"), pin: getPrice("salon_pin") },
+  }));
+  if (payInfo.on) {
+    const planKb = new InlineKeyboard();
+    if (payInfo.credits > 0) planKb.text(`🎟 Paketdan (${payInfo.credits} ta qoldi)`, "splan:credit").row();
+    planKb.text(`1 ta post — ${somFmt(payInfo.prices.single)}`, "splan:single").row()
+      .text(`5 ta post — ${somFmt(payInfo.prices.pack5)}`, "splan:pack5").row()
+      .text(`📌 Post + 24 soat qadash — ${somFmt(payInfo.prices.pin)}`, "splan:pin").row()
+      .text("❌ Bekor qilish", "splan:cancel");
+    await ctx.reply("5️⃣ <b>Tarifni tanlang:</b>", { parse_mode: "HTML", reply_markup: planKb });
+    while (!plan) {
+      const pr = await conversation.waitFor(["callback_query:data", "message:text"]);
+      if (pr.message?.text) {
+        if (cancelTexts.includes(pr.message.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+        await ctx.reply("👆 Tarifni yuqoridagi tugmalardan tanlang.");
+        continue;
+      }
+      await pr.answerCallbackQuery().catch(() => {});
+      const d = pr.callbackQuery.data;
+      if (d === "splan:cancel") return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+      if (/^splan:(credit|single|pack5|pin)$/.test(d)) plan = d.split(":")[1];
+    }
+    if (plan !== "credit") {
+      await ctx.reply(
+        `💳 <b>${SALON_PLANS[plan].title}: ${somFmt(payInfo.prices[plan])}</b>\n\n` +
+        `Quyidagi kartaga o'tkazing:\n<code>${VIP_CARD}</code>\n👤 ${VIP_CARD_NAME}\n\n` +
+        `📸 So'ng <b>to'lov chekini (skrinshot)</b> shu yerga rasm qilib yuboring.`,
+        { parse_mode: "HTML" }
+      );
+      while (!receiptId) {
+        const rr = await conversation.waitFor(["message:photo", "message:text"]);
+        if (rr.message.photo) { receiptId = rr.message.photo[rr.message.photo.length - 1].file_id; break; }
+        if (cancelTexts.includes(rr.message.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+        await ctx.reply("📸 Iltimos, to'lov chekini <b>rasm</b> qilib yuboring.", { parse_mode: "HTML" });
+      }
+    }
+  }
+
   // Bazaga saqlash va adminga yuborish — umumiy funksiya (Mini App ham shuni chaqiradi)
   const salonResult = await conversation.external(() => submitSalonAd({
-    userId: ctx.from.id, adText, mediaType, mediaId, location, phone,
+    userId: ctx.from.id, adText, mediaType, mediaId, location, phone, plan, receiptId,
   }));
   if (!salonResult.ok) return ctx.reply(salonResult.error, { parse_mode: "HTML", reply_markup: mainMenu });
 
@@ -4094,11 +4289,23 @@ bot.callbackQuery(/^salon_approve:(\d+)/, async (ctx) => {
 
     await db.execute("UPDATE salon_ads SET status = 'active', channelMsgId = ? WHERE id = ?", [sentMsg.message_id, salonAdId]);
 
-    await ctx.editMessageCaption({ caption: "✅ <b>Reklama kanalga joylandi!</b>", parse_mode: "HTML" });
+    let extra = "";
+    if (sa.plan === "pack5") {
+      await db.execute("UPDATE users SET salon_credits = salon_credits + 4 WHERE id = ?", [sa.userId]);
+      const left = await getSalonCredits(sa.userId);
+      extra = `\n\n🎟 Paketingizda yana <b>${left} ta</b> post bor. Keyingi reklamada «Paketdan» ni tanlang.`;
+    }
+    if (sa.plan === "pin") {
+      await bot.api.pinChatMessage(CHANNEL_ID, sentMsg.message_id, { disable_notification: true }).catch((e) => console.error("Qadab bo'lmadi:", e.message));
+      await db.execute("UPDATE salon_ads SET pin_until = NOW() + INTERVAL 24 HOUR WHERE id = ?", [salonAdId]);
+      extra = "\n\n📌 Reklama 24 soat kanal tepasida turadi.";
+    }
+
+    await ctx.editMessageCaption({ caption: "✅ <b>Reklama kanalga joylandi!</b>" + extra.replace(/Paketingizda/, "Dilerning paketida"), parse_mode: "HTML" });
 
     // Dilerga xabar
     try {
-      await bot.api.sendMessage(sa.userId, `🎉 <b>Reklamangiz kanalga joylandi!</b>\n\nSalon reklamangiz muvaffaqiyatli e'lon qilindi.\n\nKanalni ko'rish: https://t.me/engarzonidamoshina`, { parse_mode: "HTML" });
+      await bot.api.sendMessage(sa.userId, `🎉 <b>Reklamangiz kanalga joylandi!</b>\n\nSalon reklamangiz muvaffaqiyatli e'lon qilindi.${extra}\n\nKanalni ko'rish: https://t.me/engarzonidamoshina`, { parse_mode: "HTML" });
     } catch (e) {}
 
   } catch (e) {
@@ -4115,8 +4322,12 @@ bot.callbackQuery(/^salon_reject:(\d+)/, async (ctx) => {
   const [[sa]] = await db.execute("SELECT * FROM salon_ads WHERE id = ?", [salonAdId]);
   if (!sa) return ctx.answerCallbackQuery({ text: "Reklama topilmadi.", show_alert: true });
 
+  if (sa.status !== "pending") return ctx.answerCallbackQuery({ text: "Bu reklama allaqachon ko'rib chiqilgan.", show_alert: true });
   await db.execute("UPDATE salon_ads SET status = 'rejected' WHERE id = ?", [salonAdId]);
-  await ctx.editMessageCaption({ caption: "❌ <b>Reklama rad etildi.</b>", parse_mode: "HTML" });
+  // Paketdan berilgan bo'lsa — postni qaytaramiz; pullik bo'lsa — adminga pulni qaytarish eslatmasi
+  if (sa.plan === "credit") await db.execute("UPDATE users SET salon_credits = salon_credits + 1 WHERE id = ?", [sa.userId]);
+  const refundNote = sa.price ? `\n\n💳 Diler ${somFmt(sa.price)} to'lagan — pulni qaytarishni unutmang.` : sa.plan === "credit" ? "\n\n🎟 Post dilerning paketiga qaytarildi." : "";
+  await ctx.editMessageCaption({ caption: "❌ <b>Reklama rad etildi.</b>" + refundNote, parse_mode: "HTML" });
 
   try {
     await bot.api.sendMessage(sa.userId, "❌ <b>Salon reklamangiz rad etildi.</b>\n\nReklama qoidalarga mos kelmadi. Savol bo'lsa: @uzdev75", { parse_mode: "HTML" });
@@ -4856,6 +5067,7 @@ bot.hears("📝 E'lon berish", async (ctx) => {
   if (WEBAPP_URL) {
     return ctx.reply(
       "📝 <b>E'lonni qanday to'ldirasiz?</b>\n\n" +
+      (paidAdsOn() && ctx.from.id !== ADMIN_ID ? `💳 <b>E'lon joylash: ${somFmt(getPrice("ad"))}</b> — oxirida to'lov cheki so'raladi.\n\n` : "") +
       "📱 <b>Ilovada</b> — barcha maydonlar bitta sahifada, 1-2 daqiqada tayyor.\n" +
       "💬 <b>Bot orqali</b> — savol-javob tarzida, qadamma-qadam.",
       {
@@ -4865,6 +5077,9 @@ bot.hears("📝 E'lon berish", async (ctx) => {
           .text("💬 Bot orqali to'ldirish", "ad_via_bot"),
       }
     );
+  }
+  if (paidAdsOn() && ctx.from.id !== ADMIN_ID) {
+    await ctx.reply(`💳 <b>E'lon joylash: ${somFmt(getPrice("ad"))}</b> — oxirida to'lov cheki so'raladi.`, { parse_mode: "HTML" });
   }
   await ctx.conversation.enter("createAdConversation");
 });
@@ -5470,7 +5685,7 @@ bot.callbackQuery(/^buy_vip:(\d+)/, async (ctx) => {
         `✅ Kanalning eng tepasiga qadaladi (Pin)\n` +
         `✅ "🌟 VIP" belgisi bilan ajralib turadi\n` +
         `✅ Ko'proq xaridor ko'radi\n\n` +
-        `💰 <b>Narxi: ${VIP_PRICE} so'm</b>\n\n` +
+        `💰 <b>Narxi: ${somFmt(getPrice("vip"))}</b>\n\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
         `💳 <b>To'lov uchun karta:</b>\n` +
         `<code>${VIP_CARD}</code>\n` +
@@ -6187,6 +6402,17 @@ function runScheduledPosts(now = new Date()) {
         }
     }
 }
+// 📌 Salon reklamasi 24 soatlik qadash muddati tugasa — yechamiz
+async function unpinExpiredSalonAds() {
+  try {
+    const [rows] = await db.execute("SELECT id, channelMsgId FROM salon_ads WHERE pin_until IS NOT NULL AND pin_until < NOW()");
+    for (const r of rows) {
+      if (r.channelMsgId) await bot.api.unpinChatMessage(CHANNEL_ID, Number(r.channelMsgId)).catch(() => {});
+      await db.execute("UPDATE salon_ads SET pin_until = NULL WHERE id = ?", [r.id]);
+    }
+  } catch (e) { console.error("Qadashni yechishda xato:", e.message); }
+}
+setInterval(unpinExpiredSalonAds, 10 * 60 * 1000).unref();
 setInterval(() => runScheduledPosts(new Date()), 60 * 1000 * 30);
 module.exports = { runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP }; // testlar uchun
 
@@ -6217,6 +6443,7 @@ dbReady.finally(async () => {
       requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
       estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
       logUserAction, getAdVotes,
+      getPrice, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS,
     });
   } catch (e) {
     console.error("❌ Mini App serverini ishga tushirib bo'lmadi:", e);
