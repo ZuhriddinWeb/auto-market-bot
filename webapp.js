@@ -123,7 +123,7 @@ function startWebApp(deps) {
     requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
     estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
     VIP_PRICE, VIP_CARD, VIP_CARD_NAME, logUserAction, getAdVotes,
-    getPrice, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS,
+    getPrice, getVipDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS,
   } = deps;
 
   const PORT = Number(process.env.PORT) || 3000;
@@ -223,17 +223,16 @@ function startWebApp(deps) {
       hasNasiya: !!(ad.nasiya && ad.nasiya !== "Yo'q"),
       status: ad.status, soldPrice: ad.sold_price ? digits(ad.sold_price) : null,
       createdAt: ad.created_at, channelUrl: channelLink(ad),
+      isVip: !!(ad.status === "active" && ad.vip_until && new Date(ad.vip_until).getTime() > Date.now()),
+      vipUntil: ad.status === "active" && ad.vip_until && new Date(ad.vip_until).getTime() > Date.now() ? new Date(ad.vip_until).toISOString() : null,
     };
   }
 
-  // VIP: admin to'lovni tasdiqlagan e'lonlar (oxirgi VIP_TOP_DAYS kun ichida)
-  const VIP_TOP_DAYS = Number(process.env.VIP_TOP_DAYS) || 7;
+  // VIP: muddati (ads.vip_until) hali tugamagan faol e'lonlar — admin panelda belgilangan kun soni bo'yicha
   async function activeVipIds() {
     try {
-      const [rows] = await db.execute(
-        `SELECT DISTINCT adId FROM vip_requests WHERE status = 'approved' AND created_at >= NOW() - INTERVAL ${VIP_TOP_DAYS} DAY`
-      );
-      return rows.map(r => Number(r.adId)).filter(Boolean);
+      const [rows] = await db.execute("SELECT id FROM ads WHERE status = 'active' AND vip_until > NOW()");
+      return rows.map(r => Number(r.id)).filter(Boolean);
     } catch (e) { return []; }
   }
 
@@ -434,7 +433,7 @@ function startWebApp(deps) {
       freeUps: u?.free_ups || 0,
       lastPhone: lastRows[0]?.phone || null,
       channelUrl: CHANNEL_URL,
-      vip: { price: getPrice ? String(getPrice("vip")) : VIP_PRICE, card: VIP_CARD, cardName: VIP_CARD_NAME },
+      vip: { price: getPrice ? String(getPrice("vip")) : VIP_PRICE, days: getVipDays ? getVipDays() : 7, card: VIP_CARD, cardName: VIP_CARD_NAME },
       // 💳 Pullik rejimlar va narxlar (admin panel → «💰 Narxlar va to'lovlar»)
       paidAds: !!(paidAdsOn && paidAdsOn() && user.id !== ADMIN_ID),
       adPrice: getPrice ? getPrice("ad") : null,

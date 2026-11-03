@@ -387,6 +387,8 @@ select.input {
 .pill.active { background: var(--deal-soft); color: var(--deal); }
 .pill.pending { background: var(--amber-soft); color: var(--amber); }
 .pill.sold { background: var(--surface-2); color: var(--ink-2); }
+.pill.vip { background: #fff3cc; color: #8a5a00; }
+[data-theme="dark"] .pill.vip { background: rgba(255,200,61,.16); color: #ffc83d; }
 .notice { background: var(--surface); border-radius: var(--r-m); padding: 13px 14px; font-size: 14px; margin-bottom: 12px; display: flex; gap: 10px; align-items: flex-start; }
 .notice b { display: block; font-weight: 600; }
 .notice .s { color: var(--ink-2); }

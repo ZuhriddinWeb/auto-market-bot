@@ -364,6 +364,12 @@
     var code = REGION_CODES[region];
     return h("span", { class: "plate" + (large ? " lg" : ""), title: "Viloyat: " + region }, [code ? h("b", { text: code }) : null, h("span", { text: region }), large ? h("i", { text: "UZ" }) : null]);
   }
+  function vipDays() { return (me && me.vip && me.vip.days) || 7; }
+  function fmtDateTime(iso) {
+    var d = new Date(iso); if (isNaN(d)) return "";
+    var p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(d.getDate()) + "." + p(d.getMonth() + 1) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
   function relDay(iso) {
     var t = Date.parse(iso || "");
     if (!t) return "";
@@ -1235,6 +1241,7 @@
     if (it.status === "pending") return h("span", { class: "pill pending", text: "Tekshirilmoqda" });
     if (it.status === "sold") return h("span", { class: "pill sold", text: "Sotilgan" + (it.soldPrice ? ": " + fmtPrice(it.soldPrice) : "") });
     if (it.editPending) return h("span", { class: "pill pending", text: "Tahrir tekshirilmoqda" });
+    if (it.vipUntil) return h("span", { class: "pill vip", text: "★ VIP · " + fmtDateTime(it.vipUntil).split(" ")[0] + " gacha" });
     return h("span", { class: "pill active", text: "Kanalda faol" });
   }
   // Kanaldagi «Narxga baho» reaksiyalari: 🔥 arzon · 👍 normal · 🤔 qimmat
@@ -1361,7 +1368,9 @@
           listItem({ icon: "check", color: "#34c759", title: "Sotildi deb belgilash", sub: "Admin tasdiqlagach kanalda «Sotildi» bo'ladi", onclick: soldSheet }),
           listItem({ icon: "down", color: "#ff9500", title: "Narxni o'zgartirish", sub: "Narx tushsa, saqlaganlarga xabar boradi", onclick: priceSheet }),
           listItem({ icon: "edit", color: "#007aff", title: "To'liq tahrirlash", sub: "Rasm, matn va boshqa ma'lumotlar", onclick: function () { go("/edit/" + id); } }),
-          listItem({ icon: "star", color: "#ffb300", title: "VIP qilish", sub: "Kanal tepasiga qadaladi, " + fmtNum(me.vip.price) + " so'm", onclick: function () { go("/vip/" + id); } }),
+          it.vipUntil
+            ? listItem({ icon: "star", color: "#ffb300", title: "VIP ni uzaytirish", sub: "Hozir VIP: " + fmtDateTime(it.vipUntil) + " gacha", onclick: function () { go("/vip/" + id); } })
+            : listItem({ icon: "star", color: "#ffb300", title: "VIP qilish", sub: vipDays() + " kun kanal tepasida, " + fmtNum(me.vip.price) + " so'm", onclick: function () { go("/vip/" + id); } }),
         ];
         if (me.freeUps > 0) items.push(listItem({ icon: "up", color: "#af52de", title: "Bepul UP", sub: "E'lon kanalda yangi qatorga chiqadi", end: me.freeUps + " ta", onclick: doUp }));
         if (it.channelUrl) items.push(listItem({ icon: "eye", color: "#8e8e93", title: "Kanalda ko'rish", onclick: function () { openLink(it.channelUrl); } }));
@@ -1423,8 +1432,8 @@
     currentParent = "/my/ad/" + id;
     var shot = null; // { url, token, status }
     app.appendChild(h("h1", { class: "page", text: "VIP e'lon" }));
-    app.appendChild(h("p", { class: "page-sub", text: "E'loningiz kanal tepasiga qadaladi va «VIP» belgisi bilan ajralib turadi — uni ko'proq xaridor ko'radi." }));
-    app.appendChild(h("div", { class: "result" }, [h("div", { class: "lbl", text: "Narxi" }), h("div", { class: "big", text: fmtNum(me.vip.price) + " so'm" })]));
+    app.appendChild(h("p", { class: "page-sub", text: vipDays() + " kun davomida e'loningiz kanal tepasiga qadaladi, ilovada birinchi chiqadi va «VIP» belgisi bilan ajralib turadi. Muddat admin tasdiqlagan paytdan hisoblanadi; tugashidan bir kun oldin bot eslatadi." }));
+    app.appendChild(h("div", { class: "result" }, [h("div", { class: "lbl", text: "Narxi · " + vipDays() + " kun" }), h("div", { class: "big", text: fmtNum(me.vip.price) + " so'm" })]));
     app.appendChild(h("p", { class: "group-title", text: "To'lov tartibi" }));
     app.appendChild(h("div", { class: "group" }, [h("div", { class: "field" }, [
       h("ol", { class: "steps" }, [
