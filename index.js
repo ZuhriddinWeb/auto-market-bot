@@ -375,7 +375,7 @@ async function buildChannelCaption(ad) {
     if (d && Number(d.is_dealer) === 1 && Number(d.dealer_paused) !== 1 && d.dealer_name) dealerBadge = `✅ <b>Ishonchli sotuvchi: ${d.dealer_name}</b>\n\n`;
   } catch (e) {}
   let c = vipHeader(ad) + dealerBadge + (ad.is_hot ? `🔥 <b>QAYNOQ NARX!</b>\n\n` : "") +
-    `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
+    `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
     `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n`;
   if (ad.history && ad.history !== "Ko'rsatilmagan" && ad.history !== "Кўрсатилмаган") c += `🛠 Tarixi: ${ad.history}\n`;
   if (ad.barter && ad.barter !== "Yo'q" && ad.barter !== "Йўқ") c += `🔄 Barter: ${ad.barter}\n`;
@@ -587,6 +587,39 @@ bot.use(async (ctx, next) => {
       const v = settingsView();
       await ctx.reply(`✅ ${SETTING_FIELDS[inp.field].title} saqlandi.`);
       return ctx.reply(v.text, { parse_mode: "HTML", reply_markup: v.kb, disable_web_page_preview: true });
+    }
+    if (inp.type === "cat_brand") {
+      const r = await catalog.addBrand(db, t);
+      if (!r.ok && !r.brand) return ctx.reply(`❗️ ${r.error} Qayta yozing yoki /cancel.`);
+      adminInput = null;
+      const b = catalog.brandById(r.brand.id) || r.brand;
+      await ctx.reply(r.ok ? `✅ «${b.name}» markasi qo'shildi. Endi uning modellarini qo'shing.` : `ℹ️ «${b.name}» markasi allaqachon bor.`);
+      const v = brandView(b);
+      return ctx.reply(v.text, { parse_mode: "HTML", reply_markup: v.kb });
+    }
+    if (inp.type === "cat_model") {
+      const b = catalog.brandById(inp.brandId);
+      if (!b) { adminInput = null; return ctx.reply("❗️ Marka topilmadi."); }
+      const names = t.split(/[,\n]/).map((x) => x.replace(/[<>|]/g, "").replace(/\s+/g, " ").trim()).filter(Boolean);
+      const bad = names.filter((n) => n.length < 1 || n.length > 40);
+      if (!names.length || bad.length) return ctx.reply("❗️ Model nomi 1 dan 40 belgigacha bo'lsin. Qayta yozing yoki /cancel.");
+      adminInput = null;
+      const added = [], had = [];
+      for (const n of names.slice(0, 30)) {
+        const r = await catalog.addModel(db, b.name, n);
+        (r.created ? added : had).push(r.model.name);
+      }
+      await ctx.reply((added.length ? `✅ Qo'shildi: ${added.join(", ")}` : "") + (had.length ? `${added.length ? "\n" : ""}ℹ️ Avvaldan bor: ${had.join(", ")}` : ""));
+      const v = brandView(catalog.brandById(b.id));
+      return ctx.reply(v.text, { parse_mode: "HTML", reply_markup: v.kb });
+    }
+    if (inp.type === "opt_add") {
+      const r = await catalog.addOption(db, inp.kind, t);
+      if (!r.ok) return ctx.reply(`❗️ ${r.error} Qayta yozing yoki /cancel.`);
+      adminInput = null;
+      await ctx.reply(`✅ «${r.value}» qo'shildi — bot va ilovadagi e'lon formasida darhol chiqadi.`);
+      const v = optionsView(inp.kind);
+      return ctx.reply(v.text, { parse_mode: "HTML", reply_markup: v.kb });
     }
     if (inp.type === "grant_id") {
       const id = parseInt(t.replace(/\D/g, ""), 10);
@@ -1105,6 +1138,24 @@ async function sendPriceChartPost() {
   }
 }
 // Raqamlarni vergul (yoki probel) bilan ajratib beruvchi funksiya
+// Probeg matni: raqam bo'lsa "85,000 km", "Salon" bo'lsa "Salon (0 km)", boshqa variant ("Noma'lum") — o'zi
+function kmText(v) {
+  const t = String(v == null ? "" : v).trim();
+  if (!t) return "—";
+  if (t === "Salon") return "Salon (0 km)";
+  if (/^\d[\d\s,.]*(km)?$/i.test(t)) return `${formatNum(t)} km`;
+  return t;
+}
+// E'lon formasidagi tanlov tugmalari — admin paneldagi ro'yxatdan (catalog.AD_OPTIONS)
+function optionKb(kind, prefix, backCb, labels = {}) {
+  const vals = catalog.AD_OPTIONS[kind] || [];
+  const perRow = vals.some((v) => String(labels[v] || v).length > 12) ? 2 : 3;
+  const kb = new InlineKeyboard();
+  vals.forEach((v, i) => { kb.text(labels[v] || v, `${prefix}${v}`); if ((i + 1) % perRow === 0) kb.row(); });
+  if (vals.length % perRow) kb.row();
+  return kb.text("🔙 Orqaga", backCb).text("❌ Bekor", "cancel_ad");
+}
+const optValue = (data) => String(data || "").slice(String(data || "").indexOf(":") + 1);
 function formatNum(value) {
   if (!value) return "0";
   // Faqat raqamlarni ajratib olamiz
@@ -1265,7 +1316,7 @@ function buildAdCaption(ad, priceBadge = "") {
   if (ad.urgent) caption += `🔥 <b>QAYNOQ NARX!</b>\n\n`;
   caption +=
     `🚗 <b>Moshina:</b> ${fullCarName}\n` +
-    `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${formatNum(ad.probeg)} km\n` +
+    `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${kmText(ad.probeg)}\n` +
     `💎 <b>Kraska:</b> ${ad.paint}\n🎨 <b>Rangi:</b> ${ad.color}\n` +
     `⚙️ <b>Korobka:</b> ${ad.trans}\n⛽ <b>Yoqilg'i:</b> ${ad.fuel}\n`;
   if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 <b>Tarixi:</b> ${ad.history}\n`;
@@ -1605,7 +1656,7 @@ async function changeAdPrice({ adId, userId, newPrice }) {
   newPrice = p.value;
 
   const newCaption = addPriceVoteLine(vipHeader(ad) +
-    `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
+    `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
     `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
     `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: <s>${formatNum(ad.price)} $</s> <b>${formatNum(newPrice)}$ 📉</b>\n☎️ +${ad.phone}\n🚩 #${String(ad.region).replace(/\s+/g, "_")}\n\n` +
     `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`);
@@ -1960,6 +2011,7 @@ const adminMenu = new InlineKeyboard()
   .text("📏 E'lon limiti (foydalanuvchilar)", "admin_adlimit").row()
   .text("💰 Narxlar va to'lovlar", "admin_prices").row()
   .text("⚙️ Sozlamalar (karta, havola, limitlar)", "admin_settings").row()
+  .text("🚗 Katalog: marka, model, variantlar", "admin_catalog").row()
   .text("🛠 Boshqa buyruqlar (Qo'llanma)", "admin_help").row()
   .text("❌ Yopish", "admin_close");
 
@@ -2288,6 +2340,143 @@ bot.callbackQuery(/^pg_del:(urgent|top|vip|premium):(\d+)$/, async (ctx) => {
   const { text, kb } = grantView(ad);
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => ctx.reply(text, { parse_mode: "HTML", reply_markup: kb }));
 });
+
+// 🚗 KATALOG: marka/model va e'lon formasidagi variantlar (kraska, rang, korobka, yoqilg'i, probeg)
+function catalogHomeView() {
+  const c = catalog.get();
+  const models = c.brands.reduce((n, b) => n + b.models.length, 0);
+  const O = catalog.AD_OPTIONS;
+  let text = `🚗 <b>KATALOG VA VARIANTLAR</b>\n\n🏷 Markalar: <b>${c.brands.length}</b> · Modellar: <b>${models}</b>\n\n`;
+  for (const [k, title] of Object.entries(catalog.EDITABLE_OPTIONS)) text += `${title}: ${O[k].map(escapeHtml).join(", ")}\n`;
+  text += "\n<i>O'zgarishlar bot va ilovadagi e'lon formasida, qidiruv filtrlarida darhol ko'rinadi.</i>";
+  const kb = new InlineKeyboard()
+    .text("🏷 Markalar va modellar", "cat_brands:0").row()
+    .text("➕ Yangi marka", "cat_addbrand").row();
+  const keys = Object.keys(catalog.EDITABLE_OPTIONS);
+  keys.forEach((k, i) => { kb.text(catalog.EDITABLE_OPTIONS[k], `opt_k:${k}`); if (i % 2 === 1) kb.row(); });
+  if (keys.length % 2) kb.row();
+  kb.text("🔙 Orqaga", "admin_back");
+  return { text, kb };
+}
+const CAT_PAGE = 30;
+function brandsView(page) {
+  const brands = catalog.get().brands;
+  const pages = Math.max(1, Math.ceil(brands.length / CAT_PAGE));
+  page = Math.min(Math.max(0, page), pages - 1);
+  const kb = new InlineKeyboard();
+  brands.slice(page * CAT_PAGE, (page + 1) * CAT_PAGE).forEach((b, i) => { kb.text(`${b.name} (${b.models.length})`, `cat_b:${b.id}`); if (i % 3 === 2) kb.row(); });
+  kb.row();
+  if (pages > 1) { if (page > 0) kb.text("⬅️", `cat_brands:${page - 1}`); kb.text(`${page + 1}/${pages}`, "ignore"); if (page < pages - 1) kb.text("➡️", `cat_brands:${page + 1}`); kb.row(); }
+  kb.text("➕ Yangi marka", "cat_addbrand").row().text("🔙 Orqaga", "admin_catalog");
+  return { text: "🏷 <b>MARKALAR</b>\n\nMarkani tanlang — uning modellari chiqadi, yangi model qo'shishingiz mumkin.", kb };
+}
+function brandView(b) {
+  let text = `🏷 <b>${escapeHtml(b.name)}</b> — ${b.models.length} ta model\n\n`;
+  text += b.models.length ? b.models.map((m) => escapeHtml(m.name)).join(", ") : "<i>Hali model yo'q.</i>";
+  text += "\n\nModelni bossangiz — tafsiloti va o'chirish. Bir nechta modelni vergul bilan birga qo'shish mumkin.";
+  const kb = new InlineKeyboard().text("➕ Model qo'shish", `cat_addmodel:${b.id}`).row();
+  b.models.slice(0, 60).forEach((m, i) => { kb.text(m.name, `cat_m:${m.id}`); if (i % 3 === 2) kb.row(); });
+  kb.row();
+  if (!b.models.length) kb.text("🗑 Markani o'chirish", `cat_delb:${b.id}`).row();
+  kb.text("🔙 Markalar", "cat_brands:0");
+  return { text, kb };
+}
+function optionsView(kind) {
+  const vals = catalog.AD_OPTIONS[kind];
+  let text = `${catalog.EDITABLE_OPTIONS[kind]}\n\n` + vals.map((v, i) => `${i + 1}. ${escapeHtml(v)}`).join("\n") +
+    "\n\nVariantni bossangiz — o'chirish so'raladi. Yangi variant ro'yxat oxiriga qo'shiladi.";
+  if (kind === "probegs") text += "\n<i>Probeg variantlari raqam o'rniga tanlanadi, masalan «Noma'lum». «Salon» — yangi mashina (0 km).</i>";
+  const kb = new InlineKeyboard().text("➕ Variant qo'shish", `opt_add:${kind}`).row();
+  vals.forEach((v, i) => { kb.text(`🗑 ${v}`, `opt_d:${kind}:${i}`); if (i % 2 === 1) kb.row(); });
+  kb.row().text("🔙 Orqaga", "admin_catalog");
+  return { text, kb };
+}
+const editOrReply = (ctx, v) => ctx.editMessageText(v.text, { parse_mode: "HTML", reply_markup: v.kb }).catch(() => ctx.reply(v.text, { parse_mode: "HTML", reply_markup: v.kb }));
+const adminOnly = (fn) => async (ctx) => { if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {}); return fn(ctx); };
+
+bot.callbackQuery("admin_catalog", adminOnly(async (ctx) => {
+  adminInput = null; adminPriceEdit = null;
+  await ctx.answerCallbackQuery().catch(() => {});
+  await editOrReply(ctx, catalogHomeView());
+}));
+bot.callbackQuery(/^cat_brands:(\d+)$/, adminOnly(async (ctx) => {
+  await ctx.answerCallbackQuery().catch(() => {});
+  await editOrReply(ctx, brandsView(Number(ctx.match[1])));
+}));
+bot.callbackQuery(/^cat_b:(\d+)$/, adminOnly(async (ctx) => {
+  const b = catalog.brandById(ctx.match[1]);
+  if (!b) return ctx.answerCallbackQuery({ text: "Marka topilmadi.", show_alert: true }).catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  await editOrReply(ctx, brandView(b));
+}));
+bot.callbackQuery(/^cat_m:(\d+)$/, adminOnly(async (ctx) => {
+  const m = catalog.modelById(ctx.match[1]);
+  if (!m) return ctx.answerCallbackQuery({ text: "Model topilmadi.", show_alert: true }).catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  const used = await catalog.usageCount(db, "model_id", m.id).catch(() => 0);
+  const text = `🚗 <b>${escapeHtml(m.brandName)} ${escapeHtml(m.name)}</b>\n\n📋 Ishlatilgan: <b>${used}</b> ta e'lon / obuna` +
+    (used ? "\n<i>E'lonlarda ishlatilgan model o'chirilmaydi.</i>" : "");
+  const kb = new InlineKeyboard();
+  if (!used) kb.text("🗑 Modelni o'chirish", `cat_delm:${m.id}`).row();
+  kb.text(`🔙 ${m.brandName}`, `cat_b:${m.brandId}`);
+  await editOrReply(ctx, { text, kb });
+}));
+bot.callbackQuery(/^cat_delm:(\d+)$/, adminOnly(async (ctx) => {
+  const m = catalog.modelById(ctx.match[1]);
+  const r = await catalog.removeModel(db, ctx.match[1]);
+  if (!r.ok) return ctx.answerCallbackQuery({ text: r.error, show_alert: true }).catch(() => {});
+  await ctx.answerCallbackQuery({ text: `🗑 ${m.name} o'chirildi` }).catch(() => {});
+  const b = catalog.brandById(m.brandId);
+  await editOrReply(ctx, b ? brandView(b) : brandsView(0));
+}));
+bot.callbackQuery(/^cat_delb:(\d+)$/, adminOnly(async (ctx) => {
+  const r = await catalog.removeBrand(db, ctx.match[1]);
+  if (!r.ok) return ctx.answerCallbackQuery({ text: r.error, show_alert: true }).catch(() => {});
+  await ctx.answerCallbackQuery({ text: `🗑 ${r.brand.name} o'chirildi` }).catch(() => {});
+  await editOrReply(ctx, brandsView(0));
+}));
+bot.callbackQuery("cat_addbrand", adminOnly(async (ctx) => {
+  adminPriceEdit = null; adminInput = { type: "cat_brand" };
+  await ctx.answerCallbackQuery().catch(() => {});
+  await ctx.reply("➕ <b>Yangi marka</b>\n\nMarka nomini yozing, masalan: <code>Changan</code>\nBekor qilish: /cancel", { parse_mode: "HTML" });
+}));
+bot.callbackQuery(/^cat_addmodel:(\d+)$/, adminOnly(async (ctx) => {
+  const b = catalog.brandById(ctx.match[1]);
+  if (!b) return ctx.answerCallbackQuery({ text: "Marka topilmadi.", show_alert: true }).catch(() => {});
+  adminPriceEdit = null; adminInput = { type: "cat_model", brandId: b.id };
+  await ctx.answerCallbackQuery().catch(() => {});
+  await ctx.reply(`➕ <b>${escapeHtml(b.name)}</b> — yangi model\n\nModel nomini yozing. Bir nechtasini vergul bilan: <code>CS35 Plus, CS55, UNI-K</code>\nBekor qilish: /cancel`, { parse_mode: "HTML" });
+}));
+bot.callbackQuery(/^opt_k:(\w+)$/, adminOnly(async (ctx) => {
+  if (!catalog.EDITABLE_OPTIONS[ctx.match[1]]) return ctx.answerCallbackQuery().catch(() => {});
+  adminInput = null;
+  await ctx.answerCallbackQuery().catch(() => {});
+  await editOrReply(ctx, optionsView(ctx.match[1]));
+}));
+bot.callbackQuery(/^opt_add:(\w+)$/, adminOnly(async (ctx) => {
+  const kind = ctx.match[1];
+  if (!catalog.EDITABLE_OPTIONS[kind]) return ctx.answerCallbackQuery().catch(() => {});
+  adminPriceEdit = null; adminInput = { type: "opt_add", kind };
+  await ctx.answerCallbackQuery().catch(() => {});
+  const ex = { paints: "Faqat kosmetika", colors: "Jigarrang", transmissions: "DSG", fuels: "Gaz (faqat)", probegs: "Noma'lum" }[kind];
+  await ctx.reply(`➕ ${catalog.EDITABLE_OPTIONS[kind]} — yangi variant\n\nNomini yozing (2–24 belgi), masalan: <code>${ex}</code>\nBekor qilish: /cancel`, { parse_mode: "HTML" });
+}));
+bot.callbackQuery(/^opt_d:(\w+):(\d+)$/, adminOnly(async (ctx) => {
+  const [, kind, idx] = ctx.match;
+  const v = (catalog.AD_OPTIONS[kind] || [])[Number(idx)];
+  if (!v) return ctx.answerCallbackQuery({ text: "Ro'yxat o'zgargan, qayta oching.", show_alert: true }).catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  const kb = new InlineKeyboard().text(`🗑 Ha, «${v}» ni o'chirish`, `opt_dy:${kind}:${idx}`).row().text("🔙 Yo'q, orqaga", `opt_k:${kind}`);
+  await editOrReply(ctx, { text: `«<b>${escapeHtml(v)}</b>» variantini o'chirasizmi?\n\n<i>Eski e'lonlarda bu yozuv qoladi, faqat yangi e'lonlarda tanlab bo'lmaydi.</i>`, kb });
+}));
+bot.callbackQuery(/^opt_dy:(\w+):(\d+)$/, adminOnly(async (ctx) => {
+  const [, kind, idx] = ctx.match;
+  const v = (catalog.AD_OPTIONS[kind] || [])[Number(idx)];
+  const r = v ? await catalog.removeOption(db, kind, v) : { ok: false, error: "Ro'yxat o'zgargan, qayta oching." };
+  if (!r.ok) return ctx.answerCallbackQuery({ text: r.error, show_alert: true }).catch(() => {});
+  await ctx.answerCallbackQuery({ text: `🗑 «${v}» o'chirildi` }).catch(() => {});
+  await editOrReply(ctx, optionsView(kind));
+}));
 
 // 🏆 Konkurs Top-10
 bot.callbackQuery("admin_top", async (ctx) => {
@@ -2957,7 +3146,7 @@ bot.command("up", async (ctx) => {
       const collagePath = await createCollage(photoUrls);
 
       const caption = addPriceVoteLine(vipHeader(ad) +
-        `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${ad.probeg}\n` +
+        `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
         `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
         `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
         `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`);
@@ -3127,7 +3316,7 @@ bot.callbackQuery("admin_pending", async (ctx) => {
       const photoUrls = await Promise.all(ad.photoId.split(",").map(async (id) => `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${(await bot.api.getFile(id)).file_path}`));
       const collagePath = await createCollage(photoUrls);
 
-      let caption = `🆔 <b>ID: ${ad.id}</b>\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n`;
+      let caption = `🆔 <b>ID: ${ad.id}</b>\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n`;
       if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 Tarixi: ${ad.history}\n`;
       if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 Barter: ${ad.barter}\n`;
       caption += `💰 Narxi:${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ad.userId}">Profil</a>`;
@@ -3319,7 +3508,7 @@ async function searchCarConversation(conversation, ctx) {
              pageAds.forEach((ad, i) => {
                  const num = startIndex + i + 1;
                  listText += `<b>${num}.</b> 🚗 ${ad.carDetails} — <b>${formatNum(ad.price)}$</b>\n`;
-                 listText += `📅 ${ad.year} | 👣 ${formatNum(ad.probeg)} km\n\n`;
+                 listText += `📅 ${ad.year} | 👣 ${kmText(ad.probeg)}\n\n`;
                  kb.text(`${num}`, `sr_view:${ad.id}`);
                  if ((i + 1) % 5 === 0) kb.row();
              });
@@ -3372,7 +3561,7 @@ async function searchCarConversation(conversation, ctx) {
                  }
              }
              // Zaxira: kanalda post topilmasa, rasm + qisqa ma'lumot
-             const caption = `🚗 <b>${chosenAd.carDetails}</b>\n📅 Yili: ${chosenAd.year}\n👣 Probeg: ${formatNum(chosenAd.probeg)} km\n💰 Narxi: ${formatNum(chosenAd.price)}$\n☎️ Tel: +${chosenAd.phone}`;
+             const caption = `🚗 <b>${chosenAd.carDetails}</b>\n📅 Yili: ${chosenAd.year}\n👣 Probeg: ${kmText(chosenAd.probeg)}\n💰 Narxi: ${formatNum(chosenAd.price)}$\n☎️ Tel: +${chosenAd.phone}`;
              const photos = chosenAd.photoId.split(",");
              const m = await ctx.replyWithPhoto(photos[0], { caption, parse_mode: "HTML", reply_markup: navKb });
              viewMsgId = m.message_id;
@@ -3625,8 +3814,8 @@ else if (step === "MODEL") {
       }
 
       else if (step === "PROBEG") {
-        const kb = new InlineKeyboard().text("Salon (0 km)", "pr:Salon").row().text("🔙 Orqaga", "back_YEAR").text("❌ Bekor", "cancel_ad");
-        msgPrompt = await ctx.reply("👣 <b>Probegini kiriting (masalan: 35000):</b>\n<i>Agar moshina yangi bo'lsa 'Salon' ni tanlang.</i>", { reply_markup: kb, parse_mode: "HTML" });
+        const kb = optionKb("probegs", "pr:", "back_YEAR", { Salon: "Salon (0 km)" });
+        msgPrompt = await ctx.reply("👣 <b>Probegini kiriting (masalan: 35000):</b>\n<i>Agar moshina yangi bo'lsa «Salon (0 km)» ni" + (catalog.AD_OPTIONS.probegs.length > 1 ? ", probeg aniq bo'lmasa pastdagi variantlardan birini" : "") + " tanlang.</i>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
@@ -3636,14 +3825,14 @@ else if (step === "MODEL") {
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_YEAR") { step = "YEAR"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
-        ad.probeg = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        ad.probeg = res.callbackQuery ? optValue(res.callbackQuery.data) : res.message.text;
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
         step = isEditing ? "PREVIEW" : "PAINT";
       }
 
       else if (step === "PAINT") {
-        const kb = new InlineKeyboard().text("Toza", "p:Toza").text("Petno", "p:Petno").text("Bor", "p:Bor").row().text("🔙 Orqaga", "back_PROBEG").text("❌ Bekor", "cancel_ad");
+        const kb = optionKb("paints", "p:", "back_PROBEG");
         msgPrompt = await ctx.reply("💎 <b>Kraskasi holatini tanlang yoki yozing:</b>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
@@ -3654,14 +3843,14 @@ else if (step === "MODEL") {
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_PROBEG") { step = "PROBEG"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
-        ad.paint = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        ad.paint = res.callbackQuery ? optValue(res.callbackQuery.data) : res.message.text;
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
         step = isEditing ? "PREVIEW" : "COLOR";
       }
 
       else if (step === "COLOR") {
-        const kb = new InlineKeyboard().text("Oq", "c:Oq").text("Qora", "c:Qora").text("Mokriy asfalt", "c:Mokriy asfalt").row().text("Ko'k", "c:Ko'k").text("Qizil", "c:Qizil").text("Kumushrang (Stalnoy)", "c:Kumushrang").row().text("🔙 Orqaga", "back_PAINT").text("❌ Bekor", "cancel_ad");
+        const kb = optionKb("colors", "c:", "back_PAINT");
         msgPrompt = await ctx.reply("🎨 <b>Moshina rangini tanlang yoki yozing:</b>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
@@ -3672,14 +3861,14 @@ else if (step === "MODEL") {
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_PAINT") { step = "PAINT"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
-        ad.color = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        ad.color = res.callbackQuery ? optValue(res.callbackQuery.data) : res.message.text;
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
         step = isEditing ? "PREVIEW" : "TRANS";
       }
 
       else if (step === "TRANS") {
-        const kb = new InlineKeyboard().text("Mexanika", "t:Mexanika").text("Avtomat", "t:Avtomat").row().text("Robot", "t:Robot").text("Variator", "t:Variator").row().text("🔙 Orqaga", "back_COLOR").text("❌ Bekor", "cancel_ad");
+        const kb = optionKb("transmissions", "t:", "back_COLOR");
         msgPrompt = await ctx.reply("⚙️ <b>Korobka turini tanlang:</b>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
@@ -3690,14 +3879,14 @@ else if (step === "MODEL") {
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_COLOR") { step = "COLOR"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
-        ad.trans = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        ad.trans = res.callbackQuery ? optValue(res.callbackQuery.data) : res.message.text;
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
         step = isEditing ? "PREVIEW" : "FUEL";
       }
 
       else if (step === "FUEL") {
-        const kb = new InlineKeyboard().text("Benzin", "f:Benzin").text("Benzin+Metan", "f:Benzin+Metan").row().text("Benzin+Propan", "f:Benzin+Propan").text("Dizel", "f:Dizel").row().text("Elektr", "f:Elektr").text("Gibrid", "f:Gibrid").row().text("🔙 Orqaga", "back_TRANS").text("❌ Bekor", "cancel_ad");
+        const kb = optionKb("fuels", "f:", "back_TRANS");
         msgPrompt = await ctx.reply("⛽ <b>Yoqilg'i turini tanlang:</b>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
@@ -3708,7 +3897,7 @@ else if (step === "MODEL") {
         if (res.callbackQuery?.data === "cancel_ad") break;
         if (res.callbackQuery?.data === "back_TRANS") { step = "TRANS"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
 
-        ad.fuel = res.callbackQuery ? res.callbackQuery.data.split(":")[1] : res.message.text;
+        ad.fuel = res.callbackQuery ? optValue(res.callbackQuery.data) : res.message.text;
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
         step = isEditing ? "PREVIEW" : "PRICE";
@@ -4705,7 +4894,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
     const collagePath = await createCollage(photoUrls, badgeInfo);
 
     let caption =dealerBadge +
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
+      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
       `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
       `⛽ Yoqilg'i: ${ad.fuel}\n`;
 
@@ -4838,7 +5027,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
     // ================= MATN TEPASIGA QAYNOQ NARX QO'SHILDI =================
     let caption =dealerBadge +
       `🔥 <b>QAYNOQ NARX!</b>\n\n` +
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
+      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
       `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
       `⛽ Yoqilg'i: ${ad.fuel}\n`;
 
@@ -5857,7 +6046,7 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
   const collagePath = await createCollage(photoUrls);
 
   let newCaption = vipHeader(oldAd) +
-    `🆔 ID: ${oldAd.id}\n🚗 Moshina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${editData.probeg}\n` +
+    `🆔 ID: ${oldAd.id}\n🚗 Moshina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${kmText(editData.probeg)}\n` +
     `💎 Kraskasi: ${editData.paint}\n🎨 Rangi: ${editData.color}\n✅ Karobka: ${editData.transmission}\n` +
     `⛽ Yoqilg'i: ${editData.fuel}\n`;
 

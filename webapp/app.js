@@ -108,7 +108,12 @@
   function digits(s) { return String(s == null ? "" : s).replace(/\D/g, ""); }
   function fmtNum(s) { var d = digits(s); return d ? Number(d).toLocaleString("en-US").replace(/,/g, " ") : ""; }
   function fmtPrice(s) { var n = fmtNum(s); return n ? n + " $" : ""; }
-  function fmtKm(p) { return p === "Salon" ? "Yangi, 0 km" : (fmtNum(p) ? fmtNum(p) + " km" : ""); }
+  function fmtKm(p) {
+    if (p === "Salon") return "Yangi, 0 km";
+    var t = String(p == null ? "" : p).trim();
+    if (t && !/^\d/.test(t)) return t; // admin qo'shgan variant, masalan «Noma'lum»
+    return fmtNum(p) ? fmtNum(p) + " km" : "";
+  }
   function fmtPhone(raw) {
     var d = digits(raw).replace(/^(998)+/, "");
     if (d.length > 9) d = d.slice(-9);
@@ -825,7 +830,7 @@
     var refs = {};
     var S = {
       brandId: null, modelId: null, modelText: "", customModel: false, fullName: "",
-      year: "", probeg: "", salon: false, paint: "", color: "", colorCustom: "", trans: "", fuel: "",
+      year: "", probeg: "", salon: false, probegSpecial: "", paint: "", color: "", colorCustom: "", trans: "", fuel: "",
       price: "", phone: "", region: "", history: "", barter: "", nasiya: false, nasiyaTerms: "", offer: "", urgent: false,
     };
     var photos = []; // { key, file, blob, url, token, ref, status, progress }
@@ -834,7 +839,7 @@
     var submitting = false;
 
     if (isEdit) {
-      ["brandId", "modelId", "modelText", "customModel", "fullName", "year", "probeg", "salon", "paint", "color", "colorCustom", "trans", "fuel", "price", "phone", "region", "history", "barter", "nasiya", "nasiyaTerms", "offer"].forEach(function (k) { if (editAd[k] !== undefined && editAd[k] !== null) S[k] = editAd[k]; });
+      ["brandId", "modelId", "modelText", "customModel", "fullName", "year", "probeg", "salon", "probegSpecial", "paint", "color", "colorCustom", "trans", "fuel", "price", "phone", "region", "history", "barter", "nasiya", "nasiyaTerms", "offer"].forEach(function (k) { if (editAd[k] !== undefined && editAd[k] !== null) S[k] = editAd[k]; });
       photos = editAd.photos.map(function (p) { return { key: ++keySeq, ref: p.ref, url: p.url, status: "done", progress: 1 }; });
       if (editAd.hasVideo) video = { key: ++keySeq, old: true, status: "done" };
     } else {
@@ -937,8 +942,27 @@
       renderCustom();
     }
     var probegInput = inp("probeg", { inputmode: "numeric", placeholder: "85000", maxlength: "9", autocomplete: "off" }, "year");
-    function syncSalon() { probegInput.disabled = S.salon; probegInput.placeholder = S.salon ? "0" : "85000"; if (S.salon) { probegInput.value = ""; S.probeg = ""; setError(refs, "year", ""); } }
+    function syncSalon() {
+      var off = S.salon || !!S.probegSpecial;
+      probegInput.disabled = off; probegInput.placeholder = S.salon ? "0" : off ? "—" : "85000";
+      if (off) { probegInput.value = ""; S.probeg = ""; setError(refs, "year", ""); }
+    }
     syncSalon();
+    // Admin qo'shgan probeg variantlari (masalan «Noma'lum») — raqam o'rniga tanlanadi
+    var probegSpecials = ((catalog.options && catalog.options.probegs) || []).filter(function (v) { return v !== "Salon"; });
+    var salonRow = switchRow(S, "salon", "Yangi, salondan", "Probeg 0 km deb yoziladi", function () { if (S.salon) S.probegSpecial = ""; syncSalon(); renderSpecials(); touched(); });
+    var specialsBox = h("div", { class: "slot" });
+    function renderSpecials() {
+      specialsBox.innerHTML = "";
+      if (!probegSpecials.length) return;
+      specialsBox.appendChild(h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-probegSpecial", text: "Probeg aniq emasmi?" }),
+        chips("probegSpecial", function () { return probegSpecials.map(function (n) { return { name: n }; }); }, function (it) { return S.probegSpecial === it.name; }, function (it) {
+          S.probegSpecial = S.probegSpecial === it.name ? "" : it.name;
+          if (S.probegSpecial && S.salon) { S.salon = false; var cb = salonRow.querySelector("input"); if (cb) cb.checked = false; }
+          syncSalon(); renderSpecials();
+        })]));
+    }
+    renderSpecials();
     var yearRow = h("div", { class: "field" }, [h("div", { class: "row2" }, [
       h("div", null, [h("span", { class: "label", id: "lbl-year", text: "Yili" }), selectBox(S, "year", yearOptions(), "Tanlang", function () { setError(refs, "year", ""); touched(); })]),
       h("div", null, [h("span", { class: "label", id: "lbl-probeg", text: "Probeg" }), h("div", { class: "input-suffix" }, [probegInput, h("span", { text: "km" })])]),
@@ -952,7 +976,8 @@
         function (b) { if (S.brandId !== b.id) { S.modelId = null; S.customModel = false; S.modelText = ""; } S.brandId = b.id; renderModelField(); }, { collapse: 9 })),
       modelField,
       yearRow,
-      h("div", { class: "field" }, [switchRow(S, "salon", "Yangi, salondan", "Probeg 0 km deb yoziladi", function () { syncSalon(); touched(); })]),
+      h("div", { class: "field" }, [salonRow]),
+      specialsBox,
     ]));
     renderModelField();
 
@@ -1139,7 +1164,7 @@
       else if (S.brandId > 0 && !S.modelId && !(S.customModel && S.modelText.trim())) errs.model = S.customModel ? "Model nomini yozing." : "Modelni tanlang.";
       var yp = [];
       if (!S.year) yp.push("yilini tanlang");
-      if (!S.salon && !digits(S.probeg)) yp.push("probegni yozing yoki «Yangi, salondan» ni yoqing");
+      if (!S.salon && !S.probegSpecial && !digits(S.probeg)) yp.push("probegni yozing yoki «Yangi, salondan» ni yoqing");
       if (yp.length) errs.year = yp.join(", ").replace(/^./, function (c) { return c.toUpperCase(); }) + ".";
       if (!S.paint) errs.paint = "Kraska holatini tanlang.";
       if (!S.color || (S.color === "__other" && !S.colorCustom.trim())) errs.color = "Rangini tanlang.";
@@ -1172,7 +1197,7 @@
     function payload() {
       return {
         brandId: S.brandId, modelId: S.customModel ? null : S.modelId, modelText: S.customModel ? S.modelText : "",
-        fullName: S.fullName, year: S.year, salon: S.salon, probeg: S.probeg,
+        fullName: S.fullName, year: S.year, salon: S.salon, probegSpecial: S.salon ? "" : S.probegSpecial, probeg: S.probeg,
         paint: S.paint, color: S.color === "__other" ? S.colorCustom : S.color, trans: S.trans, fuel: S.fuel,
         price: S.price, phone: S.phone, region: S.region, history: S.history, barter: S.barter,
         nasiya: S.nasiya, nasiyaTerms: S.nasiyaTerms, offer: S.offer, urgent: S.urgent,

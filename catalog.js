@@ -49,7 +49,14 @@ const AD_OPTIONS = {
   colors: ["Oq", "Qora", "Mokriy asfalt", "Ko'k", "Qizil", "Kumushrang"],
   transmissions: ["Mexanika", "Avtomat", "Robot", "Variator"],
   fuels: ["Benzin", "Benzin+Metan", "Benzin+Propan", "Dizel", "Elektr", "Gibrid"],
+  // Probeg o'rniga tanlanadigan maxsus qiymatlar ("Salon" — yangi, 0 km). Admin «Noma'lum» kabilarni qo'shadi.
+  probegs: ["Salon"],
 };
+// Admin paneldan tahrirlanadigan ro'yxatlar (viloyatlar — davlat raqami kodlari bilan bog'liq, ular o'zgarmaydi)
+const EDITABLE_OPTIONS = {
+  paints: "💎 Kraska", colors: "🎨 Rang", transmissions: "⚙️ Korobka", fuels: "⛽ Yoqilg'i", probegs: "👣 Probeg variantlari",
+};
+const OPTION_DEFAULTS = Object.fromEntries(Object.keys(EDITABLE_OPTIONS).map(k => [k, AD_OPTIONS[k].slice()]));
 
 // Xotiradagi nusxa (har so'rovda bazaga bormaslik uchun)
 let cache = { brands: [] };
@@ -245,8 +252,104 @@ async function backfill(db) {
   return result;
 }
 
+// ---------- Variantlar (kraska, rang, korobka, yoqilg'i, probeg) — bazada ----------
+async function ensureOptionsSchema(db) {
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS ad_options (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      kind VARCHAR(20) NOT NULL,
+      value VARCHAR(40) NOT NULL,
+      sort_order INT DEFAULT 0,
+      UNIQUE KEY uq_opt (kind, value)
+    )
+  `);
+}
+// Ro'yxatlarni bazadan xotiraga (AD_OPTIONS massivlarining o'zi yangilanadi — bot ham, ilova ham darhol ko'radi)
+async function loadOptions(db) {
+  const [rows] = await db.execute("SELECT kind, value FROM ad_options ORDER BY sort_order, id");
+  for (const kind of Object.keys(EDITABLE_OPTIONS)) {
+    let vals = rows.filter(r => r.kind === kind).map(r => r.value);
+    if (!vals.length) { // birinchi marta — boshlang'ich ro'yxatni bazaga yozamiz
+      vals = OPTION_DEFAULTS[kind].slice();
+      for (let i = 0; i < vals.length; i++) {
+        try { await db.execute("INSERT INTO ad_options (kind, value, sort_order) VALUES (?, ?, ?)", [kind, vals[i], i + 1]); } catch (e) {}
+      }
+    }
+    AD_OPTIONS[kind].length = 0;
+    AD_OPTIONS[kind].push(...vals);
+  }
+}
+function cleanOptionValue(v) {
+  return String(v || "").replace(/[<>:|]/g, "").replace(/\s+/g, " ").trim();
+}
+async function addOption(db, kind, value) {
+  if (!EDITABLE_OPTIONS[kind]) throw new Error("Noma'lum ro'yxat");
+  value = cleanOptionValue(value);
+  if (value.length < 2 || value.length > 24) return { ok: false, error: "Nomi 2 dan 24 belgigacha bo'lsin." };
+  if (kind === "probegs" && /^\d/.test(value)) return { ok: false, error: "Probeg varianti raqam bilan boshlanmasin (raqamni sotuvchi o'zi yozadi)." };
+  if (AD_OPTIONS[kind].some(v => norm(v) === norm(value))) return { ok: false, error: "Bu variant ro'yxatda bor." };
+  const [[mx]] = await db.execute("SELECT COALESCE(MAX(sort_order), 0) AS mx FROM ad_options WHERE kind = ?", [kind]);
+  await db.execute("INSERT INTO ad_options (kind, value, sort_order) VALUES (?, ?, ?)", [kind, value, (mx ? Number(mx.mx) : 0) + 1]);
+  await loadOptions(db);
+  return { ok: true, value };
+}
+async function removeOption(db, kind, value) {
+  if (!EDITABLE_OPTIONS[kind]) throw new Error("Noma'lum ro'yxat");
+  if (!AD_OPTIONS[kind].includes(value)) return { ok: false, error: "Bu variant topilmadi." };
+  if (kind !== "probegs" && AD_OPTIONS[kind].length <= 1) return { ok: false, error: "Ro'yxatda kamida bitta variant qolishi kerak." };
+  if (kind === "probegs" && value === "Salon") return { ok: false, error: "«Salon» (yangi mashina) variantini o'chirib bo'lmaydi." };
+  await db.execute("DELETE FROM ad_options WHERE kind = ? AND value = ?", [kind, value]);
+  await loadOptions(db);
+  return { ok: true };
+}
+
+// ---------- Marka / model: admin paneldan qo'shish va o'chirish ----------
+async function addBrand(db, brandName) {
+  brandName = cleanOptionValue(brandName);
+  if (brandName.length < 2 || brandName.length > 40) return { ok: false, error: "Marka nomi 2 dan 40 belgigacha bo'lsin." };
+  if (norm(brandName) === norm("Boshqa")) return { ok: false, error: "«Boshqa» — tizimdagi maxsus tugma." };
+  const ex = cache.brands.find(b => norm(b.name) === norm(brandName));
+  if (ex) return { ok: false, error: "Bu marka allaqachon bor.", brand: ex };
+  const [[mx]] = await db.execute("SELECT COALESCE(MAX(sort_order), 0) AS mx FROM car_brands");
+  const [res] = await db.execute("INSERT INTO car_brands (name, sort_order) VALUES (?, ?)", [brandName, Math.max(mx ? Number(mx.mx) : 0, 100) + 1]);
+  await reload(db);
+  return { ok: true, brand: brandById(res.insertId) || { id: res.insertId, name: brandName, models: [] } };
+}
+// Marka/model nechta e'lon, tahrir va obunada ishlatilgan (ishlatilgan bo'lsa o'chirmaymiz)
+async function usageCount(db, field, id) {
+  const [[a]] = await db.execute(`SELECT COUNT(*) AS cnt FROM ads WHERE ${field} = ?`, [id]);
+  let n = Number(a ? a.cnt : 0);
+  if (field === "model_id") {
+    try { const [[al]] = await db.execute("SELECT COUNT(*) AS cnt FROM alerts WHERE model_id = ?", [id]); n += Number(al ? al.cnt : 0); } catch (e) {}
+  }
+  return n;
+}
+async function removeModel(db, modelId) {
+  const m = modelById(modelId);
+  if (!m) return { ok: false, error: "Model topilmadi." };
+  const used = await usageCount(db, "model_id", m.id);
+  if (used) return { ok: false, error: `Bu model ${used} ta e'lon yoki obunada ishlatilgan — o'chirib bo'lmaydi.` };
+  if (MASTER_CATALOG.some(b => norm(b.brand) === norm(m.brandName) && b.models.some(x => norm(typeof x === "string" ? x : x.name) === norm(m.name))))
+    return { ok: false, error: "Bu model asosiy ro'yxatda — bot qayta ishga tushganda yana qo'shiladi. Uni o'chirmang." };
+  await db.execute("DELETE FROM car_models WHERE id = ?", [m.id]);
+  await reload(db);
+  return { ok: true, model: m };
+}
+async function removeBrand(db, brandId) {
+  const b = brandById(brandId);
+  if (!b) return { ok: false, error: "Marka topilmadi." };
+  if (b.models.length) return { ok: false, error: "Avval markaning barcha modellarini o'chiring." };
+  if (MASTER_CATALOG.some(x => norm(x.brand) === norm(b.name))) return { ok: false, error: "Bu marka asosiy ro'yxatda — uni o'chirib bo'lmaydi." };
+  const used = await usageCount(db, "brand_id", b.id);
+  if (used) return { ok: false, error: `Bu marka ${used} ta e'londa ishlatilgan — o'chirib bo'lmaydi.` };
+  await db.execute("DELETE FROM car_brands WHERE id = ?", [b.id]);
+  await reload(db);
+  return { ok: true, brand: b };
+}
+
 async function init(db) {
   await ensureSchema(db);
+  try { await ensureOptionsSchema(db); await loadOptions(db); } catch (e) { console.error("Variantlarni yuklab bo'lmadi (boshlang'ich ro'yxat ishlatiladi):", e.message); }
   await seedFromMaster(db);
   await reload(db);
   const filled = await backfill(db);
@@ -309,6 +412,7 @@ function modelFilter(modelId, fallbackText) {
 
 module.exports = {
   init, reload, addModel, backfill,
+  addBrand, removeBrand, removeModel, usageCount, loadOptions, addOption, removeOption, EDITABLE_OPTIONS,
   get, brandById, modelById, findBrand, findModel,
   matchCarDetails, carName, modelFilter, norm,
   AD_OPTIONS, MASTER_CATALOG,

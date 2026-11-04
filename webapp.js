@@ -549,6 +549,8 @@ function startWebApp(deps) {
 
     if (body.salon) {
       ad.probeg = "Salon";
+    } else if (body.probegSpecial && opts.probegs && opts.probegs.includes(body.probegSpecial)) {
+      ad.probeg = body.probegSpecial; // admin qo'shgan variant, masalan «Noma'lum»
     } else {
       const km = parseInt(String(body.probeg || "").replace(/\D/g, ""), 10);
       if (isNaN(km) || km < 0 || km > 3000000) return err("Probegni km da kiriting (masalan: 35000) yoki «Salon» ni belgilang.");
@@ -682,7 +684,9 @@ function startWebApp(deps) {
       ok: true,
       ad: {
         id: ad.id, status: ad.status, brandId, modelId, modelText, customModel: !!modelText, fullName,
-        year: String(ad.year || ""), salon: ad.probeg === "Salon", probeg: ad.probeg === "Salon" ? "" : digits(ad.probeg),
+        year: String(ad.year || ""), salon: ad.probeg === "Salon",
+        probegSpecial: ad.probeg !== "Salon" && (opts.probegs || []).includes(ad.probeg) ? ad.probeg : "",
+        probeg: ad.probeg === "Salon" || (opts.probegs || []).includes(ad.probeg) ? "" : digits(ad.probeg),
         paint: opts.paints.includes(ad.paint) ? ad.paint : "",
         color: opts.colors.includes(ad.color) ? ad.color : (ad.color ? "__other" : ""), colorCustom: opts.colors.includes(ad.color) ? "" : (ad.color || ""),
         trans: ad.transmission, fuel: ad.fuel, price: digits(ad.price), phone: String(ad.phone || "").replace(/^998/, ""),
