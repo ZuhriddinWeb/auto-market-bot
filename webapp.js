@@ -122,8 +122,8 @@ function startWebApp(deps) {
     checkCanPostAd, submitNewAdToAdmin, sanitizeText, normalizePhone, parseAdPrice,
     requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
     estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
-    VIP_PRICE, VIP_CARD, VIP_CARD_NAME, logUserAction, getAdVotes,
-    getPrice, getVipDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS,
+    VIP_PRICE, VIP_CARD, VIP_CARD_NAME, payCard, payCardName, salonDailyLimit, promoEnabled, logUserAction, getAdVotes,
+    getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS,
   } = deps;
 
   const PORT = Number(process.env.PORT) || 3000;
@@ -212,6 +212,24 @@ function startWebApp(deps) {
     return new Set(rows.map(r => Number(r.adId)));
   }
 
+  // ⭐ Statuslar va bepul belgilar (🆕 Yangi, 📉 Narxi tushdi)
+  const isoIfActive = (v) => (v && new Date(v).getTime() > Date.now() ? new Date(v).toISOString() : null);
+  function promoFlags(ad) {
+    const on = ad.status === "active";
+    const promos = {
+      urgent: on ? isoIfActive(ad.urgent_until) : null, top: on ? isoIfActive(ad.top_until) : null,
+      vip: on ? isoIfActive(ad.vip_until) : null, premium: on ? isoIfActive(ad.premium_until) : null,
+    };
+    const oldP = parseInt(digits(ad.old_price)) || 0, nowP = parseInt(digits(ad.price)) || 0;
+    const dropped = on && oldP > nowP && nowP > 0 && ad.price_dropped_at && Date.now() - new Date(ad.price_dropped_at).getTime() < 7 * 864e5;
+    return {
+      promos,
+      isPremium: !!promos.premium, isVip: !!(promos.vip || promos.premium), isUrgent: !!promos.urgent, isTop: !!(promos.top || promos.premium),
+      vipUntil: promos.premium && (!promos.vip || promos.premium > promos.vip) ? promos.premium : promos.vip,
+      isNew: on && !!ad.posted_at && Date.now() - new Date(ad.posted_at).getTime() < 864e5,
+      priceDrop: dropped ? { old: String(oldP), pct: Math.round((1 - nowP / oldP) * 100) } : null,
+    };
+  }
   function card(ad, badges, favs) {
     const photos = photoList(ad);
     return {
@@ -223,17 +241,18 @@ function startWebApp(deps) {
       hasNasiya: !!(ad.nasiya && ad.nasiya !== "Yo'q"),
       status: ad.status, soldPrice: ad.sold_price ? digits(ad.sold_price) : null,
       createdAt: ad.created_at, channelUrl: channelLink(ad),
-      isVip: !!(ad.status === "active" && ad.vip_until && new Date(ad.vip_until).getTime() > Date.now()),
-      vipUntil: ad.status === "active" && ad.vip_until && new Date(ad.vip_until).getTime() > Date.now() ? new Date(ad.vip_until).toISOString() : null,
+      ...promoFlags(ad),
     };
   }
 
-  // VIP: muddati (ads.vip_until) hali tugamagan faol e'lonlar — admin panelda belgilangan kun soni bo'yicha
+  // Ro'yxat boshida turadiganlar: avval 💎 Premium, keyin 🌟 VIP (muddati tugamaganlari)
   async function activeVipIds() {
     try {
-      const [rows] = await db.execute("SELECT id FROM ads WHERE status = 'active' AND vip_until > NOW()");
-      return rows.map(r => Number(r.id)).filter(Boolean);
-    } catch (e) { return []; }
+      const [rows] = await db.execute("SELECT id, premium_until FROM ads WHERE status = 'active' AND (vip_until > NOW() OR premium_until > NOW())");
+      const prem = [], vip = [];
+      rows.forEach(r => (r.premium_until && new Date(r.premium_until).getTime() > Date.now() ? prem : vip).push(Number(r.id)));
+      return { prem, vip };
+    } catch (e) { return { prem: [], vip: [] }; }
   }
 
   // ---------- Bozor: qidiruv ----------
@@ -270,18 +289,21 @@ function startWebApp(deps) {
     const trans = q.get("trans"); if (trans && opts.transmissions.includes(trans)) { where.push("transmission = ?"); params.push(trans); logParts.push(trans); }
     const fuel = q.get("fuel"); if (fuel && opts.fuels.includes(fuel)) { where.push("fuel = ?"); params.push(fuel); logParts.push(fuel); }
     if (q.get("nasiya") === "1") { where.push("nasiya IS NOT NULL AND nasiya <> 'Yo''q'"); logParts.push("nasiyaga"); }
+    if (q.get("urgent") === "1") { where.push("urgent_until > NOW()"); logParts.push("shoshilinch"); }
 
     const sorts = { new: "created_at DESC, id DESC", price_asc: "CAST(price AS UNSIGNED) ASC, id DESC", price_desc: "CAST(price AS UNSIGNED) DESC, id DESC" };
     // ⭐ VIP e'lonlar har doim birinchi (to'lov tasdiqlangandan keyin VIP_TOP_DAYS kun davomida)
-    const vipIds = await activeVipIds();
-    const vipOrder = vipIds.length ? `(id IN (${vipIds.map(() => "?").join(",")})) DESC, ` : "";
+    const top = await activeVipIds();
+    const inList = (ids) => (ids.length ? `(id IN (${ids.map(() => "?").join(",")})) DESC, ` : "");
+    const vipOrder = inList(top.prem) + inList(top.vip);
+    const vipIds = top.prem.concat(top.vip);
     const order = vipOrder + (sorts[q.get("sort")] || sorts.new);
     const page = Math.max(1, int(q.get("page"), 1));
     const whereSql = where.join(" AND ");
 
     const [[cnt]] = await db.execute(`SELECT COUNT(*) AS total FROM ads WHERE ${whereSql}`, params);
     const [rows] = await db.execute(
-      `SELECT id, carDetails, brand_id, model_id, price, year, probeg, region, transmission, fuel, photoId, nasiya, status, sold_price, created_at, channelMsgId FROM ads WHERE ${whereSql} ORDER BY ${order} LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
+      `SELECT id, carDetails, brand_id, model_id, price, year, probeg, region, transmission, fuel, photoId, nasiya, status, sold_price, created_at, channelMsgId, vip_until, premium_until, urgent_until, top_until, posted_at, old_price, price_dropped_at FROM ads WHERE ${whereSql} ORDER BY ${order} LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
       params.concat(vipIds)
     );
     const [badges, favs] = await Promise.all([priceBadges(rows), favoriteSet(user.id, rows.map(r => Number(r.id)))]);
@@ -305,7 +327,7 @@ function startWebApp(deps) {
     }
     sendJson(res, 200, {
       ok: true, total: Number(cnt.total), page, pages: Math.max(1, Math.ceil(Number(cnt.total) / PAGE_SIZE)),
-      items: rows.map(r => ({ ...card(r, badges, favs), isVip: vipIds.includes(Number(r.id)) })),
+      items: rows.map(r => card(r, badges, favs)),
     });
   }
 
@@ -433,7 +455,9 @@ function startWebApp(deps) {
       freeUps: u?.free_ups || 0,
       lastPhone: lastRows[0]?.phone || null,
       channelUrl: CHANNEL_URL,
-      vip: { price: getPrice ? String(getPrice("vip")) : VIP_PRICE, days: getVipDays ? getVipDays() : 7, card: VIP_CARD, cardName: VIP_CARD_NAME },
+      vip: { price: getPrice ? String(getPrice("vip")) : VIP_PRICE, days: getVipDays ? getVipDays() : 7, card: payCard ? payCard() : VIP_CARD, cardName: payCardName ? payCardName() : VIP_CARD_NAME },
+      salonLimit: salonDailyLimit ? salonDailyLimit() : 2,
+      promos: PROMOS ? PROMO_KINDS.filter(k => !promoEnabled || promoEnabled(k)).map(k => ({ kind: k, title: PROMOS[k].title, perks: PROMOS[k].perks, price: String(getPrice(k)), days: promoDays(k) })) : [],
       // 💳 Pullik rejimlar va narxlar (admin panel → «💰 Narxlar va to'lovlar»)
       paidAds: !!(paidAdsOn && paidAdsOn() && user.id !== ADMIN_ID),
       adPrice: getPrice ? getPrice("ad") : null,
@@ -701,10 +725,11 @@ function startWebApp(deps) {
       if (action === "vip") {
         const u = takeUpload(body.token, user.id, "photo");
         if (!u) return { ok: false, error: "Chek rasmini qayta yuklang." };
-        const out = await submitVipRequest({ adId, userId: user.id, firstName: user.first_name, username: user.username, screenshotFileId: u.fileId });
+        const kind = PROMOS && PROMOS[body.kind] ? body.kind : "vip";
+        const out = await submitVipRequest({ adId, userId: user.id, firstName: user.first_name, username: user.username, screenshotFileId: u.fileId, kind });
         if (!out.ok) return { ok: false, error: stripHtml(out.error) };
         uploads.delete(String(body.token));
-        logLine(user, `VIP to'lov chekini yubordi (ID: ${adId})`);
+        logLine(user, `${PROMOS ? PROMOS[kind].title : "VIP"} to'lov chekini yubordi (ID: ${adId})`);
         return { ok: true };
       }
       if (action === "up") {
@@ -810,7 +835,7 @@ function startWebApp(deps) {
     const paid = !!(paidSalonOn && paidSalonOn() && user.id !== ADMIN_ID);
     const plans = paid ? Object.entries(SALON_PLANS).map(([key, p]) => ({ key, title: p.title, price: getPrice(p.priceKey) })) : [];
     const credits = paid && getSalonCredits ? await getSalonCredits(user.id) : 0;
-    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dealerName: st.dealerName, dealerPhone: st.dealerPhone, paid, plans, credits, card: VIP_CARD, cardName: VIP_CARD_NAME });
+    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dailyLimit: st.dailyLimit || 2, dealerName: st.dealerName, dealerPhone: st.dealerPhone, paid, plans, credits, card: payCard ? payCard() : VIP_CARD, cardName: payCardName ? payCardName() : VIP_CARD_NAME });
   }
   async function handleSalonSubmit(req, res, user) {
     const r = await once(`${user.id}:salon`, async () => {

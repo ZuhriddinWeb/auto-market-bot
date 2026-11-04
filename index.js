@@ -237,6 +237,20 @@ const dbReady = (async () => {
       "ALTER TABLE ads ADD COLUMN vip_until TIMESTAMP NULL DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN vip_reminded INT DEFAULT 0",
       "ALTER TABLE ads ADD INDEX idx_ads_vip_until (vip_until)",
+      // Boshqa pullik statuslar (🚨 Shoshilinch, ⬆️ TOP, 💎 Premium) — VIP bilan bir xil ishlaydi
+      "ALTER TABLE ads ADD COLUMN urgent_until TIMESTAMP NULL DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN urgent_reminded INT DEFAULT 0",
+      "ALTER TABLE ads ADD COLUMN top_until TIMESTAMP NULL DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN top_reminded INT DEFAULT 0",
+      "ALTER TABLE ads ADD COLUMN premium_until TIMESTAMP NULL DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN premium_reminded INT DEFAULT 0",
+      "ALTER TABLE vip_requests ADD COLUMN kind VARCHAR(16) DEFAULT 'vip'",
+      "ALTER TABLE vip_requests ADD COLUMN amount INT DEFAULT NULL", // to'lov paytidagi narx (hisobot uchun)
+      // Bepul belgilar: 🆕 Yangi (kanalga birinchi chiqqan vaqt) va 📉 Narxi tushdi
+      "ALTER TABLE ads ADD COLUMN posted_at TIMESTAMP NULL DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN old_price VARCHAR(255) DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN price_dropped_at TIMESTAMP NULL DEFAULT NULL",
+      "ALTER TABLE ads ADD COLUMN is_hot INT DEFAULT 0",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -292,31 +306,88 @@ async function setAutoOn(key, on) {
 // 📏 Oddiy foydalanuvchi bir vaqtda nechta FAOL e'lon bera oladi (0 = cheksiz). Admin panelda o'zgartiriladi.
 const DEFAULT_AD_LIMIT = 3;
 // 💰 NARXLAR (so'mda) — admin panel → «💰 Narxlar va to'lovlar» dan o'zgartiriladi
-const PRICE_DEFAULTS = { vip: 25000, salon_single: 50000, salon_pack5: 200000, salon_pin: 80000, ad: 20000 };
+const PRICE_DEFAULTS = { vip: 25000, urgent: 10000, top: 15000, premium: 50000, salon_single: 50000, salon_pack5: 200000, salon_pin: 80000, ad: 20000 };
 const PRICE_TITLES = {
-  vip: "🌟 VIP e'lon", salon_single: "📢 Salon: 1 ta post", salon_pack5: "📦 Salon: 5 ta post paketi",
+  vip: "🌟 VIP e'lon", urgent: "🚨 Shoshilinch", top: "⬆️ TOP (avto-UP)", premium: "💎 Premium", salon_single: "📢 Salon: 1 ta post", salon_pack5: "📦 Salon: 5 ta post paketi",
   salon_pin: "📌 Salon: post + 24 soat qadash", ad: "📝 Oddiy e'lon (pullik rejimda)",
 };
 function getPrice(key) {
   const v = parseInt(botSettings.get(`price:${key}`), 10);
   return Number.isFinite(v) && v > 0 ? v : PRICE_DEFAULTS[key];
 }
-// ⏳ VIP muddati (kun) — admin panel → «💰 Narxlar va to'lovlar» → «✏️ VIP muddati»
+// ⭐ PULLIK STATUSLAR — narxi (price:<kind>) va muddati (kun) admin panelda o'zgartiriladi
 const VIP_DAYS_DEFAULT = Number(process.env.VIP_TOP_DAYS) || 7;
-function getVipDays() {
-  const v = parseInt(botSettings.get("vip:days"), 10);
-  return Number.isFinite(v) && v >= 1 && v <= 90 ? v : VIP_DAYS_DEFAULT;
+const PROMO_KINDS = ["urgent", "top", "vip", "premium"];
+const PROMOS = {
+  urgent: { title: "🚨 Shoshilinch", short: "🚨 Shoshilinch", col: "urgent_until", rem: "urgent_reminded", defDays: 3,
+    perks: ["Kanal postida «🚨 SHOSHILINCH SOTILADI!» sarlavhasi", "Ilovada qizil «Shoshilinch» belgisi", "Ilovadagi «Shoshilinch» filtrida chiqadi"],
+    done: "Kanal postiga «🚨 SHOSHILINCH SOTILADI!» sarlavhasi qo'yildi.", endsText: "sarlavha va belgi olib tashlanadi" },
+  top: { title: "⬆️ TOP", short: "⬆️ TOP", col: "top_until", rem: "top_reminded", defDays: 7, inPremium: true,
+    perks: ["Har kuni kanalda o'zi yangi post bo'lib ko'tariladi (avto-UP)", "Ilovada «Avval yangilari» da doim yuqorida", "Sizdan hech narsa talab qilinmaydi"],
+    done: "E'lon har kuni kanalda o'zi ko'tariladi.", endsText: "har kungi avto-UP to'xtaydi" },
+  vip: { title: "🌟 VIP", short: "🌟 VIP", col: "vip_until", rem: "vip_reminded", defDays: VIP_DAYS_DEFAULT, inPremium: true,
+    perks: ["Kanalning eng tepasiga qadaladi (Pin)", "«🌟 VIP» belgisi bilan ajralib turadi", "Ilovada barcha e'lonlardan birinchi chiqadi"],
+    done: "E'lon VIP maqomida kanal tepasiga qadaldi! 🌟", endsText: "kanal tepasidan yechiladi va ilovada oddiy tartibda chiqadi" },
+  premium: { title: "💎 Premium", short: "💎 Premium", col: "premium_until", rem: "premium_reminded", defDays: 14,
+    perks: ["VIP dagi hammasi: kanal tepasida qadalgan, «💎 PREMIUM» sarlavhasi", "Har kuni kanalda o'zi ko'tariladi (avto-UP)", "Ilovada hatto VIP lardan ham oldin turadi", "Eng uzoq muddat"],
+    done: "E'lon 💎 Premium maqomida kanal tepasiga qadaldi va har kuni o'zi ko'tariladi.", endsText: "kanal tepasidan yechiladi, avto-UP to'xtaydi" },
+};
+// ⚙️ Admin paneldagi boshqa sozlamalar (bo'sh bo'lsa — koddagi boshlang'ich qiymat)
+const DEFAULT_INVITE = "https://t.me/+einfd7upTxxlZDYy";
+const payCard = () => botSettings.get("pay:card") || VIP_CARD;
+const payCardName = () => botSettings.get("pay:card_name") || VIP_CARD_NAME;
+const inviteLink = () => botSettings.get("link:invite") || DEFAULT_INVITE;
+function salonDailyLimit() { const v = parseInt(botSettings.get("limit:salon_daily"), 10); return Number.isFinite(v) && v >= 1 && v <= 20 ? v : 2; }
+function topHours() {
+  const f = parseInt(botSettings.get("top:from"), 10), t = parseInt(botSettings.get("top:to"), 10);
+  return Number.isFinite(f) && Number.isFinite(t) && f >= 0 && t <= 24 && f < t ? { from: f, to: t } : { from: 8, to: 22 };
 }
+const promoEnabled = (kind) => botSettings.get(`promo_off:${kind}`) !== "1";
+const promoDaysKey = (kind) => (kind === "vip" ? "vip:days" : `days:${kind}`);
+function promoDays(kind) {
+  const v = parseInt(botSettings.get(promoDaysKey(kind)), 10);
+  return Number.isFinite(v) && v >= 1 && v <= 90 ? v : PROMOS[kind].defDays;
+}
+function getVipDays() { return promoDays("vip"); }
+const tsActive = (v) => !!(v && new Date(v).getTime() > Date.now());
+const isPremiumActive = (ad) => !!ad && tsActive(ad.premium_until);
+const isVipActive = (ad) => !!ad && (tsActive(ad.vip_until) || tsActive(ad.premium_until)); // kanal tepasida (VIP yoki Premium)
+const isUrgentActive = (ad) => !!ad && tsActive(ad.urgent_until);
+const isTopActive = (ad) => !!ad && (tsActive(ad.top_until) || tsActive(ad.premium_until));
 // Toshkent vaqti bilan sana: 10.11.2026 14:30
 function fmtTash(d) {
   const t = new Date(d); if (isNaN(t)) return "";
   const z = new Date(t.getTime() + 5 * 3600 * 1000), p = (n) => String(n).padStart(2, "0");
   return `${p(z.getUTCDate())}.${p(z.getUTCMonth() + 1)}.${z.getUTCFullYear()} ${p(z.getUTCHours())}:${p(z.getUTCMinutes())}`;
 }
-const isVipActive = (ad) => !!(ad && ad.vip_until && new Date(ad.vip_until).getTime() > Date.now());
-// VIP muddati tugamaguncha kanal postining boshida turadigan sarlavha (narx/tahrir o'zgarsa ham saqlanadi)
+// Status muddati tugamaguncha kanal postining boshida turadigan sarlavha (narx/tahrir o'zgarsa ham saqlanadi)
 const VIP_HEADER = "🌟 <b>VIP E'LON!</b> 🌟\n\n";
-const vipHeader = (ad) => (isVipActive(ad) ? VIP_HEADER : "");
+const PREMIUM_HEADER = "💎 <b>PREMIUM E'LON!</b> 💎\n\n";
+const URGENT_HEADER = "🚨 <b>SHOSHILINCH SOTILADI!</b>\n\n";
+const vipHeader = (ad) => (isPremiumActive(ad) ? PREMIUM_HEADER : isVipActive(ad) ? VIP_HEADER : "") + (isUrgentActive(ad) ? URGENT_HEADER : "");
+// Narx oxirgi 7 kunda tushganmi (📉 belgi va kanalda eski narx ustidan chizish uchun)
+const recentDrop = (ad) => !!(ad && ad.old_price && ad.price_dropped_at && Date.now() - new Date(ad.price_dropped_at).getTime() < 7 * 86400000 && (parseInt(ad.old_price) || 0) > (parseInt(ad.price) || 0));
+// Kanal postining to'liq matni (bazadagi ma'lumotdan) — status yoqilganda / tugaganda shu bilan qayta yoziladi
+async function buildChannelCaption(ad) {
+  let dealerBadge = "";
+  try {
+    const [[d]] = await db.execute("SELECT is_dealer, dealer_name, dealer_paused FROM users WHERE id = ?", [ad.userId]);
+    if (d && Number(d.is_dealer) === 1 && Number(d.dealer_paused) !== 1 && d.dealer_name) dealerBadge = `✅ <b>Ishonchli sotuvchi: ${d.dealer_name}</b>\n\n`;
+  } catch (e) {}
+  let c = vipHeader(ad) + dealerBadge + (ad.is_hot ? `🔥 <b>QAYNOQ NARX!</b>\n\n` : "") +
+    `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
+    `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n`;
+  if (ad.history && ad.history !== "Ko'rsatilmagan" && ad.history !== "Кўрсатилмаган") c += `🛠 Tarixi: ${ad.history}\n`;
+  if (ad.barter && ad.barter !== "Yo'q" && ad.barter !== "Йўқ") c += `🔄 Barter: ${ad.barter}\n`;
+  if (ad.nasiya && ad.nasiya !== "Yo'q") c += `💳 Nasiya (bo'lib to'lash): ${ad.nasiya}\n`;
+  if (ad.dealer_offer) c += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
+  c += recentDrop(ad)
+    ? `💰 Narxi: <s>${formatNum(ad.old_price)} $</s> <b>${formatNum(ad.price)}$ 📉</b>\n`
+    : `💰 Narxi: ${formatNum(ad.price)}$\n`;
+  c += `☎️ +${ad.phone}\n🚩 #${String(ad.region || "").replace(/\s+/g, "_")}\n\n` +
+    `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
+  return addPriceVoteLine(c);
+}
 // E'lon kanalda qayta joylansa (UP, ko'tarish) — VIP bo'lsa yangi postni yana tepaga qadaymiz
 async function repinIfVip(ad, newMsgId) {
   if (!isVipActive(ad) || !newMsgId) return;
@@ -482,13 +553,14 @@ bot.use(async (ctx, next) => {
   if (t === "/cancel") { adminPriceEdit = null; return ctx.reply("Bekor qilindi."); }
   const n = parseInt(t.replace(/[\s'.,]/g, ""), 10);
   if (!/^[\d\s'.,]+$/.test(t) || !n) { adminPriceEdit = null; return next(); } // boshqa narsa yozildi — odatdagidek
-  if (key === "vip_days") {
+  if (/_days$/.test(key) && PROMOS[key.slice(0, -5)]) {
+    const kind = key.slice(0, -5);
     if (n < 1 || n > 90) return ctx.reply("❗️ Muddat 1 dan 90 kungacha bo'lishi kerak. Qayta yozing yoki /cancel.");
     adminPriceEdit = null;
-    try { await setBotSetting("vip:days", n); }
+    try { await setBotSetting(promoDaysKey(kind), n); }
     catch (e) { return ctx.reply("❌ Saqlab bo'lmadi, qayta urinib ko'ring."); }
     const v = pricesView();
-    await ctx.reply(`✅ VIP muddati: <b>${n} kun</b>`, { parse_mode: "HTML" });
+    await ctx.reply(`✅ ${PROMOS[kind].title} muddati: <b>${n} kun</b>`, { parse_mode: "HTML" });
     return ctx.reply(v.text, { parse_mode: "HTML", reply_markup: v.kb });
   }
   if (n < 1000 || n > 100000000) return ctx.reply("❗️ Narx 1 000 dan 100 000 000 so'mgacha bo'lishi kerak. Qayta yozing yoki /cancel.");
@@ -498,6 +570,55 @@ bot.use(async (ctx, next) => {
   const { text, kb } = pricesView();
   await ctx.reply(`✅ ${PRICE_TITLES[key]}: <b>${somFmt(n)}</b>`, { parse_mode: "HTML" });
   return ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+});
+
+// ⚙️ Admin sozlama / status berish uchun matn yozganda
+bot.use(async (ctx, next) => {
+  if (!adminInput || !ctx.from || ctx.from.id !== ADMIN_ID || !ctx.message || !ctx.message.text) return next();
+  const inp = adminInput;
+  const t = ctx.message.text.trim();
+  if (t === "/cancel") { adminInput = null; return ctx.reply("Bekor qilindi."); }
+  if (isGlobalAction(ctx) || t.startsWith("/")) { adminInput = null; return next(); } // menyu yoki buyruq bosildi
+  try {
+    if (inp.type === "setting") {
+      const r = await saveSettingInput(inp.field, t);
+      if (r.error) return ctx.reply(r.error, { parse_mode: "HTML" });
+      adminInput = null;
+      const v = settingsView();
+      await ctx.reply(`✅ ${SETTING_FIELDS[inp.field].title} saqlandi.`);
+      return ctx.reply(v.text, { parse_mode: "HTML", reply_markup: v.kb, disable_web_page_preview: true });
+    }
+    if (inp.type === "grant_id") {
+      const id = parseInt(t.replace(/\D/g, ""), 10);
+      const [[ad]] = id ? await db.execute("SELECT * FROM ads WHERE id = ?", [id]) : [[null]];
+      if (!ad) return ctx.reply("❗️ Bunday ID li e'lon topilmadi. Qayta yozing yoki /cancel.");
+      if (ad.status !== "active") return ctx.reply("❗️ Bu e'lon faol emas (sotilgan yoki tekshiruvda). Boshqa ID yozing yoki /cancel.");
+      adminInput = null;
+      const v = grantView(ad);
+      return ctx.reply(v.text, { parse_mode: "HTML", reply_markup: v.kb });
+    }
+    if (inp.type === "grant_days") {
+      const n = parseInt(t, 10);
+      if (!/^\d+$/.test(t) || n < 1 || n > 90) return ctx.reply("❗️ 1 dan 90 gacha kun sonini yozing yoki /cancel.");
+      const [[ad]] = await db.execute("SELECT * FROM ads WHERE id = ?", [inp.adId]);
+      if (!ad || ad.status !== "active") { adminInput = null; return ctx.reply("❗️ E'lon faol emas."); }
+      adminInput = null;
+      const P = PROMOS[inp.kind];
+      const { until, ownActive } = await activatePromo(ad, inp.kind, n);
+      await bot.api.sendMessage(ad.userId,
+        `🎁 <b>Sizga sovg'a!</b>\n\n<b>${ad.carDetails}</b> e'loningizga admin ${P.title} statusini ${ownActive ? "uzaytirdi" : "berdi"}.\n${P.done}\n\n⏳ Muddati: <b>${fmtTash(until)}</b> gacha.`,
+        { parse_mode: "HTML" }).catch(() => {});
+      await ctx.reply(`✅ ${P.title} ${ownActive ? "uzaytirildi" : "berildi"}: ${fmtTash(until)} gacha (${n} kun). Sotuvchiga xabar yuborildi.`);
+      const v = grantView(ad);
+      return ctx.reply(v.text, { parse_mode: "HTML", reply_markup: v.kb });
+    }
+  } catch (e) {
+    console.error("Admin kiritishida xato:", e.message);
+    adminInput = null;
+    return ctx.reply("❌ Saqlab bo'lmadi, qayta urinib ko'ring.");
+  }
+  adminInput = null;
+  return next();
 });
 
 // Reaksiya soni keldi — boshqa middleware'larga o'tkazmaymiz (bu yerda foydalanuvchi yo'q)
@@ -1141,7 +1262,7 @@ async function getPhotoUrls(fileIds) {
 function buildAdCaption(ad, priceBadge = "") {
   const fullCarName = catalog.carName(ad.brand, ad.model);
   let caption = "";
-  if (ad.urgent) caption += `🚨 <b>SHOSHILINCH SOTILADI!</b>\n\n`;
+  if (ad.urgent) caption += `🔥 <b>QAYNOQ NARX!</b>\n\n`;
   caption +=
     `🚗 <b>Moshina:</b> ${fullCarName}\n` +
     `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${formatNum(ad.probeg)} km\n` +
@@ -1240,13 +1361,13 @@ async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot", recei
   const adId = result.insertId;
   const paidText = receiptFileId ? `\n💳 <b>Pullik e'lon: ${somFmt(getPrice("ad"))}</b> — chek pastda. Qabul qilsangiz, to'lov tasdiqlangan bo'ladi.` : "";
 
-  const urgentText = ad.urgent ? "\n\n🚨 <b>DIQQAT: Ushbu e'lon foydalanuvchi tomonidan SHOSHILINCH (Qaynoq narx) deb belgilangan!</b>" : "";
+  const urgentText = ad.urgent ? "\n\n🔥 <b>DIQQAT: Foydalanuvchi «Qaynoq narx» maqomini so'ragan!</b>" : "";
   const sourceText = source === "miniapp" ? "\n📱 <i>Mini App orqali yuborildi</i>" : "";
   const userLink = `<a href="tg://user?id=${userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a>`;
 
   const adminKb = new InlineKeyboard();
   if (ad.urgent) {
-    adminKb.text("🔥 Qabul (Shoshilinch)", `approve_hot:${adId}`).text("❌ Rad etish", `reject:${adId}`).row()
+    adminKb.text("🔥 Qabul (Qaynoq narx)", `approve_hot:${adId}`).text("❌ Rad etish", `reject:${adId}`).row()
            .text("✅ Oddiy qabul qilish", `approve:${adId}`);
   } else {
     adminKb.text("✅ Qabul qilish", `approve:${adId}`).text("❌ Rad etish", `reject:${adId}`).row()
@@ -1487,7 +1608,7 @@ async function changeAdPrice({ adId, userId, newPrice }) {
     `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
     `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
     `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: <s>${formatNum(ad.price)} $</s> <b>${formatNum(newPrice)}$ 📉</b>\n☎️ +${ad.phone}\n🚩 #${String(ad.region).replace(/\s+/g, "_")}\n\n` +
-    `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`);
+    `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`);
   const channelMarkup = AD_CHANNEL_MARKUP(ad.id, ad.channelMsgId);
 
   try {
@@ -1508,6 +1629,13 @@ async function changeAdPrice({ adId, userId, newPrice }) {
   const oldPriceNum = parseInt(ad.price) || 0; // yangilashdan oldin eslab qolamiz
   const newPriceNum = parseInt(newPrice) || 0;
   await db.execute("UPDATE ads SET price = ? WHERE id = ?", [newPrice, ad.id]);
+  // 📉 «Narxi tushdi» belgisi: 7 kun ichida bir necha marta tushirilsa, eng birinchi (eski) narx saqlanadi
+  if ((parseInt(newPrice) || 0) < (parseInt(ad.price) || 0)) {
+    const keepOld = recentDrop(ad) ? ad.old_price : ad.price;
+    await db.execute("UPDATE ads SET old_price = ?, price_dropped_at = NOW() WHERE id = ?", [keepOld, ad.id]).catch(() => {});
+  } else {
+    await db.execute("UPDATE ads SET old_price = NULL, price_dropped_at = NULL WHERE id = ?", [ad.id]).catch(() => {});
+  }
 
   const diff = oldPriceNum - newPriceNum;
   if (diff > 0) {
@@ -1561,7 +1689,7 @@ async function submitAdEditToAdmin({ adId, ad, userId, firstName, source = "bot"
   const [[pAds]] = await db.execute("SELECT COUNT(*) as count FROM ads WHERE status = 'pending'");
   const [[pEdits]] = await db.execute("SELECT COUNT(*) as count FROM ad_edits");
   const countText = `\n\n📦 <b>Tasdiq kutayotganlar soni: ${pAds.count + pEdits.count + 1} ta</b>`;
-  const urgentTextEdit = ad.urgent ? "\n\n🚨 <b>Diqqat: Foydalanuvchi buni SHOSHILINCH sotmoqchi!</b>" : "";
+  const urgentTextEdit = ad.urgent ? "\n\n🔥 <b>Diqqat: Foydalanuvchi «Qaynoq narx» maqomini so'ragan!</b>" : "";
   const sourceText = source === "miniapp" ? "\n📱 <i>Mini App orqali yuborildi</i>" : "";
 
   const [result] = await db.execute(
@@ -1588,27 +1716,29 @@ async function submitAdEditToAdmin({ adId, ad, userId, firstName, source = "bot"
 }
 
 // 🌟 VIP so'rovi: to'lov cheki adminga boradi, tasdiqlansa e'lon kanal tepasiga qadaladi
-async function submitVipRequest({ adId, userId, firstName, username, screenshotFileId }) {
+async function submitVipRequest({ adId, userId, firstName, username, screenshotFileId, kind = "vip" }) {
+  if (!PROMOS[kind]) kind = "vip";
+  if (!promoEnabled(kind)) return { ok: false, error: `⏸ ${PROMOS[kind].title} xizmati hozir vaqtincha to'xtatilgan.` };
   const { ad, error } = await getOwnActiveAd(adId, userId);
   if (error) return { ok: false, error };
   const [saveRes] = await db.execute(
-    "INSERT INTO vip_requests (userId, adId, screenshotId, status) VALUES (?,?,?,'pending')",
-    [userId, ad.id, screenshotFileId]
+    "INSERT INTO vip_requests (userId, adId, screenshotId, status, kind, amount) VALUES (?,?,?,'pending',?,?)",
+    [userId, ad.id, screenshotFileId, kind, getPrice(kind)]
   );
   const vipReqId = saveRes.insertId;
   const usernameStr = username ? `@${username}` : "yo'q";
   const adminCaption =
-    `🌟 <b>YANGI VIP TO'LOV SO'ROVI!</b>\n\n` +
+    `${PROMOS[kind].title} — <b>YANGI TO'LOV SO'ROVI!</b>\n\n` +
     `🚗 <b>Moshina:</b> ${ad.carDetails}\n` +
     `🆔 <b>E'lon ID:</b> ${ad.id}\n` +
-    `💰 <b>Summa:</b> ${somFmt(getPrice("vip"))}\n` +
+    `💰 <b>Summa:</b> ${somFmt(getPrice(kind))} (${promoDays(kind)} kun)\n` +
     `👤 <b>Foydalanuvchi:</b> <a href="tg://user?id=${userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a> (${usernameStr})\n\n` +
     `<i>Chekni tekshiring va tasdiqlang yoki rad eting:</i>`;
   await bot.api.sendPhoto(ADMIN_ID, screenshotFileId, {
     caption: adminCaption,
     parse_mode: "HTML",
     reply_markup: new InlineKeyboard()
-      .text("✅ Tasdiqlash (VIP qilish)", `vip_approve:${vipReqId}`)
+      .text(`✅ Tasdiqlash (${PROMOS[kind].short})`, `vip_approve:${vipReqId}`)
       .text("❌ Rad etish", `vip_reject:${vipReqId}`),
   });
   return { ok: true, vipReqId };
@@ -1697,8 +1827,8 @@ async function getSalonAdStatus(userId) {
   const todayCount = cRows[0].count;
   let error = null, code = null;
   if (!isDealer) { code = "not_dealer"; error = "❌ <b>Bu bo'lim faqat tasdiqlangan avtosalonlar uchun.</b>\n\nAgar siz doimiy sotuvchi bo'lsangiz, «🏢 Avtosalon bo'lish» tugmasi orqali ariza qoldiring."; }
-  else if (todayCount >= 2) { code = "limit"; error = "⏳ <b>Bugungi reklama limitingiz tugadi.</b>\n\nBir kunda eng ko'pi bilan <b>2 ta</b> salon reklamasi bera olasiz. Ertaga qaytadan urinib ko'ring."; }
-  return { ok: !error, code, error, user: user || null, todayCount, dealerName: user?.dealer_name || null, dealerPhone: user?.dealer_phone || null };
+  else if (todayCount >= salonDailyLimit()) { code = "limit"; error = `⏳ <b>Bugungi reklama limitingiz tugadi.</b>\n\nBir kunda eng ko'pi bilan <b>${salonDailyLimit()} ta</b> salon reklamasi bera olasiz. Ertaga qaytadan urinib ko'ring.`; }
+  return { ok: !error, code, error, user: user || null, todayCount, dailyLimit: salonDailyLimit(), dealerName: user?.dealer_name || null, dealerPhone: user?.dealer_phone || null };
 }
 
 async function getSalonCredits(userId) {
@@ -1820,7 +1950,7 @@ const adminMenu = new InlineKeyboard()
   .text("🏆 Konkurs (Top-10)", "admin_top").row()
   .text("🏢 Avtosalonlar", "admin_dealers").row()
   .text("📢 Reklamalar", "admin_salon_ads").row()
-  .text("🌟 VIP mijozlar", "admin_vip").row()
+  .text("⭐ Statuslar: hisobot va faollar", "admin_vip").row()
   .text("🚗 Kunlik TOP-5 yuborish", "admin_test_top5")
   .text("📈 Haftalik Analitika", "admin_test_analytics").row()
   .text("🔎 Top qidiruvlar", "admin_topsearch")
@@ -1829,6 +1959,7 @@ const adminMenu = new InlineKeyboard()
   .text("⏰ Avto-xabarlar (yoqish / o'chirish)", "admin_autoposts").row()
   .text("📏 E'lon limiti (foydalanuvchilar)", "admin_adlimit").row()
   .text("💰 Narxlar va to'lovlar", "admin_prices").row()
+  .text("⚙️ Sozlamalar (karta, havola, limitlar)", "admin_settings").row()
   .text("🛠 Boshqa buyruqlar (Qo'llanma)", "admin_help").row()
   .text("❌ Yopish", "admin_close");
 
@@ -1977,12 +2108,14 @@ bot.callbackQuery(/^lim_set:(\d+)$/, async (ctx) => {
 // 💰 NARXLAR VA TO'LOVLAR: VIP, salon reklamasi tariflari, pullik e'lon rejimi
 // =====================================================================
 let adminPriceEdit = null; // admin hozir qaysi narxni yozyapti (masalan "vip")
+let adminInput = null;     // admin hozir nima yozyapti: { type: "setting" | "grant_id" | "grant_days", ... }
 function pricesView() {
   const ads = paidAdsOn(), salon = paidSalonOn();
   const text =
     "💰 <b>NARXLAR VA TO'LOVLAR</b>\n\n" +
-    `🌟 VIP e'lon: <b>${somFmt(getPrice("vip"))}</b> — <b>${getVipDays()} kun</b>\n` +
-    "<i>Muddat tasdiqlagan paytingizdan hisoblanadi; tugasa bot postni kanaldan o'zi yechadi.</i>\n\n" +
+    "⭐ <b>E'lon statuslari:</b>\n" +
+    PROMO_KINDS.map((k) => `• ${PROMOS[k].title}: <b>${somFmt(getPrice(k))}</b> — <b>${promoDays(k)} kun</b>${promoEnabled(k) ? "" : " · ⏸ <i>o'chirilgan</i>"}`).join("\n") + "\n" +
+    "<i>Muddat tasdiqlagan paytingizdan hisoblanadi; tugashidan 1 kun oldin bot eslatadi, tugasa statusni o'zi oladi. 🟢/⏸ — statusni sotuvga yoqish yoki vaqtincha o'chirish (faol bo'lganlari muddatigacha ishlaydi).</i>\n\n" +
     `📢 <b>Salon reklamasi:</b> ${salon ? "💳 pullik" : "🆓 bepul"}\n` +
     `• 1 ta post: <b>${somFmt(getPrice("salon_single"))}</b>\n` +
     `• 5 ta post paketi: <b>${somFmt(getPrice("salon_pack5"))}</b>\n` +
@@ -1991,11 +2124,17 @@ function pricesView() {
     "<i>Pullik rejimda foydalanuvchi kartaga o'tkazib, chek skrinshotini yuboradi (VIP dagidek). " +
     "Siz e'lonni tasdiqlasangiz — to'lov qabul qilingan bo'ladi, rad etsangiz — pulni qaytarasiz. Siz (admin) uchun hammasi bepul.</i>";
   const kb = new InlineKeyboard()
-    .text("✏️ VIP narxi", "pr_edit:vip").text("⏳ VIP muddati", "pr_edit:vip_days").row()
+    .text("✏️ 🚨 narxi", "pr_edit:urgent").text("⏳ 🚨 muddati", "pr_edit:urgent_days").row()
+    .text("✏️ ⬆️ TOP narxi", "pr_edit:top").text("⏳ TOP muddati", "pr_edit:top_days").row()
+    .text("✏️ 🌟 VIP narxi", "pr_edit:vip").text("⏳ VIP muddati", "pr_edit:vip_days").row()
+    .text("✏️ 💎 Premium narxi", "pr_edit:premium").text("⏳ Premium muddati", "pr_edit:premium_days").row()
+    .text(`${promoEnabled("urgent") ? "🟢" : "⏸"} Shoshilinch`, "pr_toggle:urgent").text(`${promoEnabled("top") ? "🟢" : "⏸"} TOP`, "pr_toggle:top")
+    .text(`${promoEnabled("vip") ? "🟢" : "⏸"} VIP`, "pr_toggle:vip").text(`${promoEnabled("premium") ? "🟢" : "⏸"} Premium`, "pr_toggle:premium").row()
     .text("✏️ 1 post", "pr_edit:salon_single").text("✏️ 5 post", "pr_edit:salon_pack5").text("✏️ Qadash", "pr_edit:salon_pin").row()
     .text("✏️ E'lon narxi", "pr_edit:ad").row()
     .text(salon ? "🆓 Salon reklamasini bepul qilish" : "💳 Salon reklamasini pullik qilish", `pr_mode:salon:${salon ? 0 : 1}`).row()
     .text(ads ? "🆓 E'lonlarni bepulga qaytarish" : "💳 E'lonlarni pullikka o'tkazish", `pr_mode:ads:${ads ? 0 : 1}`).row()
+    .text("⚙️ Karta, havola va boshqa sozlamalar", "admin_settings").row()
     .text("🔙 Orqaga", "admin_back");
   return { text, kb };
 }
@@ -2009,10 +2148,12 @@ bot.callbackQuery("admin_prices", async (ctx) => {
 bot.callbackQuery(/^pr_edit:(\w+)$/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
   const key = ctx.match[1];
-  if (key === "vip_days") {
+  adminInput = null;
+  if (/_days$/.test(key) && PROMOS[key.slice(0, -5)]) {
+    const kind = key.slice(0, -5);
     adminPriceEdit = key;
     await ctx.answerCallbackQuery().catch(() => {});
-    return ctx.reply(`⏳ <b>VIP muddati</b>\nHozir: ${getVipDays()} kun\n\nNecha kun bo'lsin? Raqam yozing (1 dan 90 gacha), masalan: <code>7</code>\nBekor qilish: /cancel\n\n<i>Yangi muddat keyingi tasdiqlanadigan VIP larga qo'llanadi.</i>`, { parse_mode: "HTML" });
+    return ctx.reply(`⏳ <b>${PROMOS[kind].title} muddati</b>\nHozir: ${promoDays(kind)} kun\n\nNecha kun bo'lsin? Raqam yozing (1 dan 90 gacha), masalan: <code>7</code>\nBekor qilish: /cancel\n\n<i>Yangi muddat bundan keyin tasdiqlanadigan to'lovlarga qo'llanadi.</i>`, { parse_mode: "HTML" });
   }
   if (!PRICE_DEFAULTS[key]) return ctx.answerCallbackQuery({ text: "Noma'lum narx" }).catch(() => {});
   adminPriceEdit = key;
@@ -2027,6 +2168,125 @@ bot.callbackQuery(/^pr_mode:(ads|salon):([01])$/, async (ctx) => {
   await ctx.answerCallbackQuery({ text: (what === "ads" ? "📝 E'lonlar: " : "📢 Salon reklamasi: ") + (on === "1" ? "pullik" : "bepul"), show_alert: true }).catch(() => {});
   const { text, kb } = pricesView();
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
+});
+
+// 🟢/⏸ Statusni sotuvga yoqish / vaqtincha o'chirish
+bot.callbackQuery(/^pr_toggle:(urgent|top|vip|premium)$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  const kind = ctx.match[1];
+  try { await setBotSetting(`promo_off:${kind}`, promoEnabled(kind) ? "1" : "0"); }
+  catch (e) { return ctx.answerCallbackQuery({ text: "Saqlab bo'lmadi, qayta urinib ko'ring.", show_alert: true }).catch(() => {}); }
+  await ctx.answerCallbackQuery({ text: `${PROMOS[kind].title}: ${promoEnabled(kind) ? "sotuvga yoqildi" : "vaqtincha o'chirildi"}` }).catch(() => {});
+  const { text, kb } = pricesView();
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
+});
+
+// ⚙️ SOZLAMALAR: to'lov kartasi, kanal havolasi, TOP vaqti, salon limiti
+const SETTING_FIELDS = {
+  card: { title: "💳 Karta raqami", ask: "Yangi karta raqamini yozing (16 ta raqam), masalan: <code>8600 1234 5678 9012</code>" },
+  card_name: { title: "👤 Karta egasi", ask: "Karta egasining ism-familiyasini yozing, masalan: <code>Zuhriddin Mustafoyev</code>" },
+  invite: { title: "🔗 Postlar oxiridagi havola", ask: "Kanal postlari oxiridagi havolani yozing (https://t.me/ bilan boshlansin)" },
+  top_hours: { title: "🕗 TOP avto-UP vaqti", ask: "Avto-UP qaysi soatlar oralig'ida ishlasin? Masalan: <code>8-22</code> (Toshkent vaqti)" },
+  salon_limit: { title: "📢 Salon reklamasi: kunlik limit", ask: "Bitta avtosalon kuniga nechta reklama bera olsin? (1 dan 20 gacha)" },
+};
+function settingsView() {
+  const th = topHours();
+  const text =
+    "⚙️ <b>SOZLAMALAR</b>\n\n" +
+    `💳 Karta: <code>${payCard()}</code>\n👤 Egasi: <b>${escapeHtml(payCardName())}</b>\n` +
+    "<i>Bu karta VIP, TOP, Shoshilinch, Premium, pullik e'lon va salon reklamasi to'lovlarining hammasida (bot va ilovada) ko'rsatiladi.</i>\n\n" +
+    `🔗 Postlar oxiridagi havola: ${inviteLink()}\n` +
+    "<i>Yangi postlarda va qayta yoziladigan postlarda qo'llanadi.</i>\n\n" +
+    `🕗 TOP avto-UP vaqti: <b>${String(th.from).padStart(2, "0")}:00 – ${String(th.to).padStart(2, "0")}:00</b>\n` +
+    `📢 Salon reklamasi: kuniga <b>${salonDailyLimit()} ta</b>`;
+  const kb = new InlineKeyboard()
+    .text("✏️ Karta raqami", "st_edit:card").text("✏️ Karta egasi", "st_edit:card_name").row()
+    .text("✏️ Havola", "st_edit:invite").row()
+    .text("✏️ TOP vaqti", "st_edit:top_hours").text("✏️ Salon limiti", "st_edit:salon_limit").row()
+    .text("💰 Narxlar va to'lovlar", "admin_prices").row()
+    .text("🔙 Orqaga", "admin_back");
+  return { text, kb };
+}
+bot.callbackQuery("admin_settings", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  adminInput = null; adminPriceEdit = null;
+  await ctx.answerCallbackQuery().catch(() => {});
+  const { text, kb } = settingsView();
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb, disable_web_page_preview: true }).catch(() => ctx.reply(text, { parse_mode: "HTML", reply_markup: kb, disable_web_page_preview: true }));
+});
+bot.callbackQuery(/^st_edit:(card|card_name|invite|top_hours|salon_limit)$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  const field = ctx.match[1];
+  adminPriceEdit = null;
+  adminInput = { type: "setting", field };
+  await ctx.answerCallbackQuery().catch(() => {});
+  await ctx.reply(`${SETTING_FIELDS[field].title}\n\n${SETTING_FIELDS[field].ask}\n\nBekor qilish: /cancel`, { parse_mode: "HTML", disable_web_page_preview: true });
+});
+// Yozilgan qiymatni tekshirib saqlash: { ok, value } yoki { error }
+async function saveSettingInput(field, t) {
+  if (field === "card") {
+    const d = t.replace(/\D/g, "");
+    if (d.length !== 16) return { error: "❗️ Karta raqami 16 ta raqamdan iborat bo'lishi kerak. Qayta yozing yoki /cancel." };
+    await setBotSetting("pay:card", d.replace(/(\d{4})(?=\d)/g, "$1 "));
+  } else if (field === "card_name") {
+    const v = sanitizeText(t, 64);
+    if (!v || v.length < 3) return { error: "❗️ Ism juda qisqa. Qayta yozing yoki /cancel." };
+    await setBotSetting("pay:card_name", v);
+  } else if (field === "invite") {
+    if (!/^https:\/\/t\.me\/\S+$/.test(t) || t.length > 200) return { error: "❗️ Havola https://t.me/ bilan boshlanishi kerak. Qayta yozing yoki /cancel." };
+    await setBotSetting("link:invite", t);
+  } else if (field === "top_hours") {
+    const m = /^(\d{1,2})\s*[-–:]\s*(\d{1,2})$/.exec(t);
+    const f = m ? +m[1] : -1, to = m ? +m[2] : -1;
+    if (!m || f < 0 || to > 24 || f >= to) return { error: "❗️ Masalan <code>8-22</code> ko'rinishida yozing (boshlanish oxiridan kichik bo'lsin). Qayta yozing yoki /cancel." };
+    await setBotSetting("top:from", f); await setBotSetting("top:to", to);
+  } else if (field === "salon_limit") {
+    const n = parseInt(t, 10);
+    if (!/^\d+$/.test(t) || n < 1 || n > 20) return { error: "❗️ 1 dan 20 gacha raqam yozing. Qayta yozing yoki /cancel." };
+    await setBotSetting("limit:salon_daily", n);
+  }
+  return { ok: true };
+}
+
+// 🎁 STATUSNI QO'LDA BERISH / OLIB TASHLASH (to'lovsiz bonus, sinov yoki xatoni tuzatish)
+function grantView(ad) {
+  let text = `🎁 <b>STATUS BERISH / OLIB TASHLASH</b>\n\n🆔 ${ad.id} — <b>${escapeHtml(ad.carDetails)}</b>\n💰 ${formatNum(ad.price)}$\n\n`;
+  const act = PROMO_KINDS.filter((k) => tsActive(ad[PROMOS[k].col]));
+  text += act.length ? act.map((k) => `${PROMOS[k].title}: ${fmtTash(ad[PROMOS[k].col])} gacha`).join("\n") : "<i>Hozir hech qanday status yo'q.</i>";
+  text += "\n\n➕ — status berish yoki uzaytirish (kun sonini so'rayman), ✖️ — darhol olib tashlash.";
+  const kb = new InlineKeyboard();
+  PROMO_KINDS.forEach((k) => {
+    kb.text(`➕ ${PROMOS[k].short}`, `pg_add:${k}:${ad.id}`);
+    if (tsActive(ad[PROMOS[k].col])) kb.text(`✖️ ${PROMOS[k].short}`, `pg_del:${k}:${ad.id}`);
+    kb.row();
+  });
+  kb.text("🔢 Boshqa e'lon", "admin_promo_grant").text("🔙 Orqaga", "admin_vip");
+  return { text, kb };
+}
+bot.callbackQuery("admin_promo_grant", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  adminPriceEdit = null;
+  adminInput = { type: "grant_id" };
+  await ctx.answerCallbackQuery().catch(() => {});
+  await ctx.reply("🎁 Qaysi e'longa? <b>E'lon ID</b> sini yozing (masalan <code>735</code>).\nBekor qilish: /cancel", { parse_mode: "HTML" });
+});
+bot.callbackQuery(/^pg_add:(urgent|top|vip|premium):(\d+)$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  const [, kind, id] = ctx.match;
+  adminPriceEdit = null;
+  adminInput = { type: "grant_days", kind, adId: Number(id) };
+  await ctx.answerCallbackQuery().catch(() => {});
+  await ctx.reply(`${PROMOS[kind].title} — necha kun? (1 dan 90 gacha)\nOdatdagi muddat: <b>${promoDays(kind)} kun</b> — shuni yozishingiz mumkin: <code>${promoDays(kind)}</code>\nBekor qilish: /cancel`, { parse_mode: "HTML" });
+});
+bot.callbackQuery(/^pg_del:(urgent|top|vip|premium):(\d+)$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  const [, kind, id] = ctx.match;
+  const [[ad]] = await db.execute("SELECT * FROM ads WHERE id = ?", [id]);
+  if (!ad) return ctx.answerCallbackQuery({ text: "E'lon topilmadi.", show_alert: true }).catch(() => {});
+  await removePromo(ad, kind);
+  await ctx.answerCallbackQuery({ text: `${PROMOS[kind].title} olib tashlandi` }).catch(() => {});
+  const { text, kb } = grantView(ad);
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => ctx.reply(text, { parse_mode: "HTML", reply_markup: kb }));
 });
 
 // 🏆 Konkurs Top-10
@@ -2112,108 +2372,94 @@ bot.callbackQuery("admin_salon_ads", async (ctx) => {
 
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
 });
-// 🌟 VIP MIJOZLAR RO'YXATI VA HISOBOT
+// ⭐ STATUSLAR HISOBOTI: har bir status bo'yicha soni va daromadi, eng ko'p to'laganlar
 bot.callbackQuery("admin_vip", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
-  await ctx.answerCallbackQuery("⏳ VIP mijozlar yuklanmoqda...").catch(()=>{});
-
+  await ctx.answerCallbackQuery().catch(() => {});
   try {
-    // 1. Umumiy hisob: jami tasdiqlangan VIP soni
-    const [[totalApproved]] = await db.execute("SELECT COUNT(*) as cnt FROM vip_requests WHERE status = 'approved'");
-    const [[totalPending]] = await db.execute("SELECT COUNT(*) as cnt FROM vip_requests WHERE status = 'pending'");
-    const [[totalRejected]] = await db.execute("SELECT COUNT(*) as cnt FROM vip_requests WHERE status = 'rejected'");
-
-    // 2. Jami daromad (tasdiqlangan VIP soni × narx)
-    // VIP_PRICE dan raqamni ajratib olamiz (masalan "25 000" -> 25000)
-    const priceNum = getPrice("vip");
-    const totalIncome = (totalApproved.cnt * priceNum).toLocaleString("ru-RU");
-
-    // 3. Eng ko'p VIP olgan mijozlar (foydalanuvchi bo'yicha guruhlab)
-    const [topClients] = await db.execute(`
-      SELECT v.userId, u.first_name, u.username, COUNT(*) as vipCount
-      FROM vip_requests v
-      LEFT JOIN users u ON v.userId = u.id
-      WHERE v.status = 'approved'
-      GROUP BY v.userId
-      ORDER BY vipCount DESC
-      LIMIT 15
-    `);
-
-    let text = `🌟 <b>VIP MIJOZLAR HISOBOTI</b>\n\n`;
-    text += `✅ Tasdiqlangan VIP: <b>${totalApproved.cnt} ta</b>\n`;
-    text += `⏳ Kutayotgan: <b>${totalPending.cnt} ta</b>\n`;
-    text += `❌ Rad etilgan: <b>${totalRejected.cnt} ta</b>\n`;
-    text += `💰 <b>Jami daromad: ~${totalIncome} so'm</b>\n`;
-    text += `<i>(${totalApproved.cnt} ta × ${somFmt(getPrice("vip"))}, hozirgi narx bo'yicha)</i>\n\n`;
-    text += `━━━━━━━━━━━━━━━━━━\n`;
-    text += `👥 <b>ENG KO'P VIP OLGAN MIJOZLAR:</b>\n\n`;
-
-    if (topClients.length === 0) {
-      text += `<i>Hozircha tasdiqlangan VIP mijozlar yo'q.</i>`;
-    } else {
-      topClients.forEach((c, i) => {
-        const name = c.first_name || "Ismsiz";
-        const userLink = c.username ? `(${c.username})` : "";
-        text += `${i + 1}. <a href="tg://user?id=${c.userId}">${name}</a> ${userLink} — <b>${c.vipCount} ta VIP</b>\n`;
-      });
+    // amount — to'lov paytidagi narx; eski yozuvlarda bo'lmasa, hozirgi narx bo'yicha hisoblanadi
+    const [rows] = await db.execute("SELECT COALESCE(kind, 'vip') AS kind, status, COUNT(*) AS cnt, SUM(amount) AS summa, SUM(amount IS NULL) AS noAmount FROM vip_requests GROUP BY COALESCE(kind, 'vip'), status");
+    const [[m]] = await db.execute("SELECT SUM(COALESCE(amount, 0)) AS summa, COUNT(*) AS cnt FROM vip_requests WHERE status = 'approved' AND created_at >= NOW() - INTERVAL 30 DAY");
+    let total = 0, pendingAll = 0;
+    let text = "⭐ <b>STATUSLAR HISOBOTI</b>\n\n";
+    for (const k of PROMO_KINDS) {
+      const get = (st) => rows.find((r) => r.kind === k && r.status === st) || { cnt: 0, summa: 0, noAmount: 0 };
+      const ap = get("approved"), pe = get("pending"), rj = get("rejected");
+      const income = Number(ap.summa || 0) + Number(ap.noAmount || 0) * getPrice(k);
+      total += income; pendingAll += Number(pe.cnt);
+      text += `${PROMOS[k].title}: ✅ <b>${ap.cnt}</b> · ⏳ ${pe.cnt} · ❌ ${rj.cnt}\n   💰 ${somFmt(income)}\n`;
     }
-
+    text += `\n💰 <b>Jami daromad: ${somFmt(total)}</b>\n📅 Oxirgi 30 kun: <b>${somFmt(m?.summa || 0)}</b> (${m?.cnt || 0} ta to'lov)\n`;
+    if (pendingAll) text += `⏳ <b>Tekshirilmagan cheklar: ${pendingAll} ta</b>\n`;
+    const [topClients] = await db.execute(`
+      SELECT v.userId, u.first_name, u.username, COUNT(*) AS cnt
+      FROM vip_requests v LEFT JOIN users u ON v.userId = u.id
+      WHERE v.status = 'approved' GROUP BY v.userId ORDER BY cnt DESC LIMIT 10`);
+    text += "━━━━━━━━━━━━━━━━━━\n👥 <b>ENG KO'P TO'LAGANLAR:</b>\n";
+    if (!topClients.length) text += "<i>Hozircha yo'q.</i>";
+    topClients.forEach((c, i) => {
+      text += `${i + 1}. <a href="tg://user?id=${c.userId}">${escapeHtml(c.first_name || "Ismsiz")}</a>${c.username ? ` (@${c.username})` : ""} — <b>${c.cnt} ta</b>\n`;
+    });
     const kb = new InlineKeyboard()
-      .text("📋 Oxirgi VIP so'rovlari", "admin_vip_recent").row()
+      .text("🟢 Hozir faol statuslar", "admin_promo_active").row()
+      .text("🎁 Status berish / olib tashlash", "admin_promo_grant").row()
+      .text("📋 Oxirgi to'lovlar", "admin_vip_recent").row()
+      .text("💰 Narx va muddatlar", "admin_prices").row()
       .text("🔙 Orqaga", "admin_back");
-
     await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb, disable_web_page_preview: true });
   } catch (e) {
-    console.error("VIP hisobot xatosi:", e);
-    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true });
+    console.error("Statuslar hisoboti xatosi:", e);
+    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true }).catch(() => {});
   }
 });
 
-// 📋 OXIRGI VIP SO'ROVLARI (batafsil ro'yxat)
+// 🟢 Hozir qaysi e'lonlarda qaysi status faol (tugash sanasi bilan)
+bot.callbackQuery("admin_promo_active", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await ctx.answerCallbackQuery().catch(() => {});
+  try {
+    const cond = PROMO_KINDS.map((k) => `${PROMOS[k].col} > NOW()`).join(" OR ");
+    const [ads] = await db.execute(`SELECT * FROM ads WHERE status = 'active' AND (${cond}) ORDER BY id DESC LIMIT 40`);
+    let text = `🟢 <b>FAOL STATUSLAR</b> (${ads.length} ta e'lon)\n\n`;
+    if (!ads.length) text += "<i>Hozir hech bir e'londa pullik status yo'q.</i>";
+    for (const k of ["premium", "vip", "top", "urgent"]) {
+      const list = ads.filter((a) => tsActive(a[PROMOS[k].col]));
+      if (!list.length) continue;
+      text += `${PROMOS[k].title} — ${list.length} ta\n`;
+      list.forEach((a) => { text += `• ${a.id} — ${escapeHtml(a.carDetails)} · <b>${fmtTash(a[PROMOS[k].col])}</b> gacha\n`; });
+      text += "\n";
+    }
+    if (text.length > 3900) text = text.slice(0, 3900) + "\n…";
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_vip") });
+  } catch (e) {
+    console.error("Faol statuslar xatosi:", e);
+    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true }).catch(() => {});
+  }
+});
+
+// 📋 OXIRGI TO'LOVLAR (barcha statuslar)
 bot.callbackQuery("admin_vip_recent", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
-  await ctx.answerCallbackQuery().catch(()=>{});
-
+  await ctx.answerCallbackQuery().catch(() => {});
   try {
-    // Oxirgi 15 ta VIP so'rovi (e'lon nomi bilan)
     const [rows] = await db.execute(`
-      SELECT v.id, v.userId, v.status, v.created_at, a.carDetails, u.first_name, u.username
-      FROM vip_requests v
-      LEFT JOIN ads a ON v.adId = a.id
-      LEFT JOIN users u ON v.userId = u.id
-      ORDER BY v.created_at DESC
-      LIMIT 15
-    `);
-
-    if (rows.length === 0) {
-      return ctx.editMessageText("📭 <b>Hozircha VIP so'rovlari yo'q.</b>", {
-        parse_mode: "HTML",
-        reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_vip")
-      });
+      SELECT v.id, v.userId, v.status, v.created_at, v.kind, v.amount, a.carDetails, u.first_name
+      FROM vip_requests v LEFT JOIN ads a ON v.adId = a.id LEFT JOIN users u ON v.userId = u.id
+      ORDER BY v.created_at DESC LIMIT 15`);
+    if (!rows.length) {
+      return ctx.editMessageText("📭 <b>Hozircha to'lovlar yo'q.</b>", { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_vip") });
     }
-
-    let text = `📋 <b>OXIRGI VIP SO'ROVLARI:</b>\n\n`;
-    rows.forEach((r, i) => {
-      const name = r.first_name || "Ismsiz";
-      const car = r.carDetails || "E'lon o'chirilgan";
-      const dateStr = new Intl.DateTimeFormat('uz-UZ', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent' }).format(new Date(r.created_at));
-      // Holatga qarab belgi
-      let statusEmoji = "⏳";
-      if (r.status === "approved") statusEmoji = "✅";
-      else if (r.status === "rejected") statusEmoji = "❌";
-
-      text += `${statusEmoji} <b>${car}</b>\n`;
-      text += `👤 <a href="tg://user?id=${r.userId}">${name}</a> | 🗓 ${dateStr}\n\n`;
+    let text = "📋 <b>OXIRGI TO'LOVLAR:</b>\n\n";
+    rows.forEach((r) => {
+      const P = PROMOS[r.kind] || PROMOS.vip;
+      const st = r.status === "approved" ? "✅" : r.status === "rejected" ? "❌" : "⏳";
+      text += `${st} ${P.title} — <b>${escapeHtml(r.carDetails || "E'lon o'chirilgan")}</b>${r.amount ? ` · ${somFmt(r.amount)}` : ""}\n`;
+      text += `👤 <a href="tg://user?id=${r.userId}">${escapeHtml(r.first_name || "Ismsiz")}</a> | 🗓 ${fmtTash(r.created_at)}\n\n`;
     });
-
-    await ctx.editMessageText(text, {
-      parse_mode: "HTML",
-      reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_vip"),
-      disable_web_page_preview: true
-    });
+    await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Orqaga", "admin_vip"), disable_web_page_preview: true });
   } catch (e) {
-    console.error("VIP ro'yxat xatosi:", e);
-    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true });
+    console.error("To'lovlar ro'yxati xatosi:", e);
+    await ctx.answerCallbackQuery({ text: "Xatolik yuz berdi.", show_alert: true }).catch(() => {});
   }
 });
 // 📢 BITTA REKLAMANI BOSHQARISH
@@ -2714,7 +2960,7 @@ bot.command("up", async (ctx) => {
         `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${ad.probeg}\n` +
         `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
         `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
-        `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`);
+        `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`);
 
       const sentMsg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
         caption: caption,
@@ -3670,11 +3916,11 @@ else if (step === "MODEL") {
       }
        else if (step === "URGENT") {
         const kb = new InlineKeyboard()
-          .text("🚨 Ha, shoshilinch", "urg:yes")
+          .text("🔥 Ha, qaynoq narxda", "urg:yes")
           .text("Oddiy sotuv", "urg:no").row()
           .text("🔙 Orqaga", "back_NASIYA").text("❌ Bekor", "cancel_ad");
 
-        msgPrompt = await ctx.reply("⚡️ <b>Sotuv shoshilinchmi?</b>\n\n<i>Agar moshinani bozor narxidan arzonroq va tezroq sotmoqchi bo'lsangiz «Ha, shoshilinch» ni tanlang. E'loningiz kanalga maxsus maqomda joylanadi!</i>", { reply_markup: kb, parse_mode: "HTML" });
+        msgPrompt = await ctx.reply("🔥 <b>Qaynoq narxda sotasizmi?</b>\n\n<i>Agar moshinani bozor narxidan arzonroq va tezroq sotmoqchi bo'lsangiz «Ha, qaynoq narxda» ni tanlang — admin ma'qullasa, e'lon kanalga «🔥 QAYNOQ NARX» sarlavhasi bilan chiqadi (bepul).</i>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
 
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
@@ -3821,7 +4067,7 @@ if (action === "submit_ad") {
             const payKb = new InlineKeyboard().text("❌ Bekor qilish", "cancel_pay");
             await ctx.reply(
               `💳 <b>E'lon joylash pullik: ${somFmt(pay.price)}</b>\n\n` +
-              `Quyidagi kartaga o'tkazing:\n<code>${VIP_CARD}</code>\n👤 ${VIP_CARD_NAME}\n\n` +
+              `Quyidagi kartaga o'tkazing:\n<code>${payCard()}</code>\n👤 ${payCardName()}\n\n` +
               `📸 So'ng <b>to'lov chekini (skrinshot)</b> shu yerga rasm qilib yuboring — e'lon chek bilan birga adminga boradi.`,
               { parse_mode: "HTML", reply_markup: payKb }
             );
@@ -4284,7 +4530,7 @@ async function salonAdConversation(conversation, ctx) {
     if (plan !== "credit") {
       await ctx.reply(
         `💳 <b>${SALON_PLANS[plan].title}: ${somFmt(payInfo.prices[plan])}</b>\n\n` +
-        `Quyidagi kartaga o'tkazing:\n<code>${VIP_CARD}</code>\n👤 ${VIP_CARD_NAME}\n\n` +
+        `Quyidagi kartaga o'tkazing:\n<code>${payCard()}</code>\n👤 ${payCardName()}\n\n` +
         `📸 So'ng <b>to'lov chekini (skrinshot)</b> shu yerga rasm qilib yuboring.`,
         { parse_mode: "HTML" }
       );
@@ -4477,7 +4723,7 @@ if (ad.barter && ad.barter !== "Yo'q") {
     }
         const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year);
     caption += `💰 Narxi: ${formatNum(ad.price)}$${badge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
-      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
+      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
     caption = addPriceVoteLine(caption); // 👇 Narxga baho bering: 🔥 · 👍 · 🤔
 
     const channelMarkup = AD_CHANNEL_MARKUP(ad.id); // ilova tugmasi ham shu yerda
@@ -4523,7 +4769,7 @@ if (ad.barter && ad.barter !== "Yo'q") {
       // ==================================================================
 
       // MUHIM: Endi ikkala kanal ID si ham bazaga saqlanadi
-      await db.execute("UPDATE ads SET status='active', channelMsgId=?, secondChannelMsgId=? WHERE id=?", [msg.message_id, secondMsgId, adId]);
+      await db.execute("UPDATE ads SET status='active', channelMsgId=?, secondChannelMsgId=?, posted_at = COALESCE(posted_at, NOW()) WHERE id=?", [msg.message_id, secondMsgId, adId]);
       
       if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
       
@@ -4569,6 +4815,7 @@ if (ad.barter && ad.barter !== "Yo'q") {
 
 bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
+  db.execute("UPDATE ads SET is_hot = 1 WHERE id = ? AND status = 'pending'", [adId]).catch(() => {});
   const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
   const ad = rows[0];
 
@@ -4609,7 +4856,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
     }
         const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year);
     caption += `💰 Narxi: ${formatNum(ad.price)}$${badge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
-      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
+      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
     caption = addPriceVoteLine(caption); // 👇 Narxga baho bering: 🔥 · 👍 · 🤔
     // ==============================================================================
 
@@ -4656,7 +4903,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
       // ==================================================================
 
       // 3. IKKALA kanal ID sini ham bazaga bitta qilib saqlash
-      await db.execute("UPDATE ads SET status='active', channelMsgId=?, secondChannelMsgId=? WHERE id=?", [msg.message_id, secondMsgId, adId]);
+      await db.execute("UPDATE ads SET status='active', channelMsgId=?, secondChannelMsgId=?, posted_at = COALESCE(posted_at, NOW()) WHERE id=?", [msg.message_id, secondMsgId, adId]);
 
       if (require('fs').existsSync(collagePath)) require('fs').unlinkSync(collagePath);
       
@@ -5254,7 +5501,7 @@ bot.callbackQuery(/^manage_ad:(\d+)/, async (ctx) => {
     .text("💰 Sotildi", `sold_req:${ad.id}`)
     .text("📉 Narxni tushirish", `edit_price:${ad.id}`).row()
     .text("✏️ To'liq tahrirlash", `full_edit_req:${ad.id}`).row()
-    .text(isVipActive(ad) ? "🔁 VIP ni uzaytirish" : "🌟 VIP QILISH (Tepaga qadash)", `buy_vip:${ad.id}`).row();
+    .text("🚀 E'lonni ko'tarish (VIP, TOP, Shoshilinch...)", `promo_menu:${ad.id}`).row();
 
   if (freeUps > 0) {
     kb.text(`🚀 BEPUL UP (${freeUps} ta bor)`, `free_up_req:${ad.id}`).row();
@@ -5263,7 +5510,7 @@ bot.callbackQuery(/^manage_ad:(\d+)/, async (ctx) => {
 
   const votes = await getAdVotes(ad.id, ad.channelMsgId);
   const votesLine = votes ? `\n📊 <b>Kanaldagi baho:</b> 🔥 ${votes.fire} arzon · 👍 ${votes.ok} normal · 🤔 ${votes.think} qimmat` : "";
-  const vipLine = isVipActive(ad) ? `\n🌟 <b>VIP:</b> ${fmtTash(ad.vip_until)} gacha` : "";
+  const vipLine = PROMO_KINDS.filter((k) => tsActive(ad[PROMOS[k].col])).map((k) => `\n${PROMOS[k].title}: ${fmtTash(ad[PROMOS[k].col])} gacha`).join("");
   const text = `🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n💰 <b>Narxi: ${formatNum(ad.price)}$</b>${vipLine}${votesLine}\n\n👇 <i>Kerakli amalni tanlang:</i>`;
   
   await ctx.answerCallbackQuery().catch(()=>{});
@@ -5624,7 +5871,7 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
     newCaption += `💳 Nasiya (bo'lib to'lash): ${editData.nasiya}\n`;
   }
   newCaption += `💰 Narxi: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n` +
-    `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`;
+    `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
   newCaption = addPriceVoteLine(newCaption); // 👇 Narxga baho bering: 🔥 · 👍 · 🤔
 
   const channelMarkup = AD_CHANNEL_MARKUP(oldAd.id, oldAd.channelMsgId); // ilova va ulashish tugmalari ham shu yerda
@@ -5726,153 +5973,187 @@ bot.callbackQuery(/^del_alert:(\d+)/, async (ctx) => {
 // ==============================================================
 // 🌟 VIP MONETIZATSIYA (TELEGRAM STARS TO'LOV TIZIMI)
 // ==============================================================
-bot.callbackQuery(/^buy_vip:(\d+)/, async (ctx) => {
-    const adId = ctx.match[1];
-    await ctx.answerCallbackQuery().catch(() => {});
-
-    // E'lon egasi shu odammi tekshiramiz
-    const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ? AND status = 'active'", [adId, ctx.from.id]);
-    const ad = rows[0];
-    if (!ad) return ctx.reply("❌ Bu e'lon faol emas yoki sizga tegishli emas.");
-
-    const text =
-        `🌟 <b>VIP E'LON XIZMATI</b>\n\n` +
-        `🚗 <b>${ad.carDetails}</b>\n\n` +
-        (isVipActive(ad)
-          ? `🌟 Hozir VIP: <b>${fmtTash(ad.vip_until)}</b> gacha.\nTo'lasangiz, muddat yana <b>${getVipDays()} kunga</b> uzaytiriladi.\n\n`
-          : `VIP qilinganda e'loningiz <b>${getVipDays()} kun</b> davomida:\n` +
-            `✅ Kanalning eng tepasiga qadaladi (Pin)\n` +
-            `✅ "🌟 VIP" belgisi bilan ajralib turadi\n` +
-            `✅ Ilovada barcha e'lonlardan birinchi chiqadi\n\n`) +
-        `💰 <b>Narxi: ${somFmt(getPrice("vip"))}</b> — ${getVipDays()} kun\n\n` +
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `💳 <b>To'lov uchun karta:</b>\n` +
-        `<code>${VIP_CARD}</code>\n` +
-        `👤 ${VIP_CARD_NAME}\n` +
-        `━━━━━━━━━━━━━━━━━━\n\n` +
-        `📸 <b>To'lovni amalga oshirgach, chek (skrinshot)ni shu yerga rasm qilib yuboring.</b>\n` +
-        `Admin tekshirib, e'loningizni VIP qiladi.`;
-
-    // Foydalanuvchini "VIP skrinshot kutish" holatiga o'tkazamiz
-    if (ctx.session) ctx.session.waitingVipScreenshot = adId;
-
-    await ctx.reply(text, { parse_mode: "HTML" });
-});
-// 📸 VIP TO'LOV SKRINSHOTINI QABUL QILISH
-bot.on("message:photo", async (ctx, next) => {
-  // Agar foydalanuvchi VIP skrinshot kutish holatida bo'lmasa, o'tkazib yuboramiz
-  if (!ctx.session?.waitingVipScreenshot) return next();
-
-  const adId = ctx.session.waitingVipScreenshot;
-  ctx.session.waitingVipScreenshot = null; // holatni tozalaymiz
-
-  const photoArr = ctx.message.photo;
-  const screenshotId = photoArr[photoArr.length - 1].file_id;
-
-  // E'lonni tekshiramiz
+// =====================================================================
+// ⭐ PULLIK STATUSLAR: 🚨 Shoshilinch · ⬆️ TOP · 🌟 VIP · 💎 Premium
+// Narx va muddat — admin panel → «💰 Narxlar va to'lovlar». Sotuvchi kartaga to'lab chek yuboradi,
+// admin tasdiqlaydi; muddat tugashidan 1 kun oldin eslatma, tugaganda status o'zi olinadi.
+// =====================================================================
+function promoOfferText(ad, kind) {
+  const P = PROMOS[kind], days = promoDays(kind), price = somFmt(getPrice(kind));
+  const own = ad[P.col] && new Date(ad[P.col]).getTime() > Date.now();
+  const covered = kind !== "premium" && P.inPremium && isPremiumActive(ad);
+  let head = `${P.title}\n\n🚗 <b>${ad.carDetails}</b>\n\n`;
+  if (own) head += `✅ Hozir faol: <b>${fmtTash(ad[P.col])}</b> gacha.\nTo'lasangiz, muddat yana <b>${days} kunga</b> uzaytiriladi.\n\n`;
+  else if (covered) head += `ℹ️ Bu imkoniyat hozir 💎 Premium ichida bor (${fmtTash(ad.premium_until)} gacha).\n\n`;
+  else head += `<b>${days} kun</b> davomida:\n` + P.perks.map((x) => `✅ ${x}`).join("\n") + "\n\n";
+  return head +
+    `💰 <b>Narxi: ${price}</b> — ${days} kun\n\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `💳 <b>To'lov uchun karta:</b>\n<code>${payCard()}</code>\n👤 ${payCardName()}\n` +
+    `━━━━━━━━━━━━━━━━━━\n\n` +
+    `📸 <b>To'lovni amalga oshirgach, chek (skrinshot)ni shu yerga rasm qilib yuboring.</b>\nAdmin tekshirib, statusni yoqadi.`;
+}
+async function showPromoOffer(ctx, adId, kind) {
+  await ctx.answerCallbackQuery().catch(() => {});
+  if (!promoEnabled(kind)) return ctx.reply(`⏸ ${PROMOS[kind].title} xizmati hozir vaqtincha to'xtatilgan. Boshqa statuslarni «🚀 E'lonni ko'tarish» bo'limidan tanlashingiz mumkin.`);
   const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ? AND status = 'active'", [adId, ctx.from.id]);
   const ad = rows[0];
-  if (!ad) return ctx.reply("❌ Bu e'lon faol emas yoki topilmadi.", { reply_markup: mainMenu });
+  if (!ad) return ctx.reply("❌ Bu e'lon faol emas yoki sizga tegishli emas.");
+  if (ctx.session) { ctx.session.waitingVipScreenshot = adId; ctx.session.waitingPromoKind = kind; }
+  await ctx.reply(promoOfferText(ad, kind), { parse_mode: "HTML" });
+}
+// Barcha statuslar ro'yxati (e'lonni boshqarish → «🚀 Statuslar»)
+function promoMenuView(ad) {
+  const kinds = PROMO_KINDS.filter((k) => promoEnabled(k) || tsActive(ad[PROMOS[k].col]));
+  const lines = kinds.map((k) => {
+    const P = PROMOS[k];
+    const on = ad[P.col] && new Date(ad[P.col]).getTime() > Date.now();
+    return `${P.title} — ${somFmt(getPrice(k))} / ${promoDays(k)} kun` + (on ? `\n   ✅ faol: ${fmtTash(ad[P.col])} gacha` : `\n   <i>${P.perks[0]}</i>`);
+  });
+  const kb = new InlineKeyboard();
+  kinds.filter(promoEnabled).forEach((k) => {
+    const on = ad[PROMOS[k].col] && new Date(ad[PROMOS[k].col]).getTime() > Date.now();
+    kb.text(`${on ? "🔁 " : ""}${PROMOS[k].short} — ${somFmt(getPrice(k))}`, `buy_promo:${k}:${ad.id}`).row();
+  });
+  kb.text("🔙 Orqaga", `manage_ad:${ad.id}`);
+  return { text: `🚀 <b>E'LONNI KO'TARISH</b>\n🚗 ${ad.carDetails}\n\n` + lines.join("\n\n") + "\n\n👇 <i>Kerakli statusni tanlang:</i>", kb };
+}
+bot.callbackQuery(/^promo_menu:(\d+)/, async (ctx) => {
+  await ctx.answerCallbackQuery().catch(() => {});
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ? AND status = 'active'", [ctx.match[1], ctx.from.id]);
+  if (!rows[0]) return ctx.reply("❌ Bu e'lon faol emas yoki sizga tegishli emas.");
+  const { text, kb } = promoMenuView(rows[0]);
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => ctx.reply(text, { parse_mode: "HTML", reply_markup: kb }));
+});
+bot.callbackQuery(/^buy_vip:(\d+)/, (ctx) => showPromoOffer(ctx, ctx.match[1], "vip")); // eski tugmalar uchun
+bot.callbackQuery(/^buy_promo:(urgent|top|vip|premium):(\d+)/, (ctx) => showPromoOffer(ctx, ctx.match[2], ctx.match[1]));
 
-  // VIP so'rovi bazaga va adminga — umumiy funksiya (Mini App ham shuni chaqiradi)
-  const vipResult = await submitVipRequest({ adId, userId: ctx.from.id, firstName: ctx.from.first_name, username: ctx.from.username, screenshotFileId: screenshotId });
-  if (!vipResult.ok) return ctx.reply(vipResult.error, { parse_mode: "HTML", reply_markup: mainMenu });
-
+// 📸 STATUS TO'LOV SKRINSHOTINI QABUL QILISH
+bot.on("message:photo", async (ctx, next) => {
+  if (!ctx.session?.waitingVipScreenshot) return next();
+  const adId = ctx.session.waitingVipScreenshot;
+  const kind = PROMOS[ctx.session.waitingPromoKind] ? ctx.session.waitingPromoKind : "vip";
+  ctx.session.waitingVipScreenshot = null;
+  ctx.session.waitingPromoKind = null;
+  const photoArr = ctx.message.photo;
+  const screenshotId = photoArr[photoArr.length - 1].file_id;
+  const [rows] = await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ? AND status = 'active'", [adId, ctx.from.id]);
+  if (!rows[0]) return ctx.reply("❌ Bu e'lon faol emas yoki topilmadi.", { reply_markup: mainMenu });
+  const out = await submitVipRequest({ adId, userId: ctx.from.id, firstName: ctx.from.first_name, username: ctx.from.username, screenshotFileId: screenshotId, kind });
+  if (!out.ok) return ctx.reply(out.error, { parse_mode: "HTML", reply_markup: mainMenu });
   await ctx.reply(
-    "✅ <b>Chekingiz adminga yuborildi!</b>\n\nTo'lov tekshirilgach, e'loningiz VIP qilinadi. Odatda bu tez amalga oshadi.",
+    `✅ <b>Chekingiz adminga yuborildi!</b>\n\nTo'lov tekshirilgach, e'loningizga ${PROMOS[kind].title} statusi beriladi. Odatda bu tez amalga oshadi.`,
     { parse_mode: "HTML", reply_markup: mainMenu }
   );
 });
-// ✅ Admin VIP to'lovni tasdiqlaganda — e'lonni VIP qiladi
+
+// Kanal postini (to'liq matn bilan) qayta yozish — statuslar sarlavhasi ham shu yerda qo'shiladi
+async function refreshChannelCaption(ad) {
+  if (!ad || !ad.channelMsgId) return;
+  const caption = await buildChannelCaption(ad);
+  await bot.api.editMessageCaption(CHANNEL_ID, Number(ad.channelMsgId), {
+    caption, parse_mode: "HTML", reply_markup: AD_CHANNEL_MARKUP(ad.id, ad.channelMsgId),
+  }).catch((e) => console.error("Kanal matnini yangilab bo'lmadi:", e.description || e.message));
+}
+// E'lonni kanalda yangi post qilib ko'tarish (TOP va VIP uchun). VIP bo'lsa qayta qadaladi.
+async function bumpAdInChannel(ad) {
+  if (!ad || !ad.channelMsgId) return null;
+  let newMsgId;
+  try {
+    const newMsg = await bot.api.copyMessage(CHANNEL_ID, CHANNEL_ID, Number(ad.channelMsgId), { reply_markup: AD_CHANNEL_MARKUP(ad.id) });
+    newMsgId = newMsg.message_id;
+  } catch (e) {
+    console.error(`E'lonni ko'tarib bo'lmadi (ID ${ad.id}):`, e.description || e.message);
+    await db.execute("UPDATE ads SET last_bumped = CURRENT_TIMESTAMP WHERE id = ?", [ad.id]).catch(() => {}); // har 10 daqiqada qayta urinmasin
+    return null;
+  }
+  if (ad.videoId) { try { await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: newMsgId }); } catch (e) {} }
+  await bot.api.deleteMessage(CHANNEL_ID, Number(ad.channelMsgId)).catch(() => {});
+  await db.execute("UPDATE ads SET channelMsgId = ?, created_at = CURRENT_TIMESTAMP, last_bumped = CURRENT_TIMESTAMP WHERE id = ?", [newMsgId, ad.id]);
+  ad.channelMsgId = newMsgId;
+  await addShareButton(ad.id, newMsgId);
+  await repinIfVip(ad, newMsgId);
+  return newMsgId;
+}
+
+// Statusni yoqish / uzaytirish (to'lov tasdiqlanganda va admin o'zi berganda): baza + kanaldagi ko'rinish
+async function activatePromo(ad, kind, days) {
+  const P = PROMOS[kind];
+  const wasVip = isVipActive(ad), wasUrgent = isUrgentActive(ad), wasPremium = isPremiumActive(ad);
+  const ownActive = tsActive(ad[P.col]);
+  const base = ownActive ? new Date(ad[P.col]).getTime() : Date.now();
+  const until = new Date(base + days * 86400000);
+  await db.execute(`UPDATE ads SET ${P.col} = ?, ${P.rem} = 0 WHERE id = ?`, [until, ad.id]);
+  ad[P.col] = until;
+  try {
+    if ((kind === "vip" || kind === "premium") && !wasVip) {
+      // Yangi VIP/Premium: kanal oxiriga yangi post bo'lib chiqadi, sarlavha qo'yiladi va qadaladi
+      await bumpAdInChannel(ad);
+      await refreshChannelCaption(ad);
+    } else if (kind === "top" || kind === "premium") {
+      if (kind === "top" && !wasVip) await bumpAdInChannel(ad);      // TOP: darhol bir marta ko'tariladi
+      if (kind === "premium" && !wasPremium) { await bumpAdInChannel(ad); await refreshChannelCaption(ad); }
+    } else if (kind === "urgent" && !wasUrgent) {
+      await refreshChannelCaption(ad);
+    }
+    if (isVipActive(ad) && ad.channelMsgId) await bot.api.pinChatMessage(CHANNEL_ID, Number(ad.channelMsgId), { disable_notification: true }).catch(() => {});
+  } catch (e) { console.error("Statusni kanalga qo'llashda xato:", e.message); }
+  return { until, ownActive };
+}
+// Statusni muddatidan oldin olib tashlash (admin): qadash yechiladi, sarlavha olinadi
+async function removePromo(ad, kind) {
+  const P = PROMOS[kind];
+  const before = { vip: isVipActive(ad), premium: isPremiumActive(ad), urgent: isUrgentActive(ad) };
+  await db.execute(`UPDATE ads SET ${P.col} = NULL, ${P.rem} = 0 WHERE id = ?`, [ad.id]);
+  ad[P.col] = null;
+  const after = { vip: isVipActive(ad), premium: isPremiumActive(ad), urgent: isUrgentActive(ad) };
+  if (!ad.channelMsgId || ad.status !== "active") return;
+  if (before.vip && !after.vip) await bot.api.unpinChatMessage(CHANNEL_ID, Number(ad.channelMsgId)).catch(() => {});
+  if (before.vip !== after.vip || before.premium !== after.premium || before.urgent !== after.urgent) await refreshChannelCaption(ad);
+}
+// ✅ Admin status to'lovini tasdiqlaganda
 bot.callbackQuery(/^vip_approve:(\d+)/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
-  const vipReqId = ctx.match[1];
-
-  const [[req]] = await db.execute("SELECT * FROM vip_requests WHERE id = ?", [vipReqId]);
+  const reqId = ctx.match[1];
+  const [[req]] = await db.execute("SELECT * FROM vip_requests WHERE id = ?", [reqId]);
   if (!req || req.status !== 'pending') {
     return ctx.answerCallbackQuery({ text: "Bu so'rov allaqachon ko'rib chiqilgan.", show_alert: true });
   }
-
+  const kind = PROMOS[req.kind] ? req.kind : "vip";
+  const P = PROMOS[kind];
   const [[ad]] = await db.execute("SELECT * FROM ads WHERE id = ? AND status = 'active'", [req.adId]);
   if (!ad) {
-    await db.execute("UPDATE vip_requests SET status = 'rejected' WHERE id = ?", [vipReqId]);
+    await db.execute("UPDATE vip_requests SET status = 'rejected' WHERE id = ?", [reqId]);
     return ctx.answerCallbackQuery({ text: "E'lon faol emas.", show_alert: true });
   }
-
-  await ctx.answerCallbackQuery("⏳ VIP qilinmoqda...").catch(()=>{});
-  const days = getVipDays();
-  // Uzaytirish: e'lon hozir ham VIP — kanalga qayta tashlamaymiz, faqat muddatni qo'shamiz
-  if (isVipActive(ad)) {
-    const until = new Date(new Date(ad.vip_until).getTime() + days * 86400000);
-    await db.execute("UPDATE ads SET vip_until = ?, vip_reminded = 0 WHERE id = ?", [until, ad.id]);
-    await db.execute("UPDATE vip_requests SET status = 'approved' WHERE id = ?", [vipReqId]);
-    if (ad.channelMsgId) await bot.api.pinChatMessage(CHANNEL_ID, Number(ad.channelMsgId), { disable_notification: true }).catch(() => {});
-    await ctx.editMessageCaption({ caption: `✅ <b>VIP uzaytirildi:</b> ${fmtTash(until)} gacha (+${days} kun)`, parse_mode: "HTML" }).catch(() => {});
-    try {
-      await bot.api.sendMessage(req.userId,
-        `🎉 <b>To'lovingiz tasdiqlandi!</b>\n\n<b>${ad.carDetails}</b> e'loningizning VIP muddati uzaytirildi.\n⏳ VIP: <b>${fmtTash(until)}</b> gacha.`,
-        { parse_mode: "HTML" });
-    } catch (e) {}
-    return;
-  }
-  const channelMarkup = AD_CHANNEL_MARKUP(ad.id); // ilova tugmasi ham shu yerda
-
-  let newMsgId;
-  try {
-    // Eski xabarni o'chirib, yangidan (VIP belgisi bilan) tashlaymiz
-    const newMsg = await bot.api.copyMessage(CHANNEL_ID, CHANNEL_ID, ad.channelMsgId, { reply_markup: channelMarkup });
-    newMsgId = newMsg.message_id;
-    await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(()=>{});
-
-    // VIP belgisi bilan matnni yangilaymiz
-    const vipCaption = addPriceVoteLine(
-      `🌟 <b>VIP E'LON!</b> 🌟\n\n` +
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
-      `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n` +
-      `💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
-      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`);
-
-    // Yangi post ID si endi ma'lum — ulashish tugmasi ham shu bilan birga qo'shiladi
-    await bot.api.editMessageCaption(CHANNEL_ID, newMsgId, { caption: vipCaption, parse_mode: "HTML", reply_markup: AD_CHANNEL_MARKUP(ad.id, newMsgId) }).catch(()=>{});
-    // Tepaga qadaymiz (pin)
-    await bot.api.pinChatMessage(CHANNEL_ID, newMsgId).catch(()=>{});
-
-    await db.execute("UPDATE ads SET channelMsgId = ? WHERE id = ?", [newMsgId, ad.id]);
-  } catch (e) {
-    console.error("VIP qilishda xato:", e);
-  }
-
-  // Muddat admin tasdiqlagan paytdan hisoblanadi
-  const vipUntil = new Date(Date.now() + days * 86400000);
-  await db.execute("UPDATE ads SET vip_until = ?, vip_reminded = 0 WHERE id = ?", [vipUntil, ad.id]);
-  await db.execute("UPDATE vip_requests SET status = 'approved' WHERE id = ?", [vipReqId]);
-  await ctx.editMessageCaption({ caption: `✅ <b>VIP tasdiqlandi va e'lon tepaga qadaldi!</b>\n⏳ ${fmtTash(vipUntil)} gacha (${days} kun)`, parse_mode: "HTML" });
-
-  // Foydalanuvchiga xabar
+  await ctx.answerCallbackQuery("⏳ Status yoqilmoqda...").catch(() => {});
+  const days = promoDays(kind);
+  await db.execute("UPDATE vip_requests SET status = 'approved' WHERE id = ?", [reqId]);
+  const { until, ownActive } = await activatePromo(ad, kind, days);
+  const verb = ownActive ? "uzaytirildi" : "yoqildi";
+  await ctx.editMessageCaption({ caption: `✅ <b>${P.title} ${verb}</b>\n🆔 ${ad.id} — ${escapeHtml(ad.carDetails)}\n⏳ ${fmtTash(until)} gacha (${ownActive ? "+" : ""}${days} kun)`, parse_mode: "HTML" }).catch(() => {});
   try {
     await bot.api.sendMessage(req.userId,
-      `🎉 <b>To'lovingiz tasdiqlandi!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz VIP maqomida kanalning eng tepasiga qadab qo'yildi! 🌟\n\n⏳ VIP muddati: <b>${fmtTash(vipUntil)}</b> gacha (${days} kun). Tugashidan bir kun oldin eslatamiz.`,
-      { parse_mode: "HTML" }
-    );
+      `🎉 <b>To'lovingiz tasdiqlandi!</b>\n\n<b>${ad.carDetails}</b> e'loningizga ${P.title} statusi ${verb}.\n` +
+      `${P.done}\n\n⏳ Muddati: <b>${fmtTash(until)}</b> gacha. Tugashidan bir kun oldin eslatamiz.`,
+      { parse_mode: "HTML" });
   } catch (e) {}
 });
 
-// ❌ Admin VIP to'lovni rad etganda
+// ❌ Admin status to'lovini rad etganda
 bot.callbackQuery(/^vip_reject:(\d+)/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
-  const vipReqId = ctx.match[1];
-
-  const [[req]] = await db.execute("SELECT * FROM vip_requests WHERE id = ?", [vipReqId]);
+  const reqId = ctx.match[1];
+  const [[req]] = await db.execute("SELECT * FROM vip_requests WHERE id = ?", [reqId]);
   if (!req) return ctx.answerCallbackQuery({ text: "So'rov topilmadi.", show_alert: true });
-
-  await db.execute("UPDATE vip_requests SET status = 'rejected' WHERE id = ?", [vipReqId]);
-  await ctx.editMessageCaption({ caption: "❌ <b>VIP to'lov rad etildi.</b>", parse_mode: "HTML" });
-
+  if (req.status !== "pending") return ctx.answerCallbackQuery({ text: "Bu so'rov allaqachon ko'rib chiqilgan.", show_alert: true });
+  const P = PROMOS[req.kind] || PROMOS.vip;
+  await db.execute("UPDATE vip_requests SET status = 'rejected' WHERE id = ?", [reqId]);
+  await ctx.editMessageCaption({ caption: `❌ <b>${P.title} to'lovi rad etildi.</b>`, parse_mode: "HTML" }).catch(() => {});
   try {
     await bot.api.sendMessage(req.userId,
-      "❌ <b>VIP to'lovingiz tasdiqlanmadi.</b>\n\nChek noto'g'ri yoki to'lov kelmadi. Savol bo'lsa admin bilan bog'laning: @uzdev75",
-      { parse_mode: "HTML" }
-    );
+      `❌ <b>${P.title} uchun to'lovingiz tasdiqlanmadi.</b>\n\nChek noto'g'ri yoki to'lov kelmadi. Savol bo'lsa admin bilan bog'laning: @uzdev75`,
+      { parse_mode: "HTML" });
   } catch (e) {}
 });
 // To'lovni tasdiqlash
@@ -6491,58 +6772,76 @@ async function unpinExpiredSalonAds() {
 }
 setInterval(unpinExpiredSalonAds, 10 * 60 * 1000).unref();
 
-// ⏳ VIP muddati: tugashidan 1 kun oldin eslatma, tugaganda kanaldan yechish va oddiy ko'rinishga qaytarish.
-// E'lon sotilsa / o'chirilsa — keyingi tekshiruvda (10 daqiqa ichida) yechiladi.
-function plainChannelCaption(ad) {
-  return addPriceVoteLine(
-    `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${formatNum(ad.probeg)} km\n` +
-    `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n` +
-    `💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${String(ad.region || "").replace(/\s+/g, "_")}\n\n` +
-    `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 https://t.me/+einfd7upTxxlZDYy`);
-}
-const vipRenewKb = (adId) => new InlineKeyboard().text("🔁 VIP ni uzaytirish", `buy_vip:${adId}`);
-let vipCheckRunning = false;
+// ⏳ STATUSLAR MUDDATI: tugashidan 1 kun oldin eslatma; tugaganda kanaldan yechish / sarlavhani olish.
+// E'lon sotilsa yoki o'chirilsa — keyingi tekshiruvda (10 daqiqa ichida) hammasi olinadi.
+const promoRenewKb = (kind, adId) => new InlineKeyboard().text(`🔁 ${PROMOS[kind].short} ni uzaytirish`, `buy_promo:${kind}:${adId}`);
+const tsOf = (v) => (v ? new Date(v).getTime() : 0);
+// VIP yoki TOP ni Premium o'z ichiga olgan bo'lsa (Premium undan keyin tugaydi) — alohida xabar yubormaymiz
+const coveredByPremium = (ad, kind) => PROMOS[kind].inPremium && tsOf(ad.premium_until) > Math.max(Date.now(), tsOf(ad[PROMOS[kind].col]));
+let promoCheckRunning = false;
 async function checkVipExpiry() {
-  if (vipCheckRunning) return;
-  vipCheckRunning = true;
+  if (promoCheckRunning) return;
+  promoCheckRunning = true;
   try {
     // 1) Ertaga tugaydiganlar — eslatma
-    const [soon] = await db.execute(
-      "SELECT * FROM ads WHERE status = 'active' AND vip_until IS NOT NULL AND vip_reminded = 0 AND vip_until > NOW() AND vip_until <= NOW() + INTERVAL 1 DAY"
-    );
-    for (const ad of soon) {
-      await db.execute("UPDATE ads SET vip_reminded = 1 WHERE id = ?", [ad.id]);
-      await bot.api.sendMessage(ad.userId,
-        `⏳ <b>VIP muddati tugayapti</b>\n\n<b>${ad.carDetails}</b> e'loningiz <b>${fmtTash(ad.vip_until)}</b> da VIP dan chiqadi: kanal tepasidan yechiladi va ilovada oddiy tartibda chiqadi.\n\n` +
-        `Uzaytirsangiz — yana ${getVipDays()} kun tepada turadi (${somFmt(getPrice("vip"))}).`,
-        { parse_mode: "HTML", reply_markup: vipRenewKb(ad.id) }).catch(() => {});
-    }
-    // 2) Muddati tugagan yoki e'lon endi faol emas — yechamiz
-    const [ended] = await db.execute(
-      "SELECT * FROM ads WHERE vip_until IS NOT NULL AND (vip_until <= NOW() OR status <> 'active')"
-    );
-    for (const ad of ended) {
-      const endedAt = new Date(ad.vip_until).getTime();
-      await db.execute("UPDATE ads SET vip_until = NULL, vip_reminded = 0 WHERE id = ?", [ad.id]);
-      if (!ad.channelMsgId) continue;
-      await bot.api.unpinChatMessage(CHANNEL_ID, Number(ad.channelMsgId)).catch(() => {});
-      if (ad.status !== "active") continue; // sotilgan e'lonning matniga tegmaymiz
-      // «🌟 VIP E'LON!» sarlavhasini olib tashlaymiz
-      await bot.api.editMessageCaption(CHANNEL_ID, Number(ad.channelMsgId), {
-        caption: plainChannelCaption(ad), parse_mode: "HTML", reply_markup: AD_CHANNEL_MARKUP(ad.id, ad.channelMsgId),
-      }).catch(() => {});
-      // Ancha oldin tugaganlarga (yangilanishdan oldingi eski VIP lar) xabar yubormaymiz
-      if (Date.now() - endedAt < 2 * 86400000) {
+    for (const kind of PROMO_KINDS) {
+      const P = PROMOS[kind];
+      const [soon] = await db.execute(
+        `SELECT * FROM ads WHERE status = 'active' AND ${P.col} IS NOT NULL AND ${P.rem} = 0 AND ${P.col} > NOW() AND ${P.col} <= NOW() + INTERVAL 1 DAY`
+      );
+      for (const ad of soon) {
+        await db.execute(`UPDATE ads SET ${P.rem} = 1 WHERE id = ?`, [ad.id]);
+        if (coveredByPremium(ad, kind) || !promoEnabled(kind)) continue;
         await bot.api.sendMessage(ad.userId,
-          `ℹ️ <b>${ad.carDetails}</b> e'loningizning VIP muddati tugadi. E'lon kanalda va ilovada odatdagidek turibdi.\n\nYana tepaga chiqarmoqchi bo'lsangiz 👇`,
-          { parse_mode: "HTML", reply_markup: vipRenewKb(ad.id) }).catch(() => {});
+          `⏳ <b>${P.title} muddati tugayapti</b>\n\n<b>${ad.carDetails}</b> e'loningizda bu status <b>${fmtTash(ad[P.col])}</b> da tugaydi: ${P.endsText}.\n\n` +
+          `Uzaytirsangiz — yana ${promoDays(kind)} kun (${somFmt(getPrice(kind))}).`,
+          { parse_mode: "HTML", reply_markup: promoRenewKb(kind, ad.id) }).catch(() => {});
       }
     }
-  } catch (e) { console.error("VIP muddatini tekshirishda xato:", e.message); }
-  finally { vipCheckRunning = false; }
+    // 2) Muddati tugagan yoki e'lon endi faol emas — statusni olamiz
+    const cond = PROMO_KINDS.map((k) => `(${PROMOS[k].col} IS NOT NULL AND (${PROMOS[k].col} <= NOW() OR status <> 'active'))`).join(" OR ");
+    const [ended] = await db.execute(`SELECT * FROM ads WHERE ${cond}`);
+    for (const row of ended) {
+      const ad = Object.assign({}, row);
+      const now = Date.now();
+      // Bazada hali turgan har qanday status — kanalda hozir ko'rinib turibdi deb hisoblaymiz
+      const before = { vip: !!(ad.vip_until || ad.premium_until), premium: !!ad.premium_until, urgent: !!ad.urgent_until };
+      const endedKinds = PROMO_KINDS.filter((k) => ad[PROMOS[k].col] && (tsOf(ad[PROMOS[k].col]) <= now || ad.status !== "active"));
+      const endedAt = {};
+      for (const k of endedKinds) {
+        endedAt[k] = tsOf(ad[PROMOS[k].col]);
+        await db.execute(`UPDATE ads SET ${PROMOS[k].col} = NULL, ${PROMOS[k].rem} = 0 WHERE id = ?`, [ad.id]);
+        ad[PROMOS[k].col] = null;
+      }
+      const after = { vip: isVipActive(ad), premium: isPremiumActive(ad), urgent: isUrgentActive(ad) };
+      if (!ad.channelMsgId) continue;
+      if (before.vip && !after.vip) await bot.api.unpinChatMessage(CHANNEL_ID, Number(ad.channelMsgId)).catch(() => {});
+      if (ad.status !== "active") continue; // sotilgan e'lonning matniga tegmaymiz
+      if (before.vip !== after.vip || before.premium !== after.premium || before.urgent !== after.urgent) await refreshChannelCaption(ad);
+      for (const k of endedKinds) {
+        if (now - endedAt[k] > 2 * 86400000) continue; // ancha oldin tugagan (eski) — xabar yubormaymiz
+        if (PROMOS[k].inPremium && after.premium) continue;
+        let extra = "";
+        if (k === "premium" && after.vip) extra = `\n🌟 VIP esa ${fmtTash(ad.vip_until)} gacha davom etadi.`;
+        await bot.api.sendMessage(ad.userId,
+          `ℹ️ <b>${ad.carDetails}</b> e'loningizda ${PROMOS[k].title} muddati tugadi. E'lon kanalda va ilovada odatdagidek turibdi.${extra}\n\nYana yoqmoqchi bo'lsangiz 👇`,
+          { parse_mode: "HTML", ...(promoEnabled(k) ? { reply_markup: promoRenewKb(k, ad.id) } : {}) }).catch(() => {});
+      }
+    }
+    // 3) ⬆️ TOP / 💎 Premium: har kuni bir marta kanalda ko'tarish (admin paneldagi soatlarda, bir martada ko'pi bilan 5 ta)
+    const h = new Date(Date.now() + 5 * 3600 * 1000).getUTCHours(), TH = topHours();
+    if (h >= TH.from && h < TH.to) {
+      const [due] = await db.execute(
+        "SELECT * FROM ads WHERE status = 'active' AND (top_until > NOW() OR premium_until > NOW()) AND (last_bumped IS NULL OR last_bumped <= NOW() - INTERVAL 23 HOUR) ORDER BY last_bumped LIMIT 5"
+      );
+      for (const ad of due) await bumpAdInChannel(ad);
+    }
+  } catch (e) { console.error("Statuslar muddatini tekshirishda xato:", e.message); }
+  finally { promoCheckRunning = false; }
 }
 setInterval(checkVipExpiry, 10 * 60 * 1000).unref();
 setTimeout(checkVipExpiry, 60 * 1000).unref();
+
 setInterval(() => runScheduledPosts(new Date()), 60 * 1000 * 30);
 module.exports = { runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp }; // testlar uchun
 
@@ -6567,13 +6866,13 @@ dbReady.finally(async () => {
     startWebApp({
       bot, db, catalog, InputFile, mainMenu,
       ADMIN_ID, CHANNEL_ID, LOG_CHANNEL_ID, WEBAPP_URL,
-      VIP_PRICE, VIP_CARD, VIP_CARD_NAME,
+      VIP_PRICE, VIP_CARD, VIP_CARD_NAME, payCard, payCardName, salonDailyLimit, promoEnabled,
       // Bot ham, Mini App ham aynan shu funksiyalarni chaqiradi:
       checkCanPostAd, submitNewAdToAdmin, sanitizeText, normalizePhone, parseAdPrice,
       requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
       estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
       logUserAction, getAdVotes,
-      getPrice, getVipDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS,
+      getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS,
     });
   } catch (e) {
     console.error("❌ Mini App serverini ishga tushirib bo'lmadi:", e);

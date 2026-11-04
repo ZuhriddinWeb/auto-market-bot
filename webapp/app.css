@@ -477,3 +477,33 @@ select.input {
 }
 input[type="search"]::-webkit-search-cancel-button, input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
 .pay-sum { font: 600 24px/1.2 var(--display); letter-spacing: -.01em; }
+
+/* ⭐ Statuslar va bepul belgilar */
+.card .tags { position: absolute; left: 7px; top: 7px; right: 44px; z-index: 1; display: flex; flex-wrap: wrap; gap: 4px; pointer-events: none; }
+.tag { font-size: 11px; font-weight: 700; line-height: 1; padding: 4px 7px; border-radius: 7px; color: #fff; white-space: nowrap; box-shadow: 0 1px 4px rgba(9,14,22,.18); }
+.tag.tag-vip { background: linear-gradient(135deg, #ffd766, #ffb800); color: #121826; }
+.tag.tag-premium { background: linear-gradient(135deg, #b36bff, #6a3df0); }
+.tag.tag-urgent { background: #ff3b30; }
+.tag.tag-deal { background: var(--deal); }
+.tag.tag-drop { background: #0a84ff; }
+.tag.tag-new { background: rgba(255,255,255,.94); color: #121826; }
+.card.is-premium { box-shadow: 0 0 0 2px #8f55f5, 0 4px 14px rgba(120,70,240,.2); }
+.card .price .was { margin-left: 6px; font: 500 12px/1 var(--font); color: var(--ink-2); letter-spacing: 0; }
+.badge.vip { background: #fff3cc; color: #8a5a00; }
+.badge.premium { background: #efe6ff; color: #6a3df0; }
+.badge.urgent { background: #ffe5e3; color: #d70015; }
+.badge.drop { background: #e3f0ff; color: #0060df; }
+.badge.new { background: var(--surface); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+[data-theme="dark"] .badge.vip { background: rgba(255,200,61,.16); color: #ffc83d; }
+[data-theme="dark"] .badge.premium { background: rgba(179,107,255,.18); color: #c9a2ff; }
+[data-theme="dark"] .badge.urgent { background: rgba(255,69,58,.18); color: #ff6961; }
+[data-theme="dark"] .badge.drop { background: rgba(10,132,255,.18); color: #64b5ff; }
+.pill.premium { background: #efe6ff; color: #6a3df0; }
+.pill.top { background: #e3f4fb; color: #0077a8; }
+.pill.urgent { background: #ffe5e3; color: #d70015; }
+[data-theme="dark"] .pill.premium { background: rgba(179,107,255,.18); color: #c9a2ff; }
+[data-theme="dark"] .pill.top { background: rgba(52,170,220,.18); color: #6fd0f5; }
+[data-theme="dark"] .pill.urgent { background: rgba(255,69,58,.18); color: #ff6961; }
+.perks { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.perks li { position: relative; padding-left: 26px; font-size: 14.5px; }
+.perks li::before { content: "✓"; position: absolute; left: 0; top: 0; width: 18px; height: 18px; border-radius: 50%; background: var(--deal-soft); color: var(--deal); font-size: 11px; font-weight: 800; display: grid; place-items: center; }
