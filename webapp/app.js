@@ -114,8 +114,15 @@
     if (t && !/^\d/.test(t)) return t; // admin qo'shgan variant, masalan «Noma'lum»
     return fmtNum(p) ? fmtNum(p) + " km" : "";
   }
+  // Telefon: 12 raqam (998 bilan) bo'lsa — faqat bitta 998 olinadi; aks holda yozilgani qoladi
+  function phone9(raw) {
+    var d = digits(raw);
+    if (d.length > 12) d = d.slice(-12);
+    if (d.length === 12 && d.indexOf("998") === 0) d = d.slice(3);
+    return d;
+  }
   function fmtPhone(raw) {
-    var d = digits(raw).replace(/^(998)+/, "");
+    var d = phone9(raw);
     if (d.length > 9) d = d.slice(-9);
     if (!d) return "";
     return "+998 " + [d.slice(0, 2), d.slice(2, 5), d.slice(5, 7), d.slice(7, 9)].filter(Boolean).join(" ");
@@ -1174,8 +1181,7 @@
       if (!price) errs.price = "Narxni yozing.";
       else if (price < 300) errs.price = "Narx juda past. Dollarda yozing, masalan 8500.";
       else if (price > 500000) errs.price = "Narx juda baland. Real narxni dollarda yozing.";
-      var ph = digits(S.phone).replace(/^(998)+/, "");
-      if (ph.length > 9) ph = ph.slice(-9);
+      var ph = phone9(S.phone);
       if (ph.length !== 9) errs.phone = "Raqamni to'liq yozing, masalan 90 123 45 67.";
       if (!S.region) errs.region = "Viloyatni tanlang.";
       if (photos.length === 0) errs.photos = "Kamida 1 ta rasm qo'shing.";
@@ -1725,7 +1731,7 @@
     setMain("Ariza yuborish", function () {
       if (busy) return;
       if (st.name.trim().length < 2) return setError(refs, "name", "Nomni yozing.");
-      var ph = digits(st.phone).replace(/^(998)+/, ""); if (ph.length > 9) ph = ph.slice(-9);
+      var ph = phone9(st.phone);
       if (ph.length !== 9) return setError(refs, "phone", "Raqamni to'liq yozing, masalan 90 123 45 67.");
       busy = true; mainBusy(true);
       api("/api/dealer", { json: st }).then(function (r) {

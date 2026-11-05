@@ -1287,9 +1287,11 @@ function cutBytes(str, maxBytes) {
 // Telefon: 901234567 / +998 90 123 45 67 / 998998901234567 -> 998901234567
 function normalizePhone(raw) {
   let digits = String(raw || "").replace(/\D/g, "");
-  digits = digits.replace(/^(998)+/, "");
-  if (digits.length > 9) digits = digits.slice(-9);
-  return digits.length === 9 ? `998${digits}` : null;
+  // Faqat bitta «998» olinadi va faqat undan keyin to'liq 9 raqam qolsa. Avval «^(998)+» edi —
+  // +998 99 8014140 kabi (operator kodi 99 + 8) raqamlarda «998998» ni yeb, raqamni rad etardi.
+  if (digits.length > 12) digits = digits.slice(-12);                       // raqam ikki marta yopishib qolgan bo'lsa
+  if (digits.length === 12 && digits.startsWith("998")) digits = digits.slice(3); // 998 XX XXX XX XX
+  return digits.length === 9 ? `998${digits}` : null;                       // 9 raqam: XX XXX XX XX
 }
 
 // Narx: faqat raqam, 300$ dan 500 000$ gacha
