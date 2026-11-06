@@ -123,7 +123,7 @@ function startWebApp(deps) {
     requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
     estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
     VIP_PRICE, VIP_CARD, VIP_CARD_NAME, payCard, payCardName, salonDailyLimit, promoEnabled, logUserAction, getAdVotes,
-    getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement,
+    getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement, SALON_PLAN_DESC,
   } = deps;
 
   const PORT = Number(process.env.PORT) || 3000;
@@ -459,6 +459,7 @@ function startWebApp(deps) {
       salonLimit: salonDailyLimit ? salonDailyLimit() : 2,
       salonPaid: !!(paidSalonOn && paidSalonOn()),
       salonPrice: getPrice ? String(getPrice("salon_single")) : "",
+      salonPrices: getPrice ? { single: getPrice("salon_single"), app: getPrice("salon_app"), both: getPrice("salon_both") } : null,
       promos: PROMOS ? PROMO_KINDS.filter(k => !promoEnabled || promoEnabled(k)).map(k => ({ kind: k, title: PROMOS[k].title, perks: PROMOS[k].perks, price: String(getPrice(k)), days: promoDays(k) })) : [],
       // 💳 Pullik rejimlar va narxlar (admin panel → «💰 Narxlar va to'lovlar»)
       paidAds: !!(paidAdsOn && paidAdsOn() && user.id !== ADMIN_ID),
@@ -840,9 +841,11 @@ function startWebApp(deps) {
     const st = await getSalonAdStatus(user.id);
     logLine(user, "Salon reklamasi bo'limini ochdi", "salon");
     const paid = !!(paidSalonOn && paidSalonOn() && user.id !== ADMIN_ID);
-    const plans = paid ? Object.entries(SALON_PLANS).map(([key, p]) => ({ key, title: p.title, price: getPrice(p.priceKey), channel: !!p.channel, app: !!p.app })) : [];
+    // Narxlar ro'yxati hammaga ko'rinadi (diler bo'lmaganlarga ham — reklama sifatida); tanlash faqat pullik rejimda
+    const priceList = Object.entries(SALON_PLANS).map(([key, p]) => ({ key, title: p.title, price: getPrice(p.priceKey), channel: !!p.channel, app: !!p.app, desc: SALON_PLAN_DESC ? SALON_PLAN_DESC[key] : "" }));
+    const plans = paid ? priceList : [];
     const credits = paid && getSalonCredits ? await getSalonCredits(user.id) : 0;
-    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dailyLimit: st.dailyLimit || 2, dealerName: st.dealerName, dealerPhone: st.dealerPhone, paid, plans, credits, appDays: salonAppDays ? salonAppDays() : 7, card: payCard ? payCard() : VIP_CARD, cardName: payCardName ? payCardName() : VIP_CARD_NAME });
+    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dailyLimit: st.dailyLimit || 2, dealerName: st.dealerName, dealerPhone: st.dealerPhone, paid, salonPaidMode: !!(paidSalonOn && paidSalonOn()), priceList, plans, credits, appDays: salonAppDays ? salonAppDays() : 7, card: payCard ? payCard() : VIP_CARD, cardName: payCardName ? payCardName() : VIP_CARD_NAME });
   }
   async function handleSalonSubmit(req, res, user) {
     const r = await once(`${user.id}:salon`, async () => {

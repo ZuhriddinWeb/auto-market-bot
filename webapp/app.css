@@ -545,3 +545,18 @@ input[type="search"]::-webkit-search-cancel-button, input[type="search"]::-webki
 .s-name { margin: 0 0 5px; font-size: 21px; line-height: 1.15; overflow-wrap: anywhere; }
 .s-text { margin: 0; white-space: pre-wrap; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
 [data-field="plan"] .chip { white-space: normal; max-width: 100%; text-align: left; }
+
+/* 💰 Salon reklamasi tariflari (narxlar ro'yxati) */
+.tariffs { display: grid; gap: 8px; }
+.tariff { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 12px 14px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; position: relative; }
+button.tariff { cursor: pointer; transition: border-color .12s ease, background .12s ease; }
+button.tariff:active { transform: scale(.99); }
+.tariff.on { border-color: var(--brand); background: var(--brand-soft); box-shadow: 0 0 0 1px var(--brand) inset; }
+.tariff.best:not(.on) { border-color: rgba(52,199,89,.55); }
+.t-main { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.t-main b { font-size: 15px; font-weight: 600; }
+.t-desc { font-size: 12.5px; color: var(--ink-2); line-height: 1.35; }
+.t-best { justify-self: start; font-size: 11px; font-weight: 700; color: #1d8a3a; background: rgba(52,199,89,.14); padding: 2px 7px; border-radius: 6px; }
+[data-theme="dark"] .t-best { color: #4cd964; }
+.t-price { flex: none; font: 600 17px/1 var(--display); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.t-price small { font: 500 11px var(--font); color: var(--ink-2); }

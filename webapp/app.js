@@ -1690,7 +1690,7 @@
     app.appendChild(h("div", { class: "list" }, [
       listItem({ icon: "gift", color: "#ff2d55", title: "Bepul VIP (UP)", sub: "Do'st taklif qiling — har 5 tasiga 1 ta UP", end: me.freeUps ? me.freeUps + " ta" : null, onclick: function () { go("/referral"); } }),
       listItem({ icon: "building", color: "#007aff", title: me.isDealer ? "Avtosalon: " + me.dealerName : "Avtosalon bo'lish", sub: me.isDealer ? "Cheksiz e'lon va «Ishonchli sotuvchi» belgisi" : "Doimiy sotuvchilar uchun bepul", onclick: function () { go("/dealer"); } }),
-      listItem({ icon: "megaphone", color: "#ff9500", title: "Salon reklamasi", sub: me.salonPaid ? "Avtosalonlar uchun, " + fmtNum(me.salonPrice) + " so'mdan" : "Avtosalonlar uchun, kuniga " + (me.salonLimit || 2) + " ta", onclick: function () { go("/salon-ad"); } }),
+      listItem({ icon: "megaphone", color: "#ff9500", title: "Salon reklamasi", sub: me.salonPaid && me.salonPrices ? "Kanal " + fmtNum(me.salonPrices.single) + " · Ilova " + fmtNum(me.salonPrices.app) + " · Ikkalasi " + fmtNum(me.salonPrices.both) + " so'm" : me.salonPaid ? "Avtosalonlar uchun, " + fmtNum(me.salonPrice) + " so'mdan" : "Avtosalonlar uchun, kuniga " + (me.salonLimit || 2) + " ta", onclick: function () { go("/salon-ad"); } }),
     ]));
     app.appendChild(h("p", { class: "group-title", text: "Kanal" }));
     app.appendChild(h("div", { class: "list" }, [listItem({ icon: "send", color: "#2aabee", title: "Avto Bozor kanali", sub: "Barcha e'lonlar bir joyda", onclick: function () { openLink(me.channelUrl); } })]));
@@ -1873,6 +1873,29 @@
   }
 
   // ---------- Salon reklamasi ----------
+  // 💰 Salon reklamasi narxlari: kartalar ro'yxati (tanlanadigan yoki faqat ma'lumot uchun)
+  function salonPriceCards(r, opts) {
+    var list = (r.priceList || []).slice();
+    var byKey = {}; list.forEach(function (p) { byKey[p.key] = p; });
+    var save = byKey.single && byKey.app && byKey.both ? byKey.single.price + byKey.app.price - byKey.both.price : 0;
+    var rows = [];
+    if (opts.credits > 0) rows.push({ key: "credit", title: "🎟 Paketdan", price: 0, desc: "Paketingizda " + opts.credits + " ta post bor — to'lovsiz, kanalga chiqadi" });
+    list.forEach(function (p) {
+      var d = p.desc || "";
+      if (p.app) d += " (" + (r.appDays || 7) + " kun)";
+      if (p.key === "pack5") d += " · har biri " + fmtNum(Math.round(p.price / 5)) + " so'm";
+      rows.push({ key: p.key, title: p.title, price: p.price, desc: d, best: p.key === "both" && save > 0 ? "Tejaysiz " + fmtNum(save) + " so'm" : "" });
+    });
+    return h("div", { class: "tariffs", role: opts.onPick ? "radiogroup" : null, "aria-label": "Salon reklamasi narxlari" }, rows.map(function (t) {
+      var on = opts.selected === t.key;
+      var kids = [
+        h("div", { class: "t-main" }, [h("b", { text: t.title }), t.best ? h("span", { class: "t-best", text: t.best }) : null, h("span", { class: "t-desc", text: t.desc })]),
+        h("div", { class: "t-price", text: t.key === "credit" ? "0" : fmtNum(t.price) }, [h("small", { text: " so'm" })]),
+      ];
+      if (!opts.onPick) return h("div", { class: "tariff" + (t.best ? " best" : "") }, kids);
+      return h("button", { type: "button", class: "tariff" + (on ? " on" : "") + (t.best ? " best" : ""), role: "radio", "aria-checked": on ? "true" : "false", onclick: function () { haptic("select"); opts.onPick(t.key); } }, kids);
+    }));
+  }
   function screenSalonAd() {
     app.appendChild(h("h1", { class: "page", text: "Salon reklamasi" }));
     var body = h("div"); body.appendChild(skeleton()); app.appendChild(body);
@@ -1884,12 +1907,17 @@
       if (!r.allowed) {
         body.appendChild(messageScreen(r.code === "limit" ? "Bugungi limit tugadi" : "Faqat avtosalonlar uchun", r.message,
           r.code === "not_dealer" ? [h("button", { type: "button", class: "btn", text: "Avtosalon bo'lish", onclick: function () { replaceTo("/dealer"); } })] : []));
+        if (r.salonPaidMode && r.priceList && r.priceList.length) {
+          body.appendChild(h("p", { class: "sec-title", text: "Narxlar" }));
+          body.appendChild(salonPriceCards(r, {}));
+        }
         return;
       }
       var refs = {};
       var st = { text: "", location: "", phone: r.dealerPhone ? "+" + r.dealerPhone : "" };
       var media = null;
       body.appendChild(h("p", { class: "page-sub", text: (r.dealerName || "Saloningiz") + " — bugun yana " + ((r.dailyLimit || 2) - r.todayCount) + " ta reklama bera olasiz. Admin tasdiqlagach tanlagan joyingizda chiqadi." }));
+      var tariffSlot = h("div"); body.appendChild(tariffSlot); // narxlar ro'yxati — sahifa boshida
       var mediaBox = h("div", { class: "photos" });
       var input = h("input", { type: "file", accept: "image/*,video/*", class: "file-input", "aria-label": "Rasm yoki video" });
       input.addEventListener("change", function () {
@@ -1934,11 +1962,19 @@
       var planOpts = (r.credits > 0 ? [{ key: "credit", name: "Paketdan (" + r.credits + " ta qoldi)" }] : [])
         .concat((r.plans || []).map(function (p) { return { key: p.key, name: p.title + " — " + fmtNum(p.price) + " so'm", price: p.price }; }));
       if (r.credits > 0) plan = "credit";
+      // Tarif tanlash — sahifa boshida (narxlar ro'yxati)
+      var tariffBox = h("div", { class: "group", style: "margin-bottom:18px" });
+      tariffSlot.appendChild(tariffBox);
+      function renderTariffs() {
+        tariffBox.innerHTML = "";
+        tariffBox.hidden = !r.paid;
+        if (!r.paid) return;
+        tariffBox.appendChild(field(refs, "plan", "1. Qayerda chiqsin — tarifni tanlang", salonPriceCards(r, { selected: plan, credits: r.credits, onPick: function (k) { plan = k; setError(refs, "plan", ""); renderTariffs(); renderPay(); } }),
+          "📢 Kanal — alohida post. 📱 Ilova — bozor tepasidagi «Avtosalonlar takliflari» lentasi, e'lonlar orasidagi karta va saloningiz sahifasi."));
+      }
       function renderPay() {
         planBox.innerHTML = "";
         if (!r.paid) return;
-        planBox.appendChild(field(refs, "plan", "Qayerda chiqsin", chipGroup("lbl-plan", function () { return planOpts; }, function (x) { return plan === x.key; }, function (x) { plan = x.key; setError(refs, "plan", ""); renderPay(); }),
-          "📢 Kanal — alohida post. 📱 Ilova — bozor tepasidagi «Avtosalonlar takliflari» lentasi, e'lonlar orasidagi karta va saloningiz sahifasi (" + (r.appDays || 7) + " kun). Ikkalasi — eng ko'p qamrov."));
         if (plan && plan !== "credit") {
           var sel = planOpts.filter(function (x) { return x.key === plan; })[0];
           receiptBox.innerHTML = "";
@@ -1949,7 +1985,7 @@
               h("button", { type: "button", class: "remove", "aria-label": "Chekni o'chirish", text: "×", onclick: function () { receipt = null; renderPay(); } })]));
           } else receiptBox.appendChild(h("button", { type: "button", class: "add-tile", onclick: function () { receiptInput.click(); } }, [h("b", { text: "+" }), "Chek rasmi"]));
           planBox.appendChild(h("div", { class: "field" }, [
-            h("span", { class: "label", text: "To'lov" }),
+            h("span", { class: "label", text: "To'lov · " + sel.name.replace(/ — .*$/, "") }),
             h("div", { class: "pay-sum", text: fmtNum(sel.price) + " so'm" }),
             h("div", { class: "copy-box", style: "margin-top:10px" }, [h("code", { text: r.card }), h("button", { type: "button", text: "Nusxa", onclick: function () { copyText(String(r.card).replace(/\s/g, ""), "Karta raqami nusxalandi"); } })]),
             h("p", { class: "help", text: "Karta egasi: " + r.cardName + ". O'tkazgach, chek skrinshotini yuklang." }),
@@ -1963,7 +1999,11 @@
         field(refs, "location", "Salon manzili", textInput(st, "location", { placeholder: "Masalan: Samarqand, Gazli shossesi", maxlength: "200" })),
         field(refs, "phone", "Telefon", textInput(st, "phone", { placeholder: "+998 90 123 45 67", maxlength: "100" }), "Bir nechta raqamni vergul bilan yozish mumkin."),
       ]));
-      if (r.paid) { body.appendChild(h("p", { class: "group-title", text: "Tarif va to'lov" })); body.appendChild(h("div", { class: "group" }, [planBox])); renderPay(); }
+      var payTitle = h("p", { class: "group-title", text: "To'lov" }), payGroup = h("div", { class: "group" }, [planBox]);
+      if (r.paid) { body.appendChild(payTitle); body.appendChild(payGroup); }
+      var _renderPay = renderPay;
+      renderPay = function () { _renderPay(); var show = r.paid && plan && plan !== "credit"; payTitle.hidden = payGroup.hidden = !show; };
+      renderTariffs(); renderPay();
       var busy = false;
       setMain("Reklamani yuborish", function () {
         if (busy) return;

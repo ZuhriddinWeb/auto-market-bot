@@ -427,6 +427,21 @@ const SALON_PLANS = {
   pin: { title: "📌 Kanal + 24 soat qadash", priceKey: "salon_pin", channel: true },
 };
 const SALON_PLAN_KEYS = Object.keys(SALON_PLANS);
+// Salon reklamasi narxlari ro'yxati (bot matnlari uchun) — admin paneldagi narxlardan
+const SALON_PLAN_DESC = {
+  single: "kanalga alohida post bo'lib chiqadi",
+  app: "ilovada: bozor tepasidagi lenta, e'lonlar orasida va saloningiz sahifasi",
+  both: "kanal posti + ilova — eng ko'p qamrov",
+  pack5: "5 ta kanal posti, istalgan kunlari ishlatasiz",
+  pin: "kanal posti 24 soat kanal tepasida qadalgan turadi",
+};
+function salonPriceListText() {
+  if (!paidSalonOn()) return `🎁 <b>Salon reklamasi hozircha bepul</b> — kanalga va ilovaga (${salonAppDays()} kun) chiqadi, kuniga ${salonDailyLimit()} tagacha.`;
+  const both = getPrice("salon_both"), sep = getPrice("salon_single") + getPrice("salon_app");
+  return "💰 <b>NARXLAR</b>\n" + SALON_PLAN_KEYS.map((k) => `${SALON_PLANS[k].title} — <b>${somFmt(getPrice(SALON_PLANS[k].priceKey))}</b>\n   <i>${SALON_PLAN_DESC[k]}</i>`).join("\n") +
+    (sep > both ? `\n\n💡 Kanal + ilova birga olinsa — <b>${somFmt(sep - both)}</b> tejaysiz.` : "") +
+    "\n<i>Tarifni oxirgi qadamda tanlaysiz, to'lov chek orqali.</i>";
+}
 // Tarif bo'yicha joylashuv: credit (paketdan) — kanal; free (bepul rejim) — kanal + ilova
 const salonPlacement = (plan) => plan === "credit" ? { channel: true, app: false }
   : plan === "free" || !plan ? { channel: true, app: true }
@@ -4679,7 +4694,8 @@ async function salonAdConversation(conversation, ctx) {
 
   await ctx.reply(
     "📢 <b>SALON REKLAMASI BERISH</b>\n\n" +
-    "Saloningiz, aksiya yoki maxsus takliflaringiz haqida reklama post joylang!\n\n" +
+    "Saloningiz, aksiya yoki maxsus takliflaringiz haqida reklama joylang!\n\n" +
+    salonPriceListText() + "\n\n" +
     "1️⃣ Avval <b>reklama matnini</b> yozing:\n" +
     "<i>(Aksiya, kredit shartlari, bonuslar va boshqalar haqida to'liq yozing. Masalan: «🔥 Kia Sportage 60 oygacha 0% foizli bo'lib to'lash! Boshlang'ich 25%, oyiga 2 300 000 so'mdan.»)</i>\n\n" +
     "Bekor qilish uchun pastdagi menyudan foydalaning.",
@@ -7141,7 +7157,7 @@ dbReady.finally(async () => {
       requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
       estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
       logUserAction, getAdVotes,
-      getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement,
+      getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement, SALON_PLAN_DESC,
     });
   } catch (e) {
     console.error("❌ Mini App serverini ishga tushirib bo'lmadi:", e);
