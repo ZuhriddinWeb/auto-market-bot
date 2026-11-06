@@ -2700,17 +2700,30 @@ bot.callbackQuery(/^salon_ad_manage:(\d+)/, async (ctx) => {
     `📍 <b>Manzil:</b> ${a.location}\n` +
     `📞 <b>Tel:</b> ${a.phone}\n` +
     `🗓 <b>Joylangan:</b> ${dateStr}\n` +
+    `📍 <b>Qayerda:</b> ${[a.channelMsgId ? "📢 kanalda" : null, appOn(a) ? `📱 ilovada ${fmtTash(a.app_until)} gacha (👀 ${a.app_opens || 0}, 📞 ${a.app_calls || 0})` : null].filter(Boolean).join(" · ") || "—"}\n` +
     `👤 <a href="tg://user?id=${a.userId}">Egasi profili</a>\n\n` +
     `👇 <i>Amalni tanlang:</i>`;
 
-  const kb = new InlineKeyboard()
-    .text("🗑 Kanaldan o'chirish", `salon_ad_delete:${a.id}`).row()
+  const kb = new InlineKeyboard();
+  if (appOn(a)) kb.text("📱 Faqat ilovadan olib tashlash", `salon_ad_unapp:${a.id}`).row();
+  kb.text("🗑 Butunlay o'chirish (kanal + ilova)", `salon_ad_delete:${a.id}`).row()
     .text("🔙 Ro'yxatga qaytish", "admin_salon_ads");
 
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
 });
 
 // 🗑 REKLAMANI O'CHIRISH (tasdiq so'raymiz)
+const appOn = (a) => !!(a && a.app_until && new Date(a.app_until).getTime() > Date.now());
+// 📱 Salon reklamasini faqat ilovadan olib tashlash (kanal posti qoladi)
+bot.callbackQuery(/^salon_ad_unapp:(\d+)/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const id = ctx.match[1];
+  await db.execute("UPDATE salon_ads SET app_until = NULL, app_notified = 1 WHERE id = ?", [id]);
+  await ctx.answerCallbackQuery({ text: "📱 Ilovadan olib tashlandi (1 daqiqa ichida yo'qoladi)" }).catch(() => {});
+  await ctx.editMessageText("📱 Reklama ilovadan olib tashlandi. Kanal posti (bo'lsa) joyida qoldi.\n<i>Ilovada 1 daqiqa ichida ko'rinmay qoladi.</i>", {
+    parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🔙 Reklamaga qaytish", `salon_ad_manage:${id}`).row().text("📋 Ro'yxat", "admin_salon_ads"),
+  }).catch(() => {});
+});
 bot.callbackQuery(/^salon_ad_delete:(\d+)/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   const salonAdId = ctx.match[1];
@@ -2719,7 +2732,7 @@ bot.callbackQuery(/^salon_ad_delete:(\d+)/, async (ctx) => {
   const name = a ? a.salonName : "reklama";
 
   await ctx.editMessageText(
-    `⚠️ <b>${name}</b> reklamasini kanaldan o'chirmoqchimisiz?\n\n<i>Reklama post kanaldan butunlay o'chiriladi.</i>`,
+    `⚠️ <b>${name}</b> reklamasini butunlay o'chirmoqchimisiz?\n\n<i>Kanaldagi posti o'chiriladi va ilovadan ham olib tashlanadi (1 daqiqa ichida).</i>`,
     {
       parse_mode: "HTML",
       reply_markup: new InlineKeyboard()
@@ -2750,7 +2763,7 @@ bot.callbackQuery(/^salon_ad_delete_confirm:(\d+)/, async (ctx) => {
   await db.execute("UPDATE salon_ads SET status = 'deleted' WHERE id = ?", [salonAdId]);
 
   await ctx.answerCallbackQuery({ text: "🗑 Reklama o'chirildi." });
-  await ctx.editMessageText(`🗑 <b>${a.salonName}</b> reklamasi kanaldan o'chirildi.`, {
+  await ctx.editMessageText(`🗑 <b>${a.salonName}</b> reklamasi o'chirildi: kanaldan va ilovadan.`, {
     parse_mode: "HTML",
     reply_markup: new InlineKeyboard().text("🔙 Ro'yxatga qaytish", "admin_salon_ads")
   });
