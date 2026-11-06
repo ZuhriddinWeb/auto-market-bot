@@ -845,14 +845,14 @@ function startWebApp(deps) {
     const priceList = Object.entries(SALON_PLANS).map(([key, p]) => ({ key, title: p.title, price: getPrice(p.priceKey), channel: !!p.channel, app: !!p.app, desc: SALON_PLAN_DESC ? SALON_PLAN_DESC[key] : "" }));
     const plans = paid ? priceList : [];
     const credits = paid && getSalonCredits ? await getSalonCredits(user.id) : 0;
-    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dailyLimit: st.dailyLimit || 2, dealerName: st.dealerName, dealerPhone: st.dealerPhone, paid, salonPaidMode: !!(paidSalonOn && paidSalonOn()), priceList, plans, credits, appDays: salonAppDays ? salonAppDays() : 7, card: payCard ? payCard() : VIP_CARD, cardName: payCardName ? payCardName() : VIP_CARD_NAME });
+    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dailyLimit: st.dailyLimit || 2, dealerName: st.dealerName, dealerPhone: st.dealerPhone, paid, isAdmin: user.id === ADMIN_ID, salonPaidMode: !!(paidSalonOn && paidSalonOn()), priceList, plans, credits, appDays: salonAppDays ? salonAppDays() : 7, card: payCard ? payCard() : VIP_CARD, cardName: payCardName ? payCardName() : VIP_CARD_NAME });
   }
   async function handleSalonSubmit(req, res, user) {
     const r = await once(`${user.id}:salon`, async () => {
       const body = await readJson(req);
       const u = takeUpload(body.media, user.id, null);
       if (!u) return { ok: false, error: "Rasm yoki videoni qayta yuklang." };
-      const plan = body.plan === "credit" || (SALON_PLANS && SALON_PLANS[body.plan]) ? body.plan : null;
+      const plan = body.plan === "credit" || /^free_(single|app|both)$/.test(String(body.plan || "")) || (SALON_PLANS && SALON_PLANS[body.plan]) ? body.plan : null;
       let receiptId = null;
       if (plan && plan !== "credit") {
         const rc = takeUpload(body.receipt, user.id, "photo");

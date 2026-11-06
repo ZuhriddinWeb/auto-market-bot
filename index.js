@@ -445,6 +445,7 @@ function salonPriceListText() {
 // Tarif bo'yicha joylashuv: credit (paketdan) — kanal; free (bepul rejim) — kanal + ilova
 const salonPlacement = (plan) => plan === "credit" ? { channel: true, app: false }
   : plan === "free" || !plan ? { channel: true, app: true }
+  : /^free_/.test(plan) ? salonPlacement(plan.slice(5))
   : { channel: !!(SALON_PLANS[plan] && SALON_PLANS[plan].channel), app: !!(SALON_PLANS[plan] && SALON_PLANS[plan].app) };
 function getAdLimit() {
   const v = botSettings.get("limit:active_ads");
@@ -1931,7 +1932,11 @@ async function submitSalonAd({ userId, adText, mediaType, mediaId, thumbId = nul
   const st = await getSalonAdStatus(userId);
   if (!st.ok) return { ok: false, code: st.code, error: st.error };
   let price = null;
-  if (!paidSalonOn() || Number(userId) === ADMIN_ID) { plan = "free"; receiptId = null; }
+  if (!paidSalonOn() || Number(userId) === ADMIN_ID) {
+    // To'lovsiz (admin yoki bepul rejim): joyini tanlash mumkin — free_single / free_app / free_both
+    const pk = String(plan || "").replace(/^free_?/, "");
+    plan = ["single", "app", "both"].includes(pk) ? `free_${pk}` : "free"; receiptId = null;
+  }
   else if (plan === "credit") {
     const [r] = await db.execute("UPDATE users SET salon_credits = salon_credits - 1 WHERE id = ? AND salon_credits > 0", [userId]);
     if (!r || !r.affectedRows) return { ok: false, code: "no_credits", error: "❗️ Paketingizda post qolmagan. Tarifni tanlab, to'lov qiling." };
@@ -4801,6 +4806,27 @@ async function salonAdConversation(conversation, ctx) {
         if (cancelTexts.includes(rr.message.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
         await ctx.reply("📸 Iltimos, to'lov chekini <b>rasm</b> qilib yuboring.", { parse_mode: "HTML" });
       }
+    }
+  } else {
+    // To'lovsiz (admin yoki bepul rejim): faqat qayerda chiqishini tanlaydi
+    const days = await conversation.external(() => salonAppDays());
+    const freeKb = new InlineKeyboard()
+      .text("📢 Faqat kanalda", "splan:free_single").row()
+      .text(`📱 Faqat ilovada (${days} kun)`, "splan:free_app").row()
+      .text(`📢📱 Kanal + ilova (${days} kun)`, "splan:free_both").row()
+      .text("❌ Bekor qilish", "splan:cancel");
+    await ctx.reply("5️⃣ <b>Reklama qayerda chiqsin?</b>" + (ctx.from.id === ADMIN_ID ? "\n<i>Siz adminsiz — to'lovsiz joylanadi.</i>" : "\n<i>Hozir salon reklamasi bepul.</i>"), { parse_mode: "HTML", reply_markup: freeKb });
+    while (!plan) {
+      const pr = await conversation.waitFor(["callback_query:data", "message:text"]);
+      if (pr.message?.text) {
+        if (cancelTexts.includes(pr.message.text)) return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+        await ctx.reply("👆 Yuqoridagi tugmalardan birini tanlang.");
+        continue;
+      }
+      await pr.answerCallbackQuery().catch(() => {});
+      const d = pr.callbackQuery.data;
+      if (d === "splan:cancel") return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
+      if (/^splan:free_(single|app|both)$/.test(d)) plan = d.split(":")[1];
     }
   }
 

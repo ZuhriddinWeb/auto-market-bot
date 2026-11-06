@@ -560,3 +560,5 @@ button.tariff:active { transform: scale(.99); }
 [data-theme="dark"] .t-best { color: #4cd964; }
 .t-price { flex: none; font: 600 17px/1 var(--display); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .t-price small { font: 500 11px var(--font); color: var(--ink-2); }
+.t-price.free { font: 600 13px/1 var(--font); color: #1d8a3a; background: rgba(52,199,89,.14); padding: 6px 9px; border-radius: 8px; }
+[data-theme="dark"] .t-price.free { color: #4cd964; }

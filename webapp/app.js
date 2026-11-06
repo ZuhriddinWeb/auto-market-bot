@@ -1967,8 +1967,27 @@
       tariffSlot.appendChild(tariffBox);
       function renderTariffs() {
         tariffBox.innerHTML = "";
-        tariffBox.hidden = !r.paid;
-        if (!r.paid) return;
+        if (!r.paid) {
+          // To'lovsiz (admin yoki bepul rejim): faqat joyni tanlaydi, narxlar ma'lumot uchun
+          var d = r.appDays || 7;
+          var free = [
+            { key: "free_single", title: "📢 Faqat kanalda", desc: "kanalga alohida post bo'lib chiqadi" },
+            { key: "free_app", title: "📱 Faqat ilovada", desc: "bozor tepasidagi lenta, e'lonlar orasida va saloningiz sahifasi (" + d + " kun)" },
+            { key: "free_both", title: "📢📱 Kanal + ilova", desc: "ikkalasida ham (" + d + " kun)" },
+          ];
+          if (!plan) plan = "free_both";
+          tariffBox.appendChild(field(refs, "plan", "1. Qayerda chiqsin", h("div", { class: "tariffs", role: "radiogroup", "aria-label": "Qayerda chiqsin" }, free.map(function (t) {
+            var on = plan === t.key;
+            return h("button", { type: "button", class: "tariff" + (on ? " on" : ""), role: "radio", "aria-checked": on ? "true" : "false", onclick: function () { haptic("select"); plan = t.key; renderTariffs(); } }, [
+              h("div", { class: "t-main" }, [h("b", { text: t.title }), h("span", { class: "t-desc", text: t.desc })]),
+              h("div", { class: "t-price free", text: "Bepul" }),
+            ]);
+          })), r.isAdmin ? "Siz adminsiz — reklamangiz to'lovsiz joylanadi." : "Hozir salon reklamasi bepul."));
+          if (r.isAdmin && r.salonPaidMode && r.priceList && r.priceList.length) {
+            tariffBox.appendChild(h("div", { class: "field" }, [h("span", { class: "label", text: "Salonlar uchun narxlar (ular shunday ko'radi)" }), salonPriceCards(r, {})]));
+          }
+          return;
+        }
         tariffBox.appendChild(field(refs, "plan", "1. Qayerda chiqsin — tarifni tanlang", salonPriceCards(r, { selected: plan, credits: r.credits, onPick: function (k) { plan = k; setError(refs, "plan", ""); renderTariffs(); renderPay(); } }),
           "📢 Kanal — alohida post. 📱 Ilova — bozor tepasidagi «Avtosalonlar takliflari» lentasi, e'lonlar orasidagi karta va saloningiz sahifasi."));
       }
@@ -2018,7 +2037,7 @@
           }
         }
         busy = true; mainBusy(true);
-        api("/api/salon-ad", { json: { text: st.text, location: st.location, phone: st.phone, media: media.token, plan: r.paid ? plan : null, receipt: receipt && plan !== "credit" ? receipt.token : null } }).then(function (res) {
+        api("/api/salon-ad", { json: { text: st.text, location: st.location, phone: st.phone, media: media.token, plan: plan, receipt: receipt && plan !== "credit" ? receipt.token : null } }).then(function (res) {
           busy = false; mainBusy(false);
           if (!res.ok) return toast(res.error || "Xatolik");
           haptic("success"); setMain(null); app.innerHTML = "";
