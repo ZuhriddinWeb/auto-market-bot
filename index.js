@@ -232,6 +232,12 @@ const dbReady = (async () => {
       "ALTER TABLE salon_ads ADD COLUMN price INT DEFAULT NULL",
       "ALTER TABLE salon_ads ADD COLUMN receiptId TEXT DEFAULT NULL",
       "ALTER TABLE salon_ads ADD COLUMN pin_until TIMESTAMP NULL DEFAULT NULL",
+      // Ilovada ko'rsatish: qachongacha, video muqovasi, ochilish/qo'ng'iroq statistikasi
+      "ALTER TABLE salon_ads ADD COLUMN app_until TIMESTAMP NULL DEFAULT NULL",
+      "ALTER TABLE salon_ads ADD COLUMN thumbId TEXT DEFAULT NULL",
+      "ALTER TABLE salon_ads ADD COLUMN app_opens INT DEFAULT 0",
+      "ALTER TABLE salon_ads ADD COLUMN app_calls INT DEFAULT 0",
+      "ALTER TABLE salon_ads ADD COLUMN app_notified INT DEFAULT 0",
       "ALTER TABLE users ADD COLUMN salon_credits INT DEFAULT 0",
       // VIP muddati: qachongacha VIP (kanal tepasida + ilovada birinchi) va «ertaga tugaydi» eslatmasi yuborilganmi
       "ALTER TABLE ads ADD COLUMN vip_until TIMESTAMP NULL DEFAULT NULL",
@@ -306,9 +312,9 @@ async function setAutoOn(key, on) {
 // 📏 Oddiy foydalanuvchi bir vaqtda nechta FAOL e'lon bera oladi (0 = cheksiz). Admin panelda o'zgartiriladi.
 const DEFAULT_AD_LIMIT = 3;
 // 💰 NARXLAR (so'mda) — admin panel → «💰 Narxlar va to'lovlar» dan o'zgartiriladi
-const PRICE_DEFAULTS = { vip: 25000, urgent: 10000, top: 15000, premium: 50000, salon_single: 50000, salon_pack5: 200000, salon_pin: 80000, ad: 20000 };
+const PRICE_DEFAULTS = { vip: 25000, urgent: 10000, top: 15000, premium: 50000, salon_single: 50000, salon_app: 40000, salon_both: 75000, salon_pack5: 200000, salon_pin: 80000, ad: 20000 };
 const PRICE_TITLES = {
-  vip: "🌟 VIP e'lon", urgent: "🚨 Shoshilinch", top: "⬆️ TOP (avto-UP)", premium: "💎 Premium", salon_single: "📢 Salon: 1 ta post", salon_pack5: "📦 Salon: 5 ta post paketi",
+  vip: "🌟 VIP e'lon", urgent: "🚨 Shoshilinch", top: "⬆️ TOP (avto-UP)", premium: "💎 Premium", salon_single: "📢 Salon: kanalda 1 ta post", salon_app: "📱 Salon: ilovada", salon_both: "📢📱 Salon: kanal + ilova", salon_pack5: "📦 Salon: 5 ta post paketi",
   salon_pin: "📌 Salon: post + 24 soat qadash", ad: "📝 Oddiy e'lon (pullik rejimda)",
 };
 function getPrice(key) {
@@ -411,11 +417,20 @@ const somFmt = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(
 function paidAdsOn() { return botSettings.get("paid:ads") === "1"; }
 function paidSalonOn() { return botSettings.get("paid:salon") !== "0"; }
 // Salon reklamasi tariflari
+// Salon reklamasi tariflari: channel — kanalga post, app — ilovada N kun (bozor tepasi va e'lonlar orasida)
+function salonAppDays() { const v = parseInt(botSettings.get("days:salon_app"), 10); return Number.isFinite(v) && v >= 1 && v <= 90 ? v : 7; }
 const SALON_PLANS = {
-  single: { title: "1 ta post", priceKey: "salon_single" },
-  pack5: { title: "5 ta post paketi", priceKey: "salon_pack5" },
-  pin: { title: "Post + 24 soat qadash", priceKey: "salon_pin" },
+  single: { title: "📢 Kanal: 1 post", priceKey: "salon_single", channel: true },
+  app: { get title() { return `📱 Ilova: ${salonAppDays()} kun`; }, priceKey: "salon_app", app: true },
+  both: { get title() { return `📢📱 Kanal + ilova ${salonAppDays()} kun`; }, priceKey: "salon_both", channel: true, app: true },
+  pack5: { title: "📦 Kanal: 5 post paketi", priceKey: "salon_pack5", channel: true },
+  pin: { title: "📌 Kanal + 24 soat qadash", priceKey: "salon_pin", channel: true },
 };
+const SALON_PLAN_KEYS = Object.keys(SALON_PLANS);
+// Tarif bo'yicha joylashuv: credit (paketdan) — kanal; free (bepul rejim) — kanal + ilova
+const salonPlacement = (plan) => plan === "credit" ? { channel: true, app: false }
+  : plan === "free" || !plan ? { channel: true, app: true }
+  : { channel: !!(SALON_PLANS[plan] && SALON_PLANS[plan].channel), app: !!(SALON_PLANS[plan] && SALON_PLANS[plan].app) };
 function getAdLimit() {
   const v = botSettings.get("limit:active_ads");
   const n = v === undefined || v === "" ? DEFAULT_AD_LIMIT : parseInt(v, 10);
@@ -553,6 +568,14 @@ bot.use(async (ctx, next) => {
   if (t === "/cancel") { adminPriceEdit = null; return ctx.reply("Bekor qilindi."); }
   const n = parseInt(t.replace(/[\s'.,]/g, ""), 10);
   if (!/^[\d\s'.,]+$/.test(t) || !n) { adminPriceEdit = null; return next(); } // boshqa narsa yozildi — odatdagidek
+  if (key === "salon_app_days") {
+    if (n < 1 || n > 90) return ctx.reply("❗️ 1 dan 90 kungacha bo'lishi kerak. Qayta yozing yoki /cancel.");
+    adminPriceEdit = null;
+    try { await setBotSetting("days:salon_app", n); } catch (e) { return ctx.reply("❌ Saqlab bo'lmadi, qayta urinib ko'ring."); }
+    const v = pricesView();
+    await ctx.reply(`✅ Salon reklamasi ilovada: <b>${n} kun</b>`, { parse_mode: "HTML" });
+    return ctx.reply(v.text, { parse_mode: "HTML", reply_markup: v.kb });
+  }
   if (/_days$/.test(key) && PROMOS[key.slice(0, -5)]) {
     const kind = key.slice(0, -5);
     if (n < 1 || n > 90) return ctx.reply("❗️ Muddat 1 dan 90 kungacha bo'lishi kerak. Qayta yozing yoki /cancel.");
@@ -1868,7 +1891,7 @@ async function submitDealerApplication({ userId, firstName, username, name, phon
   return { ok: true, dealerName, dealerPhone };
 }
 
-// 📢 Salon reklamasi: faqat tasdiqlangan avtosalonlar, kuniga 2 ta
+// 📢 Salon reklamasi: faqat tasdiqlangan avtosalonlar, kunlik limit admin panelda (sukut bo'yicha 2 ta)
 async function getSalonAdStatus(userId) {
   const [uRows] = await db.execute("SELECT is_dealer, dealer_paused, dealer_name, dealer_phone FROM users WHERE id = ?", [userId]);
   const user = uRows[0];
@@ -1889,7 +1912,7 @@ async function getSalonCredits(userId) {
   return Number(u && u.salon_credits) || 0;
 }
 // plan: "single" | "pack5" | "pin" (chek bilan) yoki "credit" (paketdan, chek kerak emas). Bepul rejimda — "free".
-async function submitSalonAd({ userId, adText, mediaType, mediaId, location, phone, plan = null, receiptId = null }) {
+async function submitSalonAd({ userId, adText, mediaType, mediaId, thumbId = null, location, phone, plan = null, receiptId = null }) {
   const st = await getSalonAdStatus(userId);
   if (!st.ok) return { ok: false, code: st.code, error: st.error };
   let price = null;
@@ -1909,8 +1932,8 @@ async function submitSalonAd({ userId, adText, mediaType, mediaId, location, pho
   phone = String(phone || "").trim() || `+${st.dealerPhone}`;
 
   const [saveResult] = await db.execute(
-    "INSERT INTO salon_ads (userId, salonName, adText, mediaType, mediaId, location, phone, status, plan, price, receiptId) VALUES (?,?,?,?,?,?,?,'pending',?,?,?)",
-    [userId, st.dealerName, adText, mediaType, mediaId, location, phone, plan, price, receiptId]
+    "INSERT INTO salon_ads (userId, salonName, adText, mediaType, mediaId, location, phone, status, plan, price, receiptId, thumbId) VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?)",
+    [userId, st.dealerName, adText, mediaType, mediaId, location, phone, plan, price, receiptId, thumbId || null]
   );
   const salonAdId = saveResult.insertId;
   const adminCaption =
@@ -1922,7 +1945,8 @@ async function submitSalonAd({ userId, adText, mediaType, mediaId, location, pho
     `👤 <a href="tg://user?id=${userId}">Profil</a> | 🆔 <code>${userId}</code>` +
     (plan === "credit" ? `\n\n🎟 <b>Paketdan</b> (to'lov oldin qilingan)` :
      SALON_PLANS[plan] ? `\n\n💳 <b>${SALON_PLANS[plan].title}: ${somFmt(price)}</b> — chek pastda.` +
-       (plan === "pack5" ? " Tasdiqlasangiz, yana 4 ta post paketiga qo'shiladi." : plan === "pin" ? " Tasdiqlasangiz, 24 soatga qadaladi." : "") : "");
+       (plan === "pack5" ? " Tasdiqlasangiz, yana 4 ta post paketiga qo'shiladi." : plan === "pin" ? " Tasdiqlasangiz, 24 soatga qadaladi." : "") : "") +
+    `\n📍 <b>Joylashuv:</b> ${[salonPlacement(plan).channel ? "kanal" : null, salonPlacement(plan).app ? `ilova (${salonAppDays()} kun)` : null].filter(Boolean).join(" + ")}`;
   const adminKb = new InlineKeyboard().text("✅ Tasdiqlash", `salon_approve:${salonAdId}`).text("❌ Rad etish", `salon_reject:${salonAdId}`);
   const sent = mediaType === "video"
     ? await bot.api.sendVideo(ADMIN_ID, mediaId, { caption: adminCaption.slice(0, 1024), parse_mode: "HTML", reply_markup: adminKb })
@@ -2171,9 +2195,8 @@ function pricesView() {
     PROMO_KINDS.map((k) => `• ${PROMOS[k].title}: <b>${somFmt(getPrice(k))}</b> — <b>${promoDays(k)} kun</b>${promoEnabled(k) ? "" : " · ⏸ <i>o'chirilgan</i>"}`).join("\n") + "\n" +
     "<i>Muddat tasdiqlagan paytingizdan hisoblanadi; tugashidan 1 kun oldin bot eslatadi, tugasa statusni o'zi oladi. 🟢/⏸ — statusni sotuvga yoqish yoki vaqtincha o'chirish (faol bo'lganlari muddatigacha ishlaydi).</i>\n\n" +
     `📢 <b>Salon reklamasi:</b> ${salon ? "💳 pullik" : "🆓 bepul"}\n` +
-    `• 1 ta post: <b>${somFmt(getPrice("salon_single"))}</b>\n` +
-    `• 5 ta post paketi: <b>${somFmt(getPrice("salon_pack5"))}</b>\n` +
-    `• Post + 24 soat qadash: <b>${somFmt(getPrice("salon_pin"))}</b>\n\n` +
+    SALON_PLAN_KEYS.map((k) => `• ${SALON_PLANS[k].title}: <b>${somFmt(getPrice(SALON_PLANS[k].priceKey))}</b>`).join("\n") + "\n" +
+    "<i>Ilovada: bozor tepasidagi «Avtosalonlar takliflari» lentasi va e'lonlar orasidagi reklama kartasi.</i>\n\n" +
     `📝 <b>Oddiy e'lonlar:</b> ${ads ? `💳 pullik — <b>${somFmt(getPrice("ad"))}</b>` : `🆓 bepul <i>(yoqilsa: ${somFmt(getPrice("ad"))})</i>`}\n\n` +
     "<i>Pullik rejimda foydalanuvchi kartaga o'tkazib, chek skrinshotini yuboradi (VIP dagidek). " +
     "Siz e'lonni tasdiqlasangiz — to'lov qabul qilingan bo'ladi, rad etsangiz — pulni qaytarasiz. Siz (admin) uchun hammasi bepul.</i>";
@@ -2184,7 +2207,8 @@ function pricesView() {
     .text("✏️ 💎 Premium narxi", "pr_edit:premium").text("⏳ Premium muddati", "pr_edit:premium_days").row()
     .text(`${promoEnabled("urgent") ? "🟢" : "⏸"} Shoshilinch`, "pr_toggle:urgent").text(`${promoEnabled("top") ? "🟢" : "⏸"} TOP`, "pr_toggle:top")
     .text(`${promoEnabled("vip") ? "🟢" : "⏸"} VIP`, "pr_toggle:vip").text(`${promoEnabled("premium") ? "🟢" : "⏸"} Premium`, "pr_toggle:premium").row()
-    .text("✏️ 1 post", "pr_edit:salon_single").text("✏️ 5 post", "pr_edit:salon_pack5").text("✏️ Qadash", "pr_edit:salon_pin").row()
+    .text("✏️ 📢 Kanal", "pr_edit:salon_single").text("✏️ 📱 Ilova", "pr_edit:salon_app").text("✏️ 📢📱 Ikkalasi", "pr_edit:salon_both").row()
+    .text("✏️ 📦 5 post", "pr_edit:salon_pack5").text("✏️ 📌 Qadash", "pr_edit:salon_pin").text("⏳ Ilovada kun", "pr_edit:salon_app_days").row()
     .text("✏️ E'lon narxi", "pr_edit:ad").row()
     .text(salon ? "🆓 Salon reklamasini bepul qilish" : "💳 Salon reklamasini pullik qilish", `pr_mode:salon:${salon ? 0 : 1}`).row()
     .text(ads ? "🆓 E'lonlarni bepulga qaytarish" : "💳 E'lonlarni pullikka o'tkazish", `pr_mode:ads:${ads ? 0 : 1}`).row()
@@ -2203,6 +2227,11 @@ bot.callbackQuery(/^pr_edit:(\w+)$/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
   const key = ctx.match[1];
   adminInput = null;
+  if (key === "salon_app_days") {
+    adminPriceEdit = key;
+    await ctx.answerCallbackQuery().catch(() => {});
+    return ctx.reply(`⏳ <b>Salon reklamasi ilovada necha kun tursin?</b>\nHozir: ${salonAppDays()} kun\n\nRaqam yozing (1 dan 90 gacha), masalan: <code>7</code>\nBekor qilish: /cancel`, { parse_mode: "HTML" });
+  }
   if (/_days$/.test(key) && PROMOS[key.slice(0, -5)]) {
     const kind = key.slice(0, -5);
     adminPriceEdit = key;
@@ -2538,7 +2567,7 @@ bot.callbackQuery("admin_salon_ads", async (ctx) => {
 
   // Faqat faol (kanalda turgan) reklamalarni olamiz
   const [ads] = await db.execute(
-    "SELECT id, salonName, location, created_at FROM salon_ads WHERE status = 'active' ORDER BY created_at DESC LIMIT 20"
+    "SELECT id, salonName, location, created_at, channelMsgId, app_until, app_opens, app_calls FROM salon_ads WHERE status = 'active' ORDER BY created_at DESC LIMIT 20"
   );
 
   if (ads.length === 0) {
@@ -2554,7 +2583,9 @@ bot.callbackQuery("admin_salon_ads", async (ctx) => {
   ads.forEach((a, i) => {
     // Sanani chiroyli ko'rsatamiz
     const dateStr = new Intl.DateTimeFormat('uz-UZ', { day: 'numeric', month: 'short', timeZone: 'Asia/Tashkent' }).format(new Date(a.created_at));
-    text += `${i + 1}. <b>${a.salonName}</b>\n📍 ${a.location} | 🗓 ${dateStr}\n\n`;
+    const appOn = a.app_until && new Date(a.app_until).getTime() > Date.now();
+    const where = [a.channelMsgId ? "📢 kanal" : null, appOn ? `📱 ilovada ${fmtTash(a.app_until)} gacha (👀 ${a.app_opens || 0}, 📞 ${a.app_calls || 0})` : null].filter(Boolean).join(" · ") || "<i>muddati tugagan</i>";
+    text += `${i + 1}. <b>${a.salonName}</b>\n📍 ${a.location} | 🗓 ${dateStr}\n${where}\n\n`;
     kb.text(`${i + 1}. ${a.salonName}`, `salon_ad_manage:${a.id}`).row();
   });
 
@@ -4584,9 +4615,13 @@ async function becomeDealerConversation(conversation, ctx) {
     "🏢 <b>AVTOSALON / DOIMIY SOTUVCHI BO'LISH</b>\n\n" +
     "Agar siz doimiy ravishda moshina savdosi bilan shug'ullansangiz (avtosalon, diler yoki ko'p moshina sotuvchi), sizga maxsus imkoniyatlar beramiz:\n\n" +
     "✅ E'lonlaringizda «Ishonchli sotuvchi» belgisi\n" +
-    "✅ Ko'proq e'lon berish imkoniyati (cheksiz)\n" +
+    `✅ Cheksiz e'lon berish imkoniyati${paidAdsOn() ? ` (har bir e'lon ${somFmt(getPrice("ad"))})` : ""}\n` +
+    "✅ Kanalda salon reklamasi joylash huquqi\n" +
     "✅ Xaridorlar ishonchi yuqori bo'ladi\n\n" +
-    "<i>Hozircha bu xizmat mutlaqo BEPUL!</i>\n\n" +
+    "🆓 <i>Avtosalon maqomining o'zi bepul.</i>\n" +
+    (paidSalonOn()
+      ? `💳 <i>Salon reklamasi pullik:</i>\n` + SALON_PLAN_KEYS.map((k) => `   • ${SALON_PLANS[k].title} — ${somFmt(getPrice(SALON_PLANS[k].priceKey))}`).join("\n") + "\n\n"
+      : `🎁 <i>Salon reklamasi hozircha bepul (kuniga ${salonDailyLimit()} tagacha).</i>\n\n`) +
     "1️⃣ Avval <b>salon yoki biznesingiz nomini</b> yozing:\n<i>(Masalan: «Avto Lider» yoki «Samarqand Avto»)</i>\n\n" +
     "Bekor qilish uchun pastdagi menyudan foydalaning.",
     { parse_mode: "HTML", reply_markup: mainMenu }
@@ -4652,10 +4687,11 @@ async function salonAdConversation(conversation, ctx) {
   const mediaRes = await conversation.waitFor(["message:video", "message:photo", "message:text"]);
   if (mediaRes.message?.text && cancelTexts.includes(mediaRes.message.text)) return ctx.reply("❌ <b>Reklama berish to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
 
-  let mediaType, mediaId;
+  let mediaType, mediaId, thumbId = null;
   if (mediaRes.message?.video) {
     mediaType = "video";
     mediaId = mediaRes.message.video.file_id;
+    thumbId = mediaRes.message.video.thumbnail?.file_id || null; // ilovada muqova sifatida
   } else if (mediaRes.message?.photo) {
     mediaType = "photo";
     const photoArr = mediaRes.message.photo;
@@ -4696,16 +4732,20 @@ async function salonAdConversation(conversation, ctx) {
   let plan = null, receiptId = null;
   const payInfo = await conversation.external(async () => ({
     on: paidSalonOn() && ctx.from.id !== ADMIN_ID, credits: await getSalonCredits(ctx.from.id),
-    prices: { single: getPrice("salon_single"), pack5: getPrice("salon_pack5"), pin: getPrice("salon_pin") },
+    plans: SALON_PLAN_KEYS.map((k) => ({ key: k, title: SALON_PLANS[k].title, price: getPrice(SALON_PLANS[k].priceKey) })),
   }));
+  payInfo.prices = Object.fromEntries(payInfo.plans.map((x) => [x.key, x.price]));
   if (payInfo.on) {
     const planKb = new InlineKeyboard();
     if (payInfo.credits > 0) planKb.text(`🎟 Paketdan (${payInfo.credits} ta qoldi)`, "splan:credit").row();
-    planKb.text(`1 ta post — ${somFmt(payInfo.prices.single)}`, "splan:single").row()
-      .text(`5 ta post — ${somFmt(payInfo.prices.pack5)}`, "splan:pack5").row()
-      .text(`📌 Post + 24 soat qadash — ${somFmt(payInfo.prices.pin)}`, "splan:pin").row()
-      .text("❌ Bekor qilish", "splan:cancel");
-    await ctx.reply("5️⃣ <b>Tarifni tanlang:</b>", { parse_mode: "HTML", reply_markup: planKb });
+    payInfo.plans.forEach((x) => planKb.text(`${x.title} — ${somFmt(x.price)}`, `splan:${x.key}`).row());
+    planKb.text("❌ Bekor qilish", "splan:cancel");
+    await ctx.reply(
+      "5️⃣ <b>Reklama qayerda chiqsin? Tarifni tanlang:</b>\n\n" +
+      "📢 <b>Kanal</b> — kanalga alohida post bo'lib chiqadi.\n" +
+      "📱 <b>Ilova</b> — Mini App'da bozor tepasidagi «Avtosalonlar takliflari» lentasida va e'lonlar orasida turadi, saloningiz sahifasida barcha e'lonlaringiz ko'rinadi.\n" +
+      "📢📱 <b>Ikkalasi</b> — eng ko'p qamrov, alohida olishdan arzonroq.",
+      { parse_mode: "HTML", reply_markup: planKb });
     while (!plan) {
       const pr = await conversation.waitFor(["callback_query:data", "message:text"]);
       if (pr.message?.text) {
@@ -4716,7 +4756,8 @@ async function salonAdConversation(conversation, ctx) {
       await pr.answerCallbackQuery().catch(() => {});
       const d = pr.callbackQuery.data;
       if (d === "splan:cancel") return ctx.reply("❌ Reklama bekor qilindi.", { reply_markup: mainMenu });
-      if (/^splan:(credit|single|pack5|pin)$/.test(d)) plan = d.split(":")[1];
+      const pk = d.split(":")[1];
+      if (pk === "credit" || SALON_PLANS[pk]) plan = pk;
     }
     if (plan !== "credit") {
       await ctx.reply(
@@ -4736,12 +4777,12 @@ async function salonAdConversation(conversation, ctx) {
 
   // Bazaga saqlash va adminga yuborish — umumiy funksiya (Mini App ham shuni chaqiradi)
   const salonResult = await conversation.external(() => submitSalonAd({
-    userId: ctx.from.id, adText, mediaType, mediaId, location, phone, plan, receiptId,
+    userId: ctx.from.id, adText, mediaType, mediaId, thumbId, location, phone, plan, receiptId,
   }));
   if (!salonResult.ok) return ctx.reply(salonResult.error, { parse_mode: "HTML", reply_markup: mainMenu });
 
   await ctx.reply(
-    "✅ <b>Reklamangiz adminga yuborildi!</b>\n\nTekshiruvdan so'ng kanalga joylanadi. Odatda bu tez amalga oshadi.",
+    "✅ <b>Reklamangiz adminga yuborildi!</b>\n\nTekshiruvdan so'ng tanlagan joyingizga (kanal / ilova) chiqadi. Odatda bu tez amalga oshadi.",
     { parse_mode: "HTML", reply_markup: mainMenu }
   );
 }
@@ -4756,7 +4797,8 @@ bot.callbackQuery(/^salon_approve:(\d+)/, async (ctx) => {
     return ctx.answerCallbackQuery({ text: "Bu reklama allaqachon ko'rib chiqilgan.", show_alert: true });
   }
 
-  await ctx.answerCallbackQuery("⏳ Kanalga joylanmoqda...").catch(()=>{});
+  await ctx.answerCallbackQuery("⏳ Joylanmoqda...").catch(()=>{});
+  const place = salonPlacement(sa.plan);
 
   // Kanalga chiqadigan chiroyli post
   const channelCaption =
@@ -4773,37 +4815,42 @@ bot.callbackQuery(/^salon_approve:(\d+)/, async (ctx) => {
     .url("📢 Kanalimiz", "https://t.me/engarzonidamoshina");
 
   try {
-    let sentMsg;
-    if (sa.mediaType === "video") {
-      sentMsg = await bot.api.sendVideo(CHANNEL_ID, sa.mediaId, { caption: channelCaption, parse_mode: "HTML", reply_markup: channelKb });
-    } else {
-      sentMsg = await bot.api.sendPhoto(CHANNEL_ID, sa.mediaId, { caption: channelCaption, parse_mode: "HTML", reply_markup: channelKb });
+    let sentMsg = null;
+    if (place.channel) {
+      sentMsg = sa.mediaType === "video"
+        ? await bot.api.sendVideo(CHANNEL_ID, sa.mediaId, { caption: channelCaption, parse_mode: "HTML", reply_markup: channelKb })
+        : await bot.api.sendPhoto(CHANNEL_ID, sa.mediaId, { caption: channelCaption, parse_mode: "HTML", reply_markup: channelKb });
     }
-
-    await db.execute("UPDATE salon_ads SET status = 'active', channelMsgId = ? WHERE id = ?", [sentMsg.message_id, salonAdId]);
+    await db.execute("UPDATE salon_ads SET status = 'active', channelMsgId = ? WHERE id = ?", [sentMsg ? sentMsg.message_id : null, salonAdId]);
 
     let extra = "";
+    if (place.app) {
+      const until = new Date(Date.now() + salonAppDays() * 86400000);
+      await db.execute("UPDATE salon_ads SET app_until = ?, app_notified = 0 WHERE id = ?", [until, salonAdId]);
+      extra += `\n\n📱 Ilovada <b>${fmtTash(until)}</b> gacha turadi: bozor tepasidagi «Avtosalonlar takliflari» lentasida va e'lonlar orasida. Muddat tugaganda nechta odam ochgani va qo'ng'iroq qilganini yozib yuboramiz.`;
+    }
     if (sa.plan === "pack5") {
       await db.execute("UPDATE users SET salon_credits = salon_credits + 4 WHERE id = ?", [sa.userId]);
       const left = await getSalonCredits(sa.userId);
-      extra = `\n\n🎟 Paketingizda yana <b>${left} ta</b> post bor. Keyingi reklamada «Paketdan» ni tanlang.`;
+      extra += `\n\n🎟 Paketingizda yana <b>${left} ta</b> post bor. Keyingi reklamada «Paketdan» ni tanlang.`;
     }
-    if (sa.plan === "pin") {
+    if (sa.plan === "pin" && sentMsg) {
       await bot.api.pinChatMessage(CHANNEL_ID, sentMsg.message_id, { disable_notification: true }).catch((e) => console.error("Qadab bo'lmadi:", e.message));
       await db.execute("UPDATE salon_ads SET pin_until = NOW() + INTERVAL 24 HOUR WHERE id = ?", [salonAdId]);
-      extra = "\n\n📌 Reklama 24 soat kanal tepasida turadi.";
+      extra += "\n\n📌 Reklama 24 soat kanal tepasida turadi.";
     }
 
-    await ctx.editMessageCaption({ caption: "✅ <b>Reklama kanalga joylandi!</b>" + extra.replace(/Paketingizda/, "Dilerning paketida"), parse_mode: "HTML" });
+    const where = [place.channel ? "kanalga" : null, place.app ? "ilovaga" : null].filter(Boolean).join(" va ");
+    await ctx.editMessageCaption({ caption: `✅ <b>Reklama ${where} joylandi!</b>` + extra.replace(/Paketingizda/, "Dilerning paketida").replace(/ Muddat tugaganda.*$/s, ""), parse_mode: "HTML" });
 
     // Dilerga xabar
     try {
-      await bot.api.sendMessage(sa.userId, `🎉 <b>Reklamangiz kanalga joylandi!</b>\n\nSalon reklamangiz muvaffaqiyatli e'lon qilindi.${extra}\n\nKanalni ko'rish: https://t.me/engarzonidamoshina`, { parse_mode: "HTML" });
+      await bot.api.sendMessage(sa.userId, `🎉 <b>Reklamangiz ${where} joylandi!</b>${extra}` + (place.channel ? "\n\nKanalni ko'rish: https://t.me/engarzonidamoshina" : ""), { parse_mode: "HTML" });
     } catch (e) {}
 
   } catch (e) {
-    console.error("Salon reklamasini kanalga yuborishda xato:", e);
-    await ctx.reply("❌ Xatolik: Reklamani kanalga joylab bo'lmadi.");
+    console.error("Salon reklamasini joylashda xato:", e);
+    await ctx.reply("❌ Xatolik: Reklamani joylab bo'lmadi.");
   }
 });
 
@@ -4846,7 +4893,8 @@ bot.callbackQuery(/^dealer_approve:(\d+)/, async (ctx) => {
       `Siz endi rasmiy <b>«${dealerName}»</b> avtosaloni sifatida tasdiqlandingiz!\n\n` +
       `Endi sizga quyidagilar ochiq:\n` +
       `✅ E'lonlaringizda «Ishonchli sotuvchi» belgisi chiqadi\n` +
-      `✅ Cheksiz e'lon berishingiz mumkin\n` +
+      `✅ Cheksiz e'lon berishingiz mumkin${paidAdsOn() ? ` (har biri ${somFmt(getPrice("ad"))})` : ""}\n` +
+      `✅ «📢 Salon reklamasi» bo'limidan kanalga reklama joylay olasiz` + (paidSalonOn() ? ` (${somFmt(getPrice("salon_single"))} dan)` : " (hozircha bepul)") + `\n` +
       `✅ Xaridorlar sizga ko'proq ishonadi\n\n` +
       `Hoziroq e'lon berib ko'ring! 🚗`,
       { parse_mode: "HTML", reply_markup: mainMenu }
@@ -6963,6 +7011,23 @@ async function unpinExpiredSalonAds() {
 }
 setInterval(unpinExpiredSalonAds, 10 * 60 * 1000).unref();
 
+// 📱 Ilovadagi salon reklamasi muddati tugadi — salonga natijani yozamiz (bir marta)
+async function finishSalonAppAds() {
+  try {
+    const [rows] = await db.execute("SELECT * FROM salon_ads WHERE app_until IS NOT NULL AND app_until < NOW() AND app_notified = 0");
+    for (const r of rows) {
+      await db.execute("UPDATE salon_ads SET app_notified = 1 WHERE id = ?", [r.id]);
+      if (r.status !== "active") continue;
+      await bot.api.sendMessage(r.userId,
+        `📱 <b>Ilovadagi reklamangiz muddati tugadi</b>\n\n🏢 ${escapeHtml(r.salonName || "")}\n` +
+        `👀 Reklamani ochishdi: <b>${Number(r.app_opens) || 0}</b> marta\n📞 Qo'ng'iroq tugmasini bosishdi: <b>${Number(r.app_calls) || 0}</b> marta\n\n` +
+        `Yana joylash uchun: «📢 Salon reklamasi».`,
+        { parse_mode: "HTML" }).catch(() => {});
+    }
+  } catch (e) { console.error("Salon reklamasi (ilova) muddatini tekshirishda xato:", e.message); }
+}
+setInterval(finishSalonAppAds, 10 * 60 * 1000).unref();
+
 // ⏳ STATUSLAR MUDDATI: tugashidan 1 kun oldin eslatma; tugaganda kanaldan yechish / sarlavhani olish.
 // E'lon sotilsa yoki o'chirilsa — keyingi tekshiruvda (10 daqiqa ichida) hammasi olinadi.
 const promoRenewKb = (kind, adId) => new InlineKeyboard().text(`🔁 ${PROMOS[kind].short} ni uzaytirish`, `buy_promo:${kind}:${adId}`);
@@ -7034,7 +7099,7 @@ setInterval(checkVipExpiry, 10 * 60 * 1000).unref();
 setTimeout(checkVipExpiry, 60 * 1000).unref();
 
 setInterval(() => runScheduledPosts(new Date()), 60 * 1000 * 30);
-module.exports = { runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp }; // testlar uchun
+module.exports = { runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds }; // testlar uchun
 
 // ==============================================================
 // 🧯 JAVOBSIZ TUGMALAR (eng oxirida turishi shart — boshqa handlerlardan keyin)
@@ -7063,7 +7128,7 @@ dbReady.finally(async () => {
       requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
       estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
       logUserAction, getAdVotes,
-      getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS,
+      getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement,
     });
   } catch (e) {
     console.error("❌ Mini App serverini ishga tushirib bo'lmadi:", e);

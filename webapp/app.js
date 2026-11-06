@@ -79,6 +79,8 @@
     shield: '<path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/>',
     card: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 15h3"/>',
     car: '<path d="M5 16v-4l2-5h10l2 5v4"/><path d="M3 16h18v3H3z"/><path d="M5 12h14"/>',
+    play: '<path d="M8 5.5v13l11-6.5z"/>',
+    pin: '<path d="M12 21s-6-5.5-6-11a6 6 0 1 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2.5"/>',
   };
   function icon(name, filled) {
     var s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -475,7 +477,14 @@
     var head = h("div", { class: "search-head" });
     var grid = h("div", { class: "cards" });
     var footer = h("div");
-    app.appendChild(head); app.appendChild(grid); app.appendChild(footer);
+    var strip = h("div");
+    app.appendChild(head); app.appendChild(strip); app.appendChild(grid); app.appendChild(footer);
+    // Salon reklamalari lentasi: qidiruv so'zi yozilganda yashiriladi (e'lonlar orasidagi karta qoladi)
+    function renderStrip() {
+      strip.innerHTML = "";
+      if (salonAds.items.length && !market.f.q) strip.appendChild(salonStrip(salonAds.items));
+    }
+    renderStrip();
 
     function renderHead() {
       head.innerHTML = "";
@@ -552,8 +561,12 @@
 
     function renderItems(fresh) {
       if (fresh) grid.innerHTML = "";
-      var start = fresh ? 0 : grid.children.length;
-      market.items.slice(start).forEach(function (it) { grid.appendChild(adCard(it)); });
+      var start = fresh ? 0 : grid.querySelectorAll(".card").length;
+      market.items.slice(start).forEach(function (it, k) {
+        grid.appendChild(adCard(it));
+        var n = start + k + 1, sl = salonAds.items;
+        if (sl.length && n % 8 === 0) grid.appendChild(salonFeedCard(sl[(n / 8 - 1) % sl.length]));
+      });
       footer.innerHTML = "";
       if (market.loaded && market.items.length === 0) {
         footer.appendChild(emptyState("Hech narsa topilmadi", market.f.q ? "«" + market.f.q + "» bo'yicha e'lon yo'q. Boshqacha yozib ko'ring yoki filtrlarni yumshating." : "Filtrlarni yumshating yoki boshqa modelni tanlang.", market.f.modelId ? "Bu moshina chiqsa xabar berish" : null, subscribeAlert, "car"));
@@ -571,8 +584,10 @@
       var seq = market.seq = (market.seq || 0) + 1; // qidiruv tez o'zgarsa — faqat oxirgi so'rov javobi chiqadi
       market.loading = true;
       if (page === 1 && !market.items.length) { footer.innerHTML = ""; footer.appendChild(skeletonCards(4)); }
-      api("/api/ads?" + marketParams(page)).then(function (r) {
+      Promise.all([api("/api/ads?" + marketParams(page)), page === 1 ? loadSalonAds() : null]).then(function (res) {
+        var r = res[0];
         if (seq !== market.seq) return;
+        if (page === 1) renderStrip();
         market.loading = false;
         if (!r.ok) {
           toast(r.error || "Yuklab bo'lmadi");
@@ -785,6 +800,108 @@
     });
     return function () { alive = false; hideActionBar(); };
   }
+  // =====================================================================
+  // 🏢 SALON REKLAMALARI: bozor tepasidagi lenta, e'lonlar orasidagi karta, salon sahifasi
+  // =====================================================================
+  var salonAds = { at: 0, items: [], p: null };
+  function loadSalonAds() {
+    if (salonAds.p) return salonAds.p;
+    if (salonAds.at && Date.now() - salonAds.at < 120000) return Promise.resolve(salonAds.items);
+    salonAds.p = api("/api/salon-ads").then(function (r) {
+      salonAds.items = r && r.ok ? r.items || [] : []; salonAds.at = Date.now(); salonAds.p = null; return salonAds.items;
+    }, function () { salonAds.p = null; return []; });
+    return salonAds.p;
+  }
+  function initials(name) {
+    var w = String(name || "A").replace(/[«»"']/g, "").trim().split(/\s+/);
+    return ((w[0] || "A").charAt(0) + (w[1] ? w[1].charAt(0) : "")).toUpperCase();
+  }
+  function salonMedia(sa, cls) {
+    return h("div", { class: "s-media" + (cls ? " " + cls : "") }, [
+      h("span", { class: "s-fallback", text: initials(sa.salonName) }),
+      sa.img ? h("img", { src: sa.img, alt: sa.salonName, loading: "lazy", decoding: "async", onerror: function () { this.remove(); } }) : null,
+      sa.mediaType === "video" ? h("span", { class: "s-play", "aria-hidden": "true" }, [icon("play", true)]) : null,
+    ]);
+  }
+  function salonWho(sa) {
+    return h("div", { class: "s-who" }, [h("span", { class: "s-ava", text: initials(sa.salonName), "aria-hidden": "true" }), h("span", { class: "nm", text: sa.salonName }), icon("shield")]);
+  }
+  function openSalon(sa) { haptic("select"); go("/salon/" + sa.id); }
+  // Bozor tepasidagi gorizontal lenta
+  function salonStrip(items) {
+    return h("section", { class: "s-strip", "aria-label": "Avtosalonlar takliflari" }, [
+      h("div", { class: "s-head" }, [h("b", { text: "Avtosalonlar takliflari" }), h("span", { class: "ad-label", text: "Reklama" })]),
+      h("div", { class: "s-row" }, items.map(function (sa) {
+        return h("button", { type: "button", class: "s-card", "aria-label": sa.salonName + ": " + sa.short, onclick: function () { openSalon(sa); } }, [
+          salonMedia(sa),
+          h("div", { class: "s-body" }, [salonWho(sa), h("p", { class: "s-txt", text: sa.short })]),
+        ]);
+      })),
+    ]);
+  }
+  // E'lonlar orasidagi keng karta (har 8 ta e'londan keyin)
+  function salonFeedCard(sa) {
+    return h("button", { type: "button", class: "s-feed", "aria-label": "Reklama — " + sa.salonName, onclick: function () { openSalon(sa); } }, [
+      salonMedia(sa),
+      h("div", { class: "s-body" }, [
+        h("span", { class: "ad-label", text: "Reklama · Avtosalon" }),
+        salonWho(sa),
+        h("p", { class: "s-txt", text: sa.short }),
+        h("span", { class: "s-more" }, ["Batafsil", icon("chev")]),
+      ]),
+    ]);
+  }
+  function screenSalon(m) {
+    var id = Number(m[1]), alive = true;
+    var body = h("div"); body.appendChild(skeleton()); app.appendChild(body);
+    api("/api/salon-ads/" + id).then(function (r) {
+      if (!alive) return;
+      body.innerHTML = "";
+      if (!r.ok) return body.appendChild(emptyState("Reklama topilmadi", r.error || "", "Bozorga qaytish", function () { go("/"); }, "building"));
+      var sa = r.salon;
+      function trackCall() { api("/api/salon-ads/" + sa.id + "/call", { json: {} }); }
+      var hero = h("div", { class: "s-hero" });
+      if (sa.mediaType === "video" && sa.video) {
+        var v = h("video", { src: sa.video, controls: true, playsinline: true, preload: "metadata" });
+        if (sa.img) v.setAttribute("poster", sa.img);
+        v.addEventListener("error", function () {
+          hero.innerHTML = ""; hero.appendChild(salonMedia(sa, "big"));
+          if (sa.channelUrl) hero.appendChild(h("button", { type: "button", class: "btn secondary s-watch", text: "Videoni kanalda ko'rish", onclick: function () { openLink(sa.channelUrl); } }));
+        });
+        hero.appendChild(v);
+      } else hero.appendChild(salonMedia(sa, "big"));
+      body.appendChild(hero);
+      body.appendChild(h("div", { class: "s-title" }, [
+        h("span", { class: "s-ava big", text: initials(sa.salonName), "aria-hidden": "true" }),
+        h("div", { style: "min-width:0" }, [h("h1", { class: "page s-name", text: sa.salonName }), h("span", { class: "badge trust" }, [icon("shield"), "Ishonchli avtosalon"])]),
+      ]));
+      if (r.stats) body.appendChild(h("div", { class: "notice", style: "margin-bottom:12px" }, [h("span", { text: "📊" }), h("div", null, [
+        h("b", { text: "Reklamangiz natijasi (faqat siz ko'rasiz)" }),
+        h("span", { class: "s", text: "Ochishdi: " + r.stats.opens + " · Qo'ng'iroq: " + r.stats.calls + (sa.until ? " · Ilovada " + fmtDateTime(sa.until) + " gacha" : "") }),
+      ])]));
+      body.appendChild(h("div", { class: "group" }, [h("div", { class: "field" }, [h("p", { class: "s-text", text: sa.text })])]));
+      var items = [];
+      if (sa.location) items.push(listItem({ icon: "pin", color: "#ff3b30", title: sa.location, sub: "Xaritada ko'rish", onclick: function () { openLink("https://yandex.uz/maps/?text=" + encodeURIComponent(sa.location)); } }));
+      sa.phones.forEach(function (p) {
+        items.push(listItem({ icon: "phone", color: "#34c759", title: fmtPhone(p), sub: "Qo'ng'iroq qilish", onclick: function () { trackCall(); location.href = "tel:+" + digits(fmtPhone(p)); } }));
+      });
+      if (sa.channelUrl) items.push(listItem({ icon: "send", color: "#2aabee", title: "Kanaldagi posti", onclick: function () { openLink(sa.channelUrl); } }));
+      if (items.length) body.appendChild(h("div", { class: "list", style: "margin-top:12px" }, items));
+      if (r.ads && r.ads.length) {
+        body.appendChild(h("p", { class: "sec-title", text: "Salondagi mashinalar · " + r.ads.length }));
+        body.appendChild(h("div", { class: "cards" }, r.ads.map(function (it) { return adCard(it); })));
+      }
+      if (sa.phones.length) {
+        var ph = "+" + digits(fmtPhone(sa.phones[0]));
+        showActionBar([
+          h("a", { class: "btn", href: "tel:" + ph, "aria-label": "Qo'ng'iroq qilish: " + fmtPhone(sa.phones[0]), onclick: trackCall }, [icon("phone"), "Qo'ng'iroq qilish"]),
+          h("button", { type: "button", class: "icon-btn", "aria-label": "Raqamdan nusxa olish", onclick: function () { copyText(ph, "Raqam nusxalandi"); } }, [icon("copy")]),
+        ]);
+      }
+    });
+    return function () { alive = false; hideActionBar(); };
+  }
+
   function showActionBar(kids) {
     hideActionBar();
     document.body.appendChild(h("div", { class: "actionbar", id: "actionbar" }, [h("div", { class: "actionbar-in" }, kids)]));
@@ -1573,7 +1690,7 @@
     app.appendChild(h("div", { class: "list" }, [
       listItem({ icon: "gift", color: "#ff2d55", title: "Bepul VIP (UP)", sub: "Do'st taklif qiling — har 5 tasiga 1 ta UP", end: me.freeUps ? me.freeUps + " ta" : null, onclick: function () { go("/referral"); } }),
       listItem({ icon: "building", color: "#007aff", title: me.isDealer ? "Avtosalon: " + me.dealerName : "Avtosalon bo'lish", sub: me.isDealer ? "Cheksiz e'lon va «Ishonchli sotuvchi» belgisi" : "Doimiy sotuvchilar uchun bepul", onclick: function () { go("/dealer"); } }),
-      listItem({ icon: "megaphone", color: "#ff9500", title: "Salon reklamasi", sub: "Faqat avtosalonlar, kuniga " + (me.salonLimit || 2) + " ta", onclick: function () { go("/salon-ad"); } }),
+      listItem({ icon: "megaphone", color: "#ff9500", title: "Salon reklamasi", sub: me.salonPaid ? "Avtosalonlar uchun, " + fmtNum(me.salonPrice) + " so'mdan" : "Avtosalonlar uchun, kuniga " + (me.salonLimit || 2) + " ta", onclick: function () { go("/salon-ad"); } }),
     ]));
     app.appendChild(h("p", { class: "group-title", text: "Kanal" }));
     app.appendChild(h("div", { class: "list" }, [listItem({ icon: "send", color: "#2aabee", title: "Avto Bozor kanali", sub: "Barcha e'lonlar bir joyda", onclick: function () { openLink(me.channelUrl); } })]));
@@ -1712,7 +1829,7 @@
   function screenDealer() {
     app.appendChild(h("h1", { class: "page", text: "Avtosalon bo'lish" }));
     if (me.isDealer) {
-      app.appendChild(messageScreen("Siz tasdiqlangan avtosalonsiz", (me.dealerName || "") + " nomi e'lonlaringizda «Ishonchli sotuvchi» belgisi bilan chiqadi. Cheksiz e'lon berishingiz va salon reklamasi joylashingiz mumkin.",
+      app.appendChild(messageScreen("Siz tasdiqlangan avtosalonsiz", (me.dealerName || "") + " nomi e'lonlaringizda «Ishonchli sotuvchi» belgisi bilan chiqadi. Cheksiz e'lon berishingiz va salon reklamasi joylashingiz mumkin" + (me.salonPaid ? " (pullik, " + fmtNum(me.salonPrice) + " so'mdan)." : "."),
         [h("button", { type: "button", class: "btn", text: "Salon reklamasi berish", onclick: function () { go("/salon-ad"); } })]));
       return;
     }
@@ -1720,9 +1837,20 @@
     var st = { name: me.dealerName || "", phone: me.dealerPhone ? String(me.dealerPhone).replace(/^998/, "") : (me.lastPhone ? String(me.lastPhone).replace(/^998/, "") : "") };
     if (me.dealerPending) app.appendChild(h("div", { class: "notice" }, [h("span", { text: "⏳" }), h("div", null, [h("b", { text: "Arizangiz ko'rib chiqilmoqda" }), h("span", { class: "s", text: "Tasdiqlangach bot sizga xabar beradi. Ma'lumot o'zgargan bo'lsa, qayta yuborishingiz mumkin." })])]));
     app.appendChild(h("div", { class: "result", style: "margin-top:8px" }, [
-      h("b", { text: "Doimiy sotuvchilar uchun bepul imkoniyatlar" }),
-      h("ul", { class: "steps" }, [h("li", { text: "E'lonlarda «Ishonchli sotuvchi» belgisi" }), h("li", { text: "Cheksiz e'lon" + (me.adLimit ? " (oddiy foydalanuvchiga " + me.adLimit + " ta)" : "") }), h("li", { text: "Aksiya va kredit takliflari uchun alohida maydon" }), h("li", { text: "Kanalda salon reklamasi, kuniga " + (me.salonLimit || 2) + " ta" })]),
+      h("b", { text: "Avtosalon maqomi — bepul" }),
+      h("ul", { class: "steps" }, [
+        h("li", { text: "E'lonlarda «Ishonchli sotuvchi» belgisi" }),
+        h("li", { text: "Cheksiz e'lon" + (me.paidAds ? " (har bir e'lon " + fmtNum(me.adPrice) + " so'm)" : (me.adLimit ? " (oddiy foydalanuvchiga " + me.adLimit + " ta)" : "")) }),
+        h("li", { text: "Aksiya va kredit takliflari uchun alohida maydon" }),
+        h("li", { text: "Kanalda salon reklamasi joylash huquqi" }),
+      ]),
     ]));
+    app.appendChild(h("div", { class: "notice", style: "margin-top:12px" }, [h("span", { text: me.salonPaid ? "💳" : "🎁" }), h("div", null, [
+      h("b", { text: me.salonPaid ? "Salon reklamasi pullik" : "Salon reklamasi hozircha bepul" }),
+      h("span", { class: "s", text: me.salonPaid
+        ? "1 ta post " + fmtNum(me.salonPrice) + " so'mdan, kuniga " + (me.salonLimit || 2) + " tagacha. 5 ta post paketi va tepaga qadash ham bor."
+        : "Kuniga " + (me.salonLimit || 2) + " tagacha reklama joylashingiz mumkin." }),
+    ])]));
     app.appendChild(h("div", { class: "group", style: "margin-top:16px" }, [
       field(refs, "name", "Salon yoki biznes nomi", textInput(st, "name", { placeholder: "Masalan: Avto Lider", maxlength: "80" }, function () { setError(refs, "name", ""); })),
       field(refs, "phone", "Bog'lanish uchun telefon", textInput(st, "phone", { type: "tel", inputmode: "tel", placeholder: "90 123 45 67", maxlength: "28" }, function () { setError(refs, "phone", ""); })),
@@ -1761,7 +1889,7 @@
       var refs = {};
       var st = { text: "", location: "", phone: r.dealerPhone ? "+" + r.dealerPhone : "" };
       var media = null;
-      body.appendChild(h("p", { class: "page-sub", text: (r.dealerName || "Saloningiz") + " — bugun yana " + ((r.dailyLimit || 2) - r.todayCount) + " ta reklama bera olasiz. Admin tasdiqlagach kanalga chiqadi." }));
+      body.appendChild(h("p", { class: "page-sub", text: (r.dealerName || "Saloningiz") + " — bugun yana " + ((r.dailyLimit || 2) - r.todayCount) + " ta reklama bera olasiz. Admin tasdiqlagach tanlagan joyingizda chiqadi." }));
       var mediaBox = h("div", { class: "photos" });
       var input = h("input", { type: "file", accept: "image/*,video/*", class: "file-input", "aria-label": "Rasm yoki video" });
       input.addEventListener("change", function () {
@@ -1809,7 +1937,8 @@
       function renderPay() {
         planBox.innerHTML = "";
         if (!r.paid) return;
-        planBox.appendChild(field(refs, "plan", "Tarif", chipGroup("lbl-plan", function () { return planOpts; }, function (x) { return plan === x.key; }, function (x) { plan = x.key; setError(refs, "plan", ""); renderPay(); })));
+        planBox.appendChild(field(refs, "plan", "Qayerda chiqsin", chipGroup("lbl-plan", function () { return planOpts; }, function (x) { return plan === x.key; }, function (x) { plan = x.key; setError(refs, "plan", ""); renderPay(); }),
+          "📢 Kanal — alohida post. 📱 Ilova — bozor tepasidagi «Avtosalonlar takliflari» lentasi, e'lonlar orasidagi karta va saloningiz sahifasi (" + (r.appDays || 7) + " kun). Ikkalasi — eng ko'p qamrov."));
         if (plan && plan !== "credit") {
           var sel = planOpts.filter(function (x) { return x.key === plan; })[0];
           receiptBox.innerHTML = "";
@@ -1897,6 +2026,7 @@
     [/^\/referral$/, screenReferral, { parent: "/services" }],
     [/^\/dealer$/, screenDealer, { parent: "/services" }],
     [/^\/salon-ad$/, screenSalonAd, { parent: "/services" }],
+    [/^\/salon\/(\d+)$/, screenSalon, { parent: "/" }],
   ];
   var cleanup = null;
   function render() {

@@ -507,3 +507,41 @@ input[type="search"]::-webkit-search-cancel-button, input[type="search"]::-webki
 .perks { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .perks li { position: relative; padding-left: 26px; font-size: 14.5px; }
 .perks li::before { content: "✓"; position: absolute; left: 0; top: 0; width: 18px; height: 18px; border-radius: 50%; background: var(--deal-soft); color: var(--deal); font-size: 11px; font-weight: 800; display: grid; place-items: center; }
+
+/* 🏢 Salon reklamalari: lenta, e'lonlar orasidagi karta, salon sahifasi */
+.ad-label { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); background: var(--surface-2); padding: 3px 6px; border-radius: 5px; line-height: 1; white-space: nowrap; }
+.s-strip { margin: 6px 0 12px; }
+.s-head { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.s-head b { font: 600 15px/1.2 var(--font); letter-spacing: -.01em; }
+.s-row { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory; margin: 0 -16px; padding: 0 16px 4px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.s-row::-webkit-scrollbar { display: none; }
+.s-card { flex: 0 0 min(76%, 290px); scroll-snap-align: start; scroll-margin-left: 16px; background: var(--surface); border: 0; padding: 0; border-radius: var(--r-m); overflow: hidden; text-align: left; color: var(--ink); cursor: pointer; display: flex; flex-direction: column; box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(9,14,22,.04); transition: transform .12s ease; }
+.s-card:only-child { flex-basis: 100%; }
+.s-card:active, .s-feed:active { transform: scale(.985); }
+.s-media { position: relative; aspect-ratio: 16 / 9; overflow: hidden; background: linear-gradient(135deg, #1d2b4a, #3b5590); flex: none; }
+@supports not (aspect-ratio: 1) { .s-media { height: 0; padding-top: 56.25%; } }
+.s-media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; z-index: 1; }
+.s-fallback { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(255,255,255,.92); font: 600 30px/1 var(--display); letter-spacing: .02em; }
+.s-play { position: absolute; z-index: 2; right: 9px; bottom: 9px; width: 34px; height: 34px; border-radius: 50%; background: rgba(9,14,22,.58); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); color: #fff; display: grid; place-items: center; }
+.s-play svg { width: 15px; height: 15px; margin-left: 2px; }
+.s-body { padding: 10px 12px 12px; display: grid; gap: 5px; align-content: start; min-width: 0; }
+.s-who { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 14px; min-width: 0; }
+.s-who .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-who svg { width: 15px; height: 15px; flex: none; color: var(--brand); }
+.s-ava { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--brand-soft); color: var(--brand); font: 700 10.5px/24px var(--font); text-align: center; letter-spacing: .02em; }
+.s-ava.big { width: 52px; height: 52px; font-size: 18px; line-height: 52px; }
+.s-txt { margin: 0; font-size: 13px; line-height: 1.38; color: var(--ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.s-feed { grid-column: 1 / -1; display: grid; grid-template-columns: 44% 1fr; background: var(--surface); border: 0; padding: 0; border-radius: var(--r-m); overflow: hidden; text-align: left; color: var(--ink); cursor: pointer; box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(9,14,22,.04); transition: transform .12s ease; }
+.s-feed .s-media { aspect-ratio: auto; height: 100%; min-height: 136px; }
+@supports not (aspect-ratio: 1) { .s-feed .s-media { padding-top: 0; } }
+.s-feed .s-txt { -webkit-line-clamp: 3; }
+.s-more { display: inline-flex; align-items: center; gap: 2px; color: var(--brand); font-weight: 600; font-size: 13px; margin-top: 2px; }
+.s-more svg { width: 14px; height: 14px; }
+.s-hero { margin: -4px -16px 14px; position: relative; background: #000; }
+.s-hero video { display: block; width: 100%; max-height: 62vh; aspect-ratio: 16 / 9; background: #000; }
+.s-hero .s-media.big { aspect-ratio: 16 / 10; }
+.s-watch { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 3; width: auto; padding: 0 16px; }
+.s-title { display: flex; gap: 12px; align-items: center; margin: 0 0 14px; }
+.s-name { margin: 0 0 5px; font-size: 21px; line-height: 1.15; overflow-wrap: anywhere; }
+.s-text { margin: 0; white-space: pre-wrap; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+[data-field="plan"] .chip { white-space: normal; max-width: 100%; text-align: left; }

@@ -123,7 +123,7 @@ function startWebApp(deps) {
     requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
     estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
     VIP_PRICE, VIP_CARD, VIP_CARD_NAME, payCard, payCardName, salonDailyLimit, promoEnabled, logUserAction, getAdVotes,
-    getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS,
+    getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement,
   } = deps;
 
   const PORT = Number(process.env.PORT) || 3000;
@@ -457,6 +457,8 @@ function startWebApp(deps) {
       channelUrl: CHANNEL_URL,
       vip: { price: getPrice ? String(getPrice("vip")) : VIP_PRICE, days: getVipDays ? getVipDays() : 7, card: payCard ? payCard() : VIP_CARD, cardName: payCardName ? payCardName() : VIP_CARD_NAME },
       salonLimit: salonDailyLimit ? salonDailyLimit() : 2,
+      salonPaid: !!(paidSalonOn && paidSalonOn()),
+      salonPrice: getPrice ? String(getPrice("salon_single")) : "",
       promos: PROMOS ? PROMO_KINDS.filter(k => !promoEnabled || promoEnabled(k)).map(k => ({ kind: k, title: PROMOS[k].title, perks: PROMOS[k].perks, price: String(getPrice(k)), days: promoDays(k) })) : [],
       // 💳 Pullik rejimlar va narxlar (admin panel → «💰 Narxlar va to'lovlar»)
       paidAds: !!(paidAdsOn && paidAdsOn() && user.id !== ADMIN_ID),
@@ -503,7 +505,8 @@ function startWebApp(deps) {
     if (!fileId) return sendJson(res, 502, { ok: false, error: "Faylni qayta ishlab bo'lmadi." });
 
     const token = crypto.randomBytes(16).toString("hex");
-    uploads.set(token, { userId: user.id, kind, fileId, createdAt: now });
+    const thumbId = kind === "video" ? (msg.video?.thumbnail?.file_id || null) : null; // salon reklamasi uchun muqova
+    uploads.set(token, { userId: user.id, kind, fileId, thumbId, createdAt: now });
     sendJson(res, 200, { ok: true, token, kind });
   }
 
@@ -837,33 +840,125 @@ function startWebApp(deps) {
     const st = await getSalonAdStatus(user.id);
     logLine(user, "Salon reklamasi bo'limini ochdi", "salon");
     const paid = !!(paidSalonOn && paidSalonOn() && user.id !== ADMIN_ID);
-    const plans = paid ? Object.entries(SALON_PLANS).map(([key, p]) => ({ key, title: p.title, price: getPrice(p.priceKey) })) : [];
+    const plans = paid ? Object.entries(SALON_PLANS).map(([key, p]) => ({ key, title: p.title, price: getPrice(p.priceKey), channel: !!p.channel, app: !!p.app })) : [];
     const credits = paid && getSalonCredits ? await getSalonCredits(user.id) : 0;
-    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dailyLimit: st.dailyLimit || 2, dealerName: st.dealerName, dealerPhone: st.dealerPhone, paid, plans, credits, card: payCard ? payCard() : VIP_CARD, cardName: payCardName ? payCardName() : VIP_CARD_NAME });
+    sendJson(res, 200, { ok: true, allowed: st.ok, code: st.code, message: st.ok ? null : stripHtml(st.error), todayCount: st.todayCount, dailyLimit: st.dailyLimit || 2, dealerName: st.dealerName, dealerPhone: st.dealerPhone, paid, plans, credits, appDays: salonAppDays ? salonAppDays() : 7, card: payCard ? payCard() : VIP_CARD, cardName: payCardName ? payCardName() : VIP_CARD_NAME });
   }
   async function handleSalonSubmit(req, res, user) {
     const r = await once(`${user.id}:salon`, async () => {
       const body = await readJson(req);
       const u = takeUpload(body.media, user.id, null);
       if (!u) return { ok: false, error: "Rasm yoki videoni qayta yuklang." };
-      const plan = ["single", "pack5", "pin", "credit"].includes(body.plan) ? body.plan : null;
+      const plan = body.plan === "credit" || (SALON_PLANS && SALON_PLANS[body.plan]) ? body.plan : null;
       let receiptId = null;
       if (plan && plan !== "credit") {
         const rc = takeUpload(body.receipt, user.id, "photo");
         if (rc) { receiptId = rc.fileId; }
       }
       const out = await submitSalonAd({
-        userId: user.id, adText: sanitizeText(body.text, 900), mediaType: u.kind, mediaId: u.fileId,
+        userId: user.id, adText: sanitizeText(body.text, 900), mediaType: u.kind, mediaId: u.fileId, thumbId: u.thumbId || null,
         location: sanitizeText(body.location, 200), phone: sanitizeText(body.phone, 100), plan, receiptId,
       });
       if (out.ok && body.receipt) uploads.delete(String(body.receipt));
       if (!out.ok) return { ok: false, code: out.code || null, error: stripHtml(out.error) };
       uploads.delete(String(body.media));
-      notifyUser(user.id, "✅ <b>Reklamangiz adminga yuborildi!</b>\n\nTekshiruvdan so'ng kanalga joylanadi.");
+      notifyUser(user.id, "✅ <b>Reklamangiz adminga yuborildi!</b>\n\nTekshiruvdan so'ng tanlagan joyingizga (kanal / ilova) chiqadi.");
       logLine(user, "Salon reklamasi yubordi");
       return { ok: true };
     });
     sendJson(res, r.ok ? 200 : 400, r);
+  }
+
+  // ---------- 🏢 Salon reklamalari ilovada (bozor tepasidagi lenta, e'lonlar orasida, salon sahifasi) ----------
+  const salonSig = (id) => crypto.createHmac("sha256", PHOTO_KEY).update("salon:" + id).digest("hex").slice(0, 16);
+  const salonImg = (sa) => (sa.mediaType === "photo" || sa.thumbId ? `/api/salon-media/${sa.id}/img?s=${salonSig(sa.id)}` : null);
+  const salonVideo = (sa) => (sa.mediaType === "video" ? `/api/salon-media/${sa.id}/video?s=${salonSig(sa.id)}` : null);
+  const splitPhones = (p) => String(p || "").split(/[,;\n]/).map(x => x.trim()).filter(x => digits(x).length >= 9).slice(0, 4);
+  function salonCard(sa) {
+    const text = String(sa.adText || "");
+    return {
+      id: Number(sa.id), salonName: sa.salonName || "Avtosalon", text, short: text.replace(/\s+/g, " ").slice(0, 140),
+      location: sa.location || "", phones: splitPhones(sa.phone), mediaType: sa.mediaType,
+      img: salonImg(sa), video: salonVideo(sa), channelUrl: channelLink(sa), until: sa.app_until ? new Date(sa.app_until).toISOString() : null,
+    };
+  }
+  let salonListCache = { at: 0, rows: [] };
+  async function activeSalonAds() {
+    if (Date.now() - salonListCache.at < 60 * 1000) return salonListCache.rows;
+    const [rows] = await db.execute("SELECT * FROM salon_ads WHERE status = 'active' AND app_until > NOW() ORDER BY id DESC LIMIT 30");
+    salonListCache = { at: Date.now(), rows };
+    return rows;
+  }
+  async function handleSalonList(req, res, user) {
+    const rows = await activeSalonAds().catch(() => []);
+    // Har ochilganda tartib aralashadi — hamma to'lagan salon navbat bilan birinchi turadi
+    const items = rows.map(salonCard);
+    for (let i = items.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [items[i], items[j]] = [items[j], items[i]]; }
+    sendJson(res, 200, { ok: true, items });
+  }
+  const salonSeen = new Map(); // "user:ad:event" -> vaqt (bir odam qayta-qayta ochsa ham bir marta sanaladi)
+  function salonCountOnce(userId, id, ev, ms) {
+    const k = `${userId}:${id}:${ev}`, t = salonSeen.get(k);
+    if (t && Date.now() - t < ms) return false;
+    salonSeen.set(k, Date.now());
+    if (salonSeen.size > 20000) salonSeen.delete(salonSeen.keys().next().value);
+    return true;
+  }
+  async function handleSalonDetail(req, res, user, id) {
+    const [[sa]] = await db.execute("SELECT * FROM salon_ads WHERE id = ? AND status = 'active'", [id]);
+    if (!sa || !(sa.app_until && new Date(sa.app_until).getTime() > Date.now()) && Number(sa.userId) !== user.id && user.id !== ADMIN_ID)
+      return sendJson(res, 404, { ok: false, error: "Bu reklama endi ko'rsatilmaydi." });
+    const [ads] = await db.execute("SELECT * FROM ads WHERE userId = ? AND status = 'active' ORDER BY created_at DESC LIMIT 20", [sa.userId]);
+    const [badges, favs] = await Promise.all([priceBadges(ads), favoriteSet(user.id, ads.map(r => Number(r.id)))]);
+    if (user.id !== Number(sa.userId) && salonCountOnce(user.id, id, "open", 6 * 3600e3)) {
+      db.execute("UPDATE salon_ads SET app_opens = app_opens + 1 WHERE id = ?", [id]).catch(() => {});
+      logLine(user, `Salon reklamasini ochdi: ${sa.salonName}`, `salon_open:${id}`, 10 * 60 * 1000);
+    }
+    sendJson(res, 200, { ok: true, salon: salonCard(sa), ads: ads.map(a => card(a, badges, favs)), isOwner: Number(sa.userId) === user.id,
+      stats: Number(sa.userId) === user.id || user.id === ADMIN_ID ? { opens: Number(sa.app_opens) || 0, calls: Number(sa.app_calls) || 0 } : null });
+  }
+  async function handleSalonCall(req, res, user, id) {
+    if (salonCountOnce(user.id, id, "call", 10 * 60 * 1000)) {
+      const [[sa]] = await db.execute("SELECT id, userId, salonName FROM salon_ads WHERE id = ?", [id]);
+      if (sa && Number(sa.userId) !== user.id) {
+        await db.execute("UPDATE salon_ads SET app_calls = app_calls + 1 WHERE id = ?", [id]).catch(() => {});
+        logLine(user, `Salonga qo'ng'iroq tugmasini bosdi 📞: ${sa.salonName}`, `salon_call:${id}`, 2 * 60 * 1000);
+      }
+    }
+    sendJson(res, 200, { ok: true });
+  }
+  const salonMediaCache = new Map();
+  async function handleSalonMedia(req, res, id, kind, url) {
+    if (url.searchParams.get("s") !== salonSig(id)) { res.writeHead(403); return res.end(); }
+    const [[sa]] = await db.execute("SELECT id, mediaType, mediaId, thumbId FROM salon_ads WHERE id = ?", [id]);
+    if (!sa || !axios) { res.writeHead(404); return res.end(); }
+    if (kind === "img") {
+      let buf = salonMediaCache.get(id);
+      if (!buf) {
+        const fid = sa.mediaType === "photo" ? sa.mediaId : sa.thumbId;
+        if (!fid) { res.writeHead(404); return res.end(); }
+        const file = await bot.api.getFile(fid);
+        const resp = await axios.get(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`, { responseType: "arraybuffer", timeout: 15000 });
+        buf = Buffer.from(resp.data);
+        if (sharp) { try { buf = await sharp(buf).rotate().resize({ width: 960, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer(); } catch (e) {} }
+        salonMediaCache.set(id, buf);
+        if (salonMediaCache.size > 60) salonMediaCache.delete(salonMediaCache.keys().next().value);
+      }
+      res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400", "Content-Length": buf.length });
+      return res.end(buf);
+    }
+    // Video: Telegram'dan oqim bilan (Range — iPhone'da ijro etish uchun shart). 20 MB dan katta bo'lsa Telegram bermaydi.
+    if (sa.mediaType !== "video") { res.writeHead(404); return res.end(); }
+    let file;
+    try { file = await bot.api.getFile(sa.mediaId); } catch (e) { res.writeHead(404); return res.end(); }
+    const headers = {};
+    if (req.headers.range) headers.Range = req.headers.range;
+    const up = await axios.get(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`, { responseType: "stream", timeout: 30000, headers, validateStatus: (s) => s < 400 });
+    const out = { "Content-Type": "video/mp4", "Accept-Ranges": "bytes", "Cache-Control": "public, max-age=3600" };
+    for (const hname of ["content-length", "content-range"]) if (up.headers[hname]) out[hname] = up.headers[hname];
+    res.writeHead(up.status === 206 ? 206 : 200, out);
+    up.data.pipe(res);
+    req.on("close", () => { try { up.data.destroy(); } catch (e) {} });
   }
 
   // ---------- Faqat ilova ichida bo'ladigan bosishlar (admin log uchun): POST /api/track ----------
@@ -924,6 +1019,9 @@ function startWebApp(deps) {
     ["POST", /^\/api\/dealer$/, (q, s, u) => handleDealer(q, s, u)],
     ["GET", /^\/api\/salon-ad$/, (q, s, u) => handleSalonStatus(q, s, u)],
     ["POST", /^\/api\/salon-ad$/, (q, s, u) => handleSalonSubmit(q, s, u)],
+    ["GET", /^\/api\/salon-ads$/, (q, s, u) => handleSalonList(q, s, u)],
+    ["GET", /^\/api\/salon-ads\/(\d+)$/, (q, s, u, m) => handleSalonDetail(q, s, u, int(m[1]))],
+    ["POST", /^\/api\/salon-ads\/(\d+)\/call$/, (q, s, u, m) => handleSalonCall(q, s, u, int(m[1]))],
   ];
 
   const server = http.createServer(async (req, res) => {
@@ -949,6 +1047,8 @@ function startWebApp(deps) {
       }
       const pm = req.method === "GET" && p.match(/^\/api\/photo\/(\d+)\/(\d)$/);
       if (pm) return await handlePhoto(req, res, int(pm[1]), int(pm[2]), url);
+      const sm = req.method === "GET" && p.match(/^\/api\/salon-media\/(\d+)\/(img|video)$/);
+      if (sm) return await handleSalonMedia(req, res, int(sm[1]), sm[2], url);
 
       if (p.startsWith("/api/")) {
         const user = validateInitData(req.headers["x-telegram-init-data"], BOT_TOKEN);
