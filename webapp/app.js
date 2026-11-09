@@ -1690,7 +1690,7 @@
     app.appendChild(h("div", { class: "list" }, [
       listItem({ icon: "gift", color: "#ff2d55", title: "Bepul VIP (UP)", sub: "Do'st taklif qiling — har 5 tasiga 1 ta UP", end: me.freeUps ? me.freeUps + " ta" : null, onclick: function () { go("/referral"); } }),
       listItem({ icon: "building", color: "#007aff", title: me.isDealer ? "Avtosalon: " + me.dealerName : "Avtosalon bo'lish", sub: me.isDealer ? "Cheksiz e'lon va «Ishonchli sotuvchi» belgisi" : "Doimiy sotuvchilar uchun bepul", onclick: function () { go("/dealer"); } }),
-      listItem({ icon: "megaphone", color: "#ff9500", title: "Salon reklamasi", sub: me.salonPaid && me.salonPrices ? "Kanal " + fmtNum(me.salonPrices.single) + " · Ilova " + fmtNum(me.salonPrices.app) + " · Ikkalasi " + fmtNum(me.salonPrices.both) + " so'm" : me.salonPaid ? "Avtosalonlar uchun, " + fmtNum(me.salonPrice) + " so'mdan" : "Avtosalonlar uchun, kuniga " + (me.salonLimit || 2) + " ta", onclick: function () { go("/salon-ad"); } }),
+      listItem({ icon: "megaphone", color: "#ff9500", title: "Salon reklamasi", end: me.salonCredits > 0 ? "🎟 " + me.salonCredits : null, sub: me.salonCredits > 0 ? "Paketda " + me.salonCredits + " ta post qoldi — to'lovsiz joylang" : me.salonPaid && me.salonPrices ? "Kanal " + fmtNum(me.salonPrices.single) + " · Ilova " + fmtNum(me.salonPrices.app) + " · Ikkalasi " + fmtNum(me.salonPrices.both) + " so'm" : me.salonPaid ? "Avtosalonlar uchun, " + fmtNum(me.salonPrice) + " so'mdan" : "Avtosalonlar uchun, kuniga " + (me.salonLimit || 2) + " ta", onclick: function () { go("/salon-ad"); } }),
     ]));
     app.appendChild(h("p", { class: "group-title", text: "Kanal" }));
     app.appendChild(h("div", { class: "list" }, [listItem({ icon: "send", color: "#2aabee", title: "Avto Bozor kanali", sub: "Barcha e'lonlar bir joyda", onclick: function () { openLink(me.channelUrl); } })]));
@@ -1917,6 +1917,10 @@
       var st = { text: "", location: "", phone: r.dealerPhone ? "+" + r.dealerPhone : "" };
       var media = null;
       body.appendChild(h("p", { class: "page-sub", text: (r.dealerName || "Saloningiz") + " — bugun yana " + ((r.dailyLimit || 2) - r.todayCount) + " ta reklama bera olasiz. Admin tasdiqlagach tanlagan joyingizda chiqadi." }));
+      if (r.credits > 0) body.appendChild(h("div", { class: "notice", style: "margin-bottom:12px" }, [h("span", { text: "🎟" }), h("div", null, [
+        h("b", { text: "Paketingizda " + r.credits + " ta post qoldi" }),
+        h("span", { class: "s", text: "«Paketdan» tanlangan — to'lov kerak emas. Kanalga chiqadi." }),
+      ])]));
       var tariffSlot = h("div"); body.appendChild(tariffSlot); // narxlar ro'yxati — sahifa boshida
       var mediaBox = h("div", { class: "photos" });
       var input = h("input", { type: "file", accept: "image/*,video/*", class: "file-input", "aria-label": "Rasm yoki video" });
@@ -2021,7 +2025,18 @@
       var payTitle = h("p", { class: "group-title", text: "To'lov" }), payGroup = h("div", { class: "group" }, [planBox]);
       if (r.paid) { body.appendChild(payTitle); body.appendChild(payGroup); }
       var _renderPay = renderPay;
-      renderPay = function () { _renderPay(); var show = r.paid && plan && plan !== "credit"; payTitle.hidden = payGroup.hidden = !show; };
+      renderPay = function () {
+        _renderPay();
+        // Pullik rejimda tarif hali tanlanmagan bo'lsa — to'lov joyida ko'rsatma (bosilsa tepaga, tariflarga)
+        if (r.paid && !plan) {
+          planBox.appendChild(h("div", { class: "field" }, [
+            h("span", { class: "label", text: "To'lov" }),
+            h("p", { class: "help", style: "margin:0 0 10px", text: "Summa va karta raqami tarifni tanlaganingizdan keyin shu yerda chiqadi." }),
+            h("button", { type: "button", class: "btn secondary", text: "↑ Avval tepadan tarifni tanlang", onclick: function () { tariffBox.scrollIntoView({ behavior: "smooth", block: "start" }); } }),
+          ]));
+        }
+        var show = r.paid && plan !== "credit"; payTitle.hidden = payGroup.hidden = !show;
+      };
       renderTariffs(); renderPay();
       var busy = false;
       setMain("Reklamani yuborish", function () {
@@ -2049,6 +2064,628 @@
   }
 
   // =====================================================================
+  // 🖥 ADMIN PANELI (faqat admin uchun ko'rinadi). Botdagi har bir admin tugmasi shu yerdan ham
+  // ishlaydi: server botning o'sha handlerini ishga tushiradi, natija (matn + tugmalar) shu yerda chiziladi.
+  // =====================================================================
+  var Q_TYPES = [
+    { key: "ads", title: "Yangi e'lonlar", short: "E'lonlar", icon: "car", color: "#007aff" },
+    { key: "payments", title: "To'lov cheklari", short: "To'lovlar", icon: "card", color: "#34c759" },
+    { key: "edits", title: "Tahrirlar", short: "Tahrirlar", icon: "edit", color: "#5856d6" },
+    { key: "bumps", title: "UP so'rovlari", short: "UP", icon: "up", color: "#ff9500" },
+    { key: "sold", title: "«Sotildi» so'rovlari", short: "Sotildi", icon: "check", color: "#30b0c7" },
+    { key: "salons", title: "Salon reklamalari", short: "Salon", icon: "megaphone", color: "#ff2d55" },
+    { key: "dealers", title: "Avtosalon arizalari", short: "Arizalar", icon: "building", color: "#af52de" },
+  ];
+  // Botdagi admin bo'limlari (tugma ma'lumoti → bot handleri). Barchasi botdagi bilan bir xil ishlaydi.
+  var ADMIN_SECTIONS = [
+    { title: "Boshqaruv", items: [
+      { t: "Foydalanuvchilar", s: "Qidirish, bloklash, xabar yozish", icon: "user", color: "#007aff", path: "/admin/users" },
+      { t: "Rassilka", s: "Barcha foydalanuvchilarga xabar", icon: "send", color: "#2aabee", path: "/admin/broadcast" },
+      { t: "Avtosalonlar", s: "Ro'yxat, to'xtatish, paket postlari", icon: "building", color: "#af52de", data: "admin_dealers" },
+      { t: "Salon reklamalari", s: "Faollar, ilovadan olish, o'chirish", icon: "megaphone", color: "#ff2d55", data: "admin_salon_ads" },
+      { t: "Statuslar", s: "VIP, TOP, Shoshilinch, Premium — hisobot", icon: "star", color: "#ffb300", data: "admin_vip" },
+    ] },
+    { title: "Sozlash", items: [
+      { t: "Narxlar va to'lovlar", s: "Statuslar, salon tariflari, pullik rejim", icon: "tag", color: "#34c759", data: "admin_prices" },
+      { t: "Sozlamalar", s: "Karta, havola, TOP vaqti, salon limiti", icon: "gear", color: "#8e8e93", data: "admin_settings" },
+      { t: "Katalog", s: "Marka, model, kraska, korobka, probeg", icon: "car", color: "#5856d6", data: "admin_catalog" },
+      { t: "E'lon limiti", s: "Bitta foydalanuvchiga nechta faol e'lon", icon: "gauge", color: "#ff9500", data: "admin_adlimit" },
+      { t: "Avto-xabarlar", s: "Bot o'zi yuboradigan xabarlar", icon: "clock", color: "#30b0c7", data: "admin_autoposts" },
+    ] },
+    { title: "Tahlil va kanal", items: [
+      { t: "Statistika", s: "Foydalanuvchilar, e'lonlar, kanal", icon: "gauge", color: "#007aff", data: "admin_stats" },
+      { t: "Konkurs (Top-10)", s: "Taklif qilganlar reytingi", icon: "gift", color: "#ff9500", data: "admin_top" },
+      { t: "Top qidiruvlar", s: "Nimani ko'p qidirishyapti", icon: "search", color: "#34c759", data: "admin_topsearch" },
+      { t: "Narx grafigi", s: "Kanalga grafik yuborish", icon: "calc", color: "#5856d6", data: "admin_chart", confirm: "Narx grafigi kanalga yuboriladi. Davom etasizmi?" },
+      { t: "Haftalik analitika", s: "Kanalga yuborish", icon: "calendar", color: "#30b0c7", data: "admin_test_analytics", confirm: "Haftalik analitika kanalga yuboriladi. Davom etasizmi?" },
+      { t: "Kunlik TOP-5", s: "Kanalga yuborish", icon: "star", color: "#ffb300", data: "admin_test_top5", confirm: "Kunlik TOP-5 kanalga yuboriladi. Davom etasizmi?" },
+      { t: "7 kunlik UP xabari", s: "Sotuvchilarga eslatma yuborish", icon: "bell", color: "#ff2d55", data: "admin_send_7day", confirm: "Sotuvchilarga 7 kunlik UP xabari yuboriladi. Davom etasizmi?" },
+    ] },
+    { title: "Qo'shimcha", items: [
+      { t: "Buyruqlar", s: "/up, /ban, /unban, /xabar, /top va boshqalar", icon: "edit", color: "#8e8e93", path: "/admin/cmd" },
+      { t: "Qo'llanma", s: "Barcha admin buyruqlari tavsifi", icon: "check", color: "#8e8e93", data: "admin_help" },
+    ] },
+  ];
+  function confirmBox(text, cb) {
+    if (inTelegram && tg.showConfirm) { try { tg.showConfirm(text, function (ok) { if (ok) cb(); }); return; } catch (e) {} }
+    if (window.confirm(text)) cb();
+  }
+  var adminSum = null;
+  function loadAdminSummary() {
+    return api("/api/admin/summary").then(function (r) { if (r && r.ok) adminSum = r; return r; });
+  }
+  // Telegram HTML (bot matni) → xavfsiz DOM: faqat b/i/u/s/code/pre/a/br; tg://user havolasi → foydalanuvchi kartasi
+  function safeHtml(html) {
+    var box = h("div", { class: "bot-text" });
+    var doc;
+    try { doc = new DOMParser().parseFromString("<div>" + String(html || "").replace(/\n/g, "<br>") + "</div>", "text/html"); } catch (e) { box.textContent = String(html || ""); return box; }
+    var MAP = { b: "b", strong: "b", i: "i", em: "i", u: "u", ins: "u", s: "s", strike: "s", del: "s", code: "code", pre: "pre", blockquote: "blockquote", br: "br" };
+    function walk(src, dst) {
+      Array.prototype.forEach.call(src.childNodes, function (n) {
+        if (n.nodeType === 3) { dst.appendChild(document.createTextNode(n.nodeValue)); return; }
+        if (n.nodeType !== 1) return;
+        var tag = n.tagName.toLowerCase();
+        if (tag === "a") {
+          var href = n.getAttribute("href") || "";
+          var um = /^tg:\/\/user\?id=(\d+)/.exec(href);
+          var a = h("a", { href: "#", class: "bot-link" });
+          if (um) a.addEventListener("click", function (e) { e.preventDefault(); go("/admin/user/" + um[1]); });
+          else if (/^https?:\/\//.test(href)) a.addEventListener("click", function (e) { e.preventDefault(); openLink(href); });
+          walk(n, a); dst.appendChild(a); return;
+        }
+        if (MAP[tag]) { var el = document.createElement(MAP[tag]); if (tag !== "br") walk(n, el); dst.appendChild(el); return; }
+        walk(n, dst); // noma'lum teg — faqat ichidagi matn
+      });
+    }
+    walk(doc.body.firstChild || doc.body, box);
+    return box;
+  }
+  function stripHtml(html) { var d = safeHtml(html); return (d.textContent || "").trim(); }
+  // Inline tugmalar: callback → bot handleri, url → havola
+  function botKeyboard(kb, onPress) {
+    var rows = (kb && kb.inline_keyboard) || [];
+    if (!rows.length) return null;
+    return h("div", { class: "bot-kb" }, rows.map(function (row) {
+      return h("div", { class: "bot-row" }, row.map(function (b) {
+        return h("button", { type: "button", class: "bot-btn" + (/^(❌|🗑)/.test(b.text) ? " danger" : /^(✅|🟢)/.test(b.text) ? " ok" : ""), text: b.text, onclick: function () {
+          if (b.url) return openLink(b.url);
+          if (b.web_app && b.web_app.url) return openLink(b.web_app.url);
+          if (b.callback_data) onPress(b.callback_data, this);
+        } });
+      }));
+    }));
+  }
+  function adminTile(label, value, sub) {
+    return h("div", { class: "a-tile" }, [h("span", { class: "a-lbl", text: label }), h("b", { text: value }), sub ? h("span", { class: "a-sub", text: sub }) : null]);
+  }
+
+  function screenAdminHome() {
+    if (!me || !me.isAdmin) { replaceTo("/"); return; }
+    var alive = true;
+    app.appendChild(h("h1", { class: "page", text: "Admin panel" }));
+    var body = h("div"); body.appendChild(skeleton()); app.appendChild(body);
+    function draw(r) {
+      if (!alive) return;
+      body.innerHTML = "";
+      if (!r || !r.ok) { body.appendChild(emptyState("Yuklab bo'lmadi", (r && r.error) || "", "Qayta urinish", function () { loadAdminSummary().then(draw); }, "gear")); return; }
+      var q = r.queue, s = r.stats;
+      // Kutayotganlar
+      var qCard = h("button", { type: "button", class: "a-queue" + (q.total ? " has" : ""), onclick: function () { go("/admin/queue"); } }, [
+        h("div", { class: "a-q-head" }, [h("span", { class: "a-q-num", text: String(q.total) }), h("div", null, [h("b", { text: q.total ? "Tasdiq kutayotganlar" : "Hammasi ko'rib chiqilgan" }), h("span", { text: q.total ? "Bosing — e'lonlar, cheklar va so'rovlar" : "Yangi so'rovlar kelsa shu yerda chiqadi" })]), icon("chev")]),
+        q.total ? h("div", { class: "a-q-chips" }, Q_TYPES.filter(function (t) { return q[t.key]; }).map(function (t) {
+          return h("span", { class: "a-q-chip", style: "--c:" + t.color }, [t.short, h("b", { text: String(q[t.key]) })]);
+        })) : null,
+      ]);
+      body.appendChild(qCard);
+      body.appendChild(h("div", { class: "a-tiles" }, [
+        adminTile("Foydalanuvchilar", fmtNum(s.users), s.usersToday ? "+" + s.usersToday + " bugun" : "bugun yangi yo'q"),
+        adminTile("Faol e'lonlar", fmtNum(s.activeAds), s.adsToday ? "+" + s.adsToday + " bugun" : "bugun yangi yo'q"),
+        adminTile("Sotildi", fmtNum(s.soldWeek), "oxirgi 7 kun"),
+        adminTile("Daromad", fmtNum(s.income30), "so'm, 30 kun"),
+        adminTile("Avtosalonlar", fmtNum(s.dealers), "tasdiqlangan"),
+        adminTile("Bloklangan", fmtNum(s.banned), "foydalanuvchi"),
+      ]));
+      if (r.broadcast && r.broadcast.running) body.appendChild(h("button", { type: "button", class: "notice a-bc-run", onclick: function () { go("/admin/broadcast"); } }, [h("span", { text: "📢" }), h("div", null, [h("b", { text: "Rassilka ketyapti" }), h("span", { class: "s", text: (r.broadcast.success + r.broadcast.failed) + " / " + r.broadcast.total })])]));
+      if (r.awaitingInput) body.appendChild(h("button", { type: "button", class: "notice", style: "width:100%;text-align:left;margin-top:10px", onclick: function () { go("/admin/bot?d=admin_back&wait=1"); } }, [h("span", { text: "✍️" }), h("div", null, [h("b", { text: "Bot sizdan javob kutyapti" }), h("span", { class: "s", text: "Oxirgi boshlangan o'zgartirish (narx, sozlama...) yakunlanmagan. Bosing — yozish yoki bekor qilish." })])]));
+      ADMIN_SECTIONS.forEach(function (sec) {
+        body.appendChild(h("p", { class: "group-title", text: sec.title }));
+        body.appendChild(h("div", { class: "list" }, sec.items.map(function (it) {
+          return listItem({ icon: it.icon, color: it.color, title: it.t, sub: it.s, onclick: function () {
+            if (it.path) return go(it.path);
+            var open = function () { go("/admin/bot?d=" + encodeURIComponent(it.data) + "&t=" + encodeURIComponent(it.t)); };
+            if (it.confirm) confirmBox(it.confirm, open); else open();
+          } });
+        })));
+      });
+      body.appendChild(h("p", { class: "help", style: "text-align:center;margin:16px 0 4px", text: "Botdagi /admin menyusi ham avvalgidek ishlaydi — ikkalasi bir xil." }));
+    }
+    if (adminSum) draw(adminSum);
+    loadAdminSummary().then(draw);
+    return function () { alive = false; };
+  }
+
+  // ---------- Kutayotganlar (moderatsiya) ----------
+  function gallery(urls, cls) {
+    urls = (urls || []).filter(Boolean);
+    if (!urls.length) return null;
+    return h("div", { class: "a-gal" + (cls ? " " + cls : "") }, urls.map(function (u, i) {
+      return h("button", { type: "button", class: "a-ph", "aria-label": "Rasm " + (i + 1), onclick: function () { viewImage(urls, i); } }, [h("img", { src: u, alt: "", loading: "lazy", decoding: "async" })]);
+    }));
+  }
+  function viewImage(urls, i) {
+    var idx = i || 0;
+    var img = h("img", { src: urls[idx], alt: "" });
+    var counter = h("span", { class: "lb-n", text: (idx + 1) + " / " + urls.length });
+    var box = h("div", { class: "lightbox", role: "dialog", "aria-label": "Rasm", onclick: function (e) { if (e.target === box || e.target === img) close(); } }, [
+      img, urls.length > 1 ? counter : null,
+      urls.length > 1 ? h("button", { type: "button", class: "lb-nav prev", "aria-label": "Oldingi", text: "‹", onclick: function () { step(-1); } }) : null,
+      urls.length > 1 ? h("button", { type: "button", class: "lb-nav next", "aria-label": "Keyingi", text: "›", onclick: function () { step(1); } }) : null,
+      h("button", { type: "button", class: "lb-x", "aria-label": "Yopish", text: "✕", onclick: function () { close(); } }),
+    ]);
+    function step(d) { idx = (idx + d + urls.length) % urls.length; img.src = urls[idx]; counter.textContent = (idx + 1) + " / " + urls.length; }
+    function close() { box.remove(); }
+    document.body.appendChild(box);
+  }
+  function kv(rows) {
+    return h("div", { class: "a-kv" }, rows.filter(function (r) { return r && r[1]; }).map(function (r) { return h("div", null, [h("span", { text: r[0] }), h("b", { text: String(r[1]) })]); }));
+  }
+  function whoLine(u, extra) {
+    if (!u) return null;
+    return h("button", { type: "button", class: "a-who", onclick: function () { go("/admin/user/" + u.id); } }, [
+      h("span", { class: "s-ava", text: initials(u.name) }), h("span", { class: "nm", text: u.name + (u.username ? " · " + u.username : "") + (u.dealer ? " · 🏢 " + u.dealer : "") }),
+      extra ? h("span", { class: "a-when", text: extra }) : null, icon("chev"),
+    ]);
+  }
+  function adFacts(a) {
+    return kv([["Narx", a.price ? fmtNum(a.price) + " $" : ""], ["Yili", a.year], ["Probeg", fmtKm(a.probeg)], ["Kraska", a.paint], ["Rang", a.color], ["Korobka", a.transmission], ["Yoqilg'i", a.fuel], ["Hudud", a.region], ["Telefon", a.phone ? fmtPhone(a.phone) : ""],
+      ["Tarixi", a.history && a.history !== "Ko'rsatilmagan" ? a.history : ""], ["Barter", a.barter && a.barter !== "Yo'q" ? a.barter : ""], ["Nasiya", a.nasiya && a.nasiya !== "Yo'q" ? a.nasiya : ""]]);
+  }
+  function rejectSheet(id, isEdit, done) {
+    var reasons = ["Rasmlar sifatsiz yoki xiralashgan", "Narx noto'g'ri (masalan, so'mda yozilgan)", "Ma'lumotlar to'liq emas yoki xato", "Bu mashina allaqachon sotilgan", "Takroriy e'lon"];
+    var ta = h("textarea", { class: "input", rows: 3, placeholder: "Yoki sababni o'zingiz yozing...", "aria-label": "Rad etish sababi" });
+    var btn = h("button", { type: "button", class: "btn danger", text: "Rad etish va sababini yuborish", onclick: function () { send(ta.value); } });
+    function send(reason) {
+      reason = String(reason || "").trim();
+      if (!reason) { toast("Sababni tanlang yoki yozing"); return; }
+      btn.disabled = true;
+      api("/api/admin/reject", { json: { id: id, isEdit: isEdit, reason: reason } }).then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { toast(r.error || "Xato"); return; }
+        closeSheet(); haptic("success"); toast("❌ Rad etildi, sotuvchiga sabab yuborildi"); done();
+      });
+    }
+    openSheet(isEdit ? "Tahrirni rad etish" : "E'lonni rad etish", [
+      h("div", { class: "a-reasons" }, reasons.map(function (t) { return h("button", { type: "button", class: "chip", text: t, onclick: function () { ta.value = t; } }); })),
+      ta, h("p", { class: "help", text: "Sabab sotuvchiga bot orqali yuboriladi." }), btn,
+    ]);
+  }
+  // Bot tugmasini (callback) bajarish — natijani qisqa xabar qilib ko'rsatamiz
+  function runAction(data, btn, done) {
+    if (btn) { btn.disabled = true; btn.classList.add("busy"); }
+    return api("/api/admin/action", { json: { data: data } }).then(function (r) {
+      if (btn) { btn.disabled = false; btn.classList.remove("busy"); }
+      var msg = (r.alerts && r.alerts.filter(function (x) { return !/^⏳/.test(x); }).pop()) || (r.view && stripHtml(r.view.text)) || (r.messages && r.messages[0] && stripHtml(r.messages[0].text)) || r.error || "";
+      if (!r.ok) { toast(msg || "Xato yuz berdi"); return r; }
+      haptic("success");
+      if (msg) toast(msg.length > 140 ? msg.slice(0, 140) + "…" : msg);
+      if (done) done(r);
+      return r;
+    });
+  }
+  function actBtn(text, cls, onclick) { return h("button", { type: "button", class: "btn " + (cls || ""), text: text, onclick: onclick }); }
+
+  function screenAdminQueue(m, query) {
+    if (!me || !me.isAdmin) { replaceTo("/"); return; }
+    var alive = true, data = null, cur = query.get("t") || null;
+    app.appendChild(h("h1", { class: "page", text: "Kutayotganlar" }));
+    var tabs = h("div", { class: "chips scroll a-tabs", role: "tablist", "aria-label": "Turi" });
+    var list = h("div"); list.appendChild(skeleton());
+    app.appendChild(tabs); app.appendChild(list);
+    function load() {
+      return api("/api/admin/queue").then(function (r) {
+        if (!alive) return;
+        data = r;
+        if (!r.ok) { list.innerHTML = ""; list.appendChild(emptyState("Yuklab bo'lmadi", r.error || "", null, null, "gear")); return; }
+        if (!cur || !(data[cur] && data[cur].length)) { var f = Q_TYPES.find(function (t) { return data[t.key] && data[t.key].length; }); cur = f ? f.key : (cur || "ads"); }
+        draw();
+      });
+    }
+    function removeItem(key, pred) { data[key] = (data[key] || []).filter(function (x) { return !pred(x); }); adminSum = null; draw(); }
+    function draw() {
+      tabs.innerHTML = "";
+      Q_TYPES.forEach(function (t) {
+        var n = (data[t.key] || []).length;
+        tabs.appendChild(h("button", { type: "button", role: "tab", class: "chip" + (cur === t.key ? " on" : ""), "aria-selected": cur === t.key ? "true" : "false", onclick: function () { cur = t.key; draw(); } }, [t.short, n ? h("span", { class: "a-badge", text: String(n) }) : null]));
+      });
+      list.innerHTML = "";
+      var items = data[cur] || [];
+      var T = Q_TYPES.find(function (t) { return t.key === cur; });
+      if (!items.length) { list.appendChild(emptyState(T.title + " yo'q", "Hammasi ko'rib chiqilgan 👍", null, null, T.icon)); return; }
+      items.forEach(function (it) { list.appendChild(queueCard(cur, it)); });
+    }
+    function queueCard(kind, it) {
+      var el;
+      if (kind === "ads" || kind === "edits") {
+        var isEdit = kind === "edits";
+        el = h("article", { class: "a-card" }, [
+          gallery(it.photos),
+          h("div", { class: "a-body" }, [
+            h("div", { class: "a-title" }, [h("b", { text: it.title }), h("span", { class: "a-id", text: isEdit ? "Tahrir · e'lon #" + it.oldAdId : "#" + it.id })]),
+            it.urgent ? h("span", { class: "tag tag-urgent a-tag", text: "🔥 Qaynoq narx so'ralgan" }) : null,
+            it.hasVideo ? h("span", { class: "a-note", text: "🎬 Video ham bor (botda ko'rinadi)" }) : null,
+            adFacts(it),
+            it.offer ? h("p", { class: "a-note", text: "🎁 " + it.offer }) : null,
+            it.paid ? h("div", { class: "a-pay" }, [h("span", { text: "💳 Pullik e'lon: " + fmtNum(it.paid) + " so'm" }), it.receipt ? h("button", { type: "button", class: "a-rc", onclick: function () { viewImage([it.receipt], 0); } }, [h("img", { src: it.receipt, alt: "To'lov cheki" }), "Chekni ko'rish"]) : null]) : null,
+            whoLine(it.user, relDay(it.createdAt)),
+          ]),
+          h("div", { class: "a-actions" }, isEdit ? [
+            actBtn("✅ Tasdiqlash", "", function () { runAction("approve_edit:" + it.editId, this, function () { removeItem("edits", function (x) { return x.editId === it.editId; }); }); }),
+            actBtn("❌ Rad etish", "danger secondary", function () { rejectSheet(it.editId, true, function () { removeItem("edits", function (x) { return x.editId === it.editId; }); }); }),
+          ] : [
+            actBtn("✅ Qabul qilish", "", function () { runAction("approve:" + it.id, this, function () { removeItem("ads", function (x) { return x.id === it.id; }); }); }),
+            actBtn("🔥 Qaynoq narxda", "secondary", function () { runAction("approve_hot:" + it.id, this, function () { removeItem("ads", function (x) { return x.id === it.id; }); }); }),
+            actBtn("❌ Rad etish", "danger secondary", function () { rejectSheet(it.id, false, function () { removeItem("ads", function (x) { return x.id === it.id; }); }); }),
+          ]),
+        ]);
+      } else if (kind === "bumps" || kind === "sold") {
+        var sold = kind === "sold";
+        el = h("article", { class: "a-card row" }, [
+          it.photos[0] ? h("button", { type: "button", class: "a-thumb", onclick: function () { viewImage(it.photos, 0); } }, [h("img", { src: it.photos[0], alt: "" })]) : null,
+          h("div", { class: "a-body" }, [
+            h("div", { class: "a-title" }, [h("b", { text: it.title }), h("span", { class: "a-id", text: "#" + it.id })]),
+            h("span", { class: "a-note", text: sold ? (it.soldPrice ? "💰 Sotuv narxi: " + fmtNum(it.soldPrice) + " $" : "💰 Sotuv narxi aytilmagan") + " · e'londa " + fmtNum(it.price) + " $" : "🚀 Kanalda tepaga ko'tarishni so'radi · " + fmtNum(it.price) + " $" }),
+            whoLine(it.user, relDay(it.at)),
+          ]),
+          h("div", { class: "a-actions" }, sold ? [
+            actBtn("✅ Kanalda «Sotildi» deb belgilash", "", function () { runAction("confirm_sold:" + it.id, this, function () { removeItem("sold", function (x) { return x.id === it.id; }); }); }),
+            actBtn("Yopish", "secondary", function () { api("/api/admin/dismiss", { json: { kind: "sold", id: it.id } }).then(function () { removeItem("sold", function (x) { return x.id === it.id; }); }); }),
+          ] : [
+            actBtn("✅ UP qilish", "", function () { runAction("approve_bump:" + it.id, this, function () { removeItem("bumps", function (x) { return x.id === it.id; }); }); }),
+            actBtn("❌ Rad etish", "danger secondary", function () { runAction("reject_bump:" + it.id, this, function () { removeItem("bumps", function (x) { return x.id === it.id; }); }); }),
+          ]),
+        ]);
+      } else if (kind === "payments") {
+        el = h("article", { class: "a-card" }, [
+          it.receipt ? h("button", { type: "button", class: "a-receipt", onclick: function () { viewImage([it.receipt], 0); } }, [h("img", { src: it.receipt, alt: "To'lov cheki" }), h("span", { text: "Chekni kattalashtirish" })]) : null,
+          h("div", { class: "a-body" }, [
+            h("div", { class: "a-title" }, [h("b", { text: it.title + " · " + fmtNum(it.amount) + " so'm" }), it.adId ? h("span", { class: "a-id", text: "#" + it.adId }) : null]),
+            h("button", { type: "button", class: "a-adlink", onclick: function () { if (it.adId) go("/ad/" + it.adId); } }, [it.photo ? h("img", { src: it.photo, alt: "" }) : null, h("span", { text: it.car + (it.adStatus && it.adStatus !== "active" ? " (faol emas)" : "") })]),
+            whoLine(it.user, relDay(it.at)),
+          ]),
+          h("div", { class: "a-actions" }, [
+            actBtn("✅ To'lovni tasdiqlash", "", function () { runAction("vip_approve:" + it.reqId, this, function () { removeItem("payments", function (x) { return x.reqId === it.reqId; }); }); }),
+            actBtn("❌ Rad etish", "danger secondary", function () { var b = this; confirmBox("To'lov rad etilsinmi? Sotuvchiga xabar boradi.", function () { runAction("vip_reject:" + it.reqId, b, function () { removeItem("payments", function (x) { return x.reqId === it.reqId; }); }); }); }),
+          ]),
+        ]);
+      } else if (kind === "salons") {
+        el = h("article", { class: "a-card" }, [
+          it.media ? h("button", { type: "button", class: "a-receipt wide", onclick: function () { viewImage([it.media], 0); } }, [h("img", { src: it.media, alt: "" }), it.mediaType === "video" ? h("span", { text: "🎬 Video (muqovasi)" }) : null]) : null,
+          h("div", { class: "a-body" }, [
+            h("div", { class: "a-title" }, [h("b", { text: it.salonName }), h("span", { class: "a-id", text: "#" + it.id })]),
+            h("div", { class: "a-place" }, [it.channel ? h("span", { text: "📢 Kanal" }) : null, it.app ? h("span", { text: "📱 Ilova" }) : null, h("span", { text: it.planTitle + (it.price ? " · " + fmtNum(it.price) + " so'm" : "") })]),
+            h("p", { class: "s-text a-txt", text: it.text }),
+            kv([["Manzil", it.location], ["Telefon", it.phone]]),
+            it.receipt ? h("button", { type: "button", class: "a-rc", onclick: function () { viewImage([it.receipt], 0); } }, [h("img", { src: it.receipt, alt: "To'lov cheki" }), "Chekni ko'rish"]) : null,
+            whoLine(it.user, relDay(it.at)),
+          ]),
+          h("div", { class: "a-actions" }, [
+            actBtn("✅ Joylash", "", function () { runAction("salon_approve:" + it.id, this, function () { removeItem("salons", function (x) { return x.id === it.id; }); }); }),
+            actBtn("❌ Rad etish", "danger secondary", function () { var b = this; confirmBox("Salon reklamasi rad etilsinmi?", function () { runAction("salon_reject:" + it.id, b, function () { removeItem("salons", function (x) { return x.id === it.id; }); }); }); }),
+          ]),
+        ]);
+      } else if (kind === "dealers") {
+        el = h("article", { class: "a-card" }, [
+          h("div", { class: "a-body" }, [
+            h("div", { class: "a-title" }, [h("b", { text: "🏢 " + it.name })]),
+            kv([["Telefon", fmtPhone(it.phone)], ["ID", it.id]]),
+            whoLine(it.user, null),
+          ]),
+          h("div", { class: "a-actions" }, [
+            actBtn("✅ Avtosalon qilish", "", function () { runAction("dealer_approve:" + it.id, this, function () { removeItem("dealers", function (x) { return x.id === it.id; }); }); }),
+            actBtn("❌ Rad etish", "danger secondary", function () { runAction("dealer_reject:" + it.id, this, function () { removeItem("dealers", function (x) { return x.id === it.id; }); }); }),
+          ]),
+        ]);
+      }
+      return el;
+    }
+    load();
+    return function () { alive = false; };
+  }
+
+  // ---------- Botdagi admin menyusi (har qanday bo'lim) ----------
+  function screenAdminBot(m, query) {
+    if (!me || !me.isAdmin) { replaceTo("/"); return; }
+    var alive = true, first = query.get("d") || "admin_back", title = query.get("t") || "";
+    if (title) app.appendChild(h("h1", { class: "page", text: title }));
+    var viewBox = h("div", { class: "bot-view" });
+    var feed = h("div", { class: "bot-feed" });
+    var inputBar = h("div", { class: "bot-input", hidden: true });
+    app.appendChild(viewBox); app.appendChild(feed); app.appendChild(inputBar);
+    function press(data, btn) {
+      if (data === "admin_close" || (data === "admin_back" && first !== "admin_back")) { replaceTo("/admin"); return; }
+      if (data === "admin_broadcast") { go("/admin/broadcast"); return; }
+      if (data === "admin_pending") { go("/admin/queue"); return; }
+      if (data === "ignore") return;
+      if (btn) { btn.disabled = true; btn.classList.add("busy"); }
+      api("/api/admin/action", { json: { data: data } }).then(function (r) { if (btn) { btn.disabled = false; btn.classList.remove("busy"); } show(r, true); });
+    }
+    function botBubble(msg) {
+      return h("div", { class: "bot-msg" }, [
+        msg.url && msg.type === "photo" ? h("button", { type: "button", class: "bot-img", onclick: function () { viewImage([msg.url], 0); } }, [h("img", { src: msg.url, alt: "" })]) : null,
+        msg.type === "video" ? h("p", { class: "help", text: "🎬 Video — botdagi xabarda ko'rinadi." }) : null,
+        msg.text ? safeHtml(msg.text) : null,
+        botKeyboard(msg.kb, press),
+      ]);
+    }
+    function show(r, fromPress) {
+      if (!alive) return;
+      if (!r.ok) {
+        if (r.inBotOnly) { toast(r.error); return; }
+        toast(r.error || "Xato"); return;
+      }
+      (r.alerts || []).filter(function (a) { return !/^⏳/.test(a); }).forEach(function (a) { toast(a); });
+      if (r.closed && !r.view && !(r.messages || []).length) { replaceTo("/admin"); return; }
+      if (r.view) {
+        viewBox.innerHTML = "";
+        viewBox.appendChild(h("div", { class: "bot-card" }, [safeHtml(r.view.text), botKeyboard(r.view.kb, press)]));
+        if (fromPress) feed.innerHTML = "";
+      }
+      if ((r.messages || []).length) {
+        if (!r.view && fromPress && !r.awaitingInput) feed.innerHTML = "";
+        r.messages.forEach(function (msg) { feed.appendChild(botBubble(msg)); });
+        if (!r.view && !viewBox.childNodes.length && r.messages.length) { /* faqat xabarlar — feed yetarli */ }
+        setTimeout(function () { (feed.lastChild || viewBox).scrollIntoView({ behavior: "smooth", block: "nearest" }); }, 30);
+      }
+      setInput(!!r.awaitingInput);
+    }
+    var ta = h("textarea", { class: "input", rows: 1, placeholder: "Javobni yozing...", "aria-label": "Botga javob" });
+    var sendBtn = h("button", { type: "button", class: "btn", text: "Yuborish", onclick: sendText });
+    var cancelBtn = h("button", { type: "button", class: "btn secondary", text: "Bekor qilish", onclick: function () { api("/api/admin/cancel", { json: {} }).then(function () { setInput(false); toast("Bekor qilindi"); }); } });
+    inputBar.appendChild(h("p", { class: "help", style: "margin:0 0 8px", text: "✍️ Bot sizdan javob kutyapti — yuqoridagi so'rovga javob yozing." }));
+    inputBar.appendChild(ta); inputBar.appendChild(h("div", { class: "bot-input-btns" }, [cancelBtn, sendBtn]));
+    ta.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); } });
+    function setInput(on) { inputBar.hidden = !on; if (on) setTimeout(function () { ta.focus(); }, 60); }
+    function sendText() {
+      var t = ta.value.trim(); if (!t) return;
+      sendBtn.disabled = true;
+      feed.appendChild(h("div", { class: "bot-msg mine", text: t }));
+      api("/api/admin/text", { json: { text: t } }).then(function (r) {
+        sendBtn.disabled = false; ta.value = "";
+        if (r.ok && r.unhandled) { toast("Hozir bot javob kutmayapti."); setInput(false); return; }
+        show(r, false);
+      });
+    }
+    viewBox.appendChild(skeleton());
+    api("/api/admin/action", { json: { data: first } }).then(function (r) {
+      viewBox.innerHTML = "";
+      show(r, false);
+      if (query.get("wait")) setInput(true);
+    });
+    return function () { alive = false; };
+  }
+
+  // ---------- Foydalanuvchilar ----------
+  function screenAdminUsers(m, query) {
+    if (!me || !me.isAdmin) { replaceTo("/"); return; }
+    var alive = true, timer = null;
+    app.appendChild(h("h1", { class: "page", text: "Foydalanuvchilar" }));
+    var inp = h("input", { class: "input", type: "search", placeholder: "Ism, @username, ID yoki telefon", "aria-label": "Foydalanuvchi qidirish", value: query.get("q") || "" });
+    var list = h("div", { class: "list" });
+    app.appendChild(h("div", { class: "search-box", style: "margin-bottom:12px" }, [icon("search"), inp]));
+    app.appendChild(list);
+    function load() {
+      var q = inp.value.trim();
+      api("/api/admin/users?q=" + encodeURIComponent(q)).then(function (r) {
+        if (!alive) return;
+        list.innerHTML = "";
+        if (!r.ok || !r.items.length) { list.appendChild(h("p", { class: "help", style: "padding:16px", text: q ? "Hech kim topilmadi." : "Foydalanuvchilar yo'q." })); return; }
+        r.items.forEach(function (u) {
+          list.appendChild(listItem({ icon: u.dealer ? "building" : "user", color: u.banned ? "#ff3b30" : u.dealer ? "#af52de" : "#007aff",
+            title: u.name + (u.username ? " · " + u.username : ""), sub: "ID " + u.id + (u.dealer ? " · 🏢 " + u.dealer : "") + (u.banned ? " · 🚫 bloklangan" : "") + " · " + relDay(u.joined),
+            onclick: function () { go("/admin/user/" + u.id); } }));
+        });
+      });
+    }
+    inp.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(load, 350); });
+    load();
+    return function () { alive = false; clearTimeout(timer); };
+  }
+  function runCommand(line, btn, done) {
+    if (btn) btn.disabled = true;
+    return api("/api/admin/command", { json: { line: line } }).then(function (r) {
+      if (btn) btn.disabled = false;
+      var msg = r.ok ? ((r.messages && r.messages[0] && stripHtml(r.messages[0].text)) || (r.alerts && r.alerts[0]) || "Bajarildi") : (r.error || "Xato");
+      toast(msg.length > 160 ? msg.slice(0, 160) + "…" : msg);
+      if (r.ok) haptic("success");
+      if (done) done(r);
+      return r;
+    });
+  }
+  function screenAdminUser(m) {
+    if (!me || !me.isAdmin) { replaceTo("/"); return; }
+    var id = Number(m[1]), alive = true;
+    var body = h("div"); body.appendChild(skeleton()); app.appendChild(body);
+    function load() {
+      api("/api/admin/users/" + id).then(function (r) {
+        if (!alive) return;
+        body.innerHTML = "";
+        if (!r.ok) { body.appendChild(emptyState("Topilmadi", r.error || "", null, null, "user")); return; }
+        var u = r.user;
+        body.appendChild(h("div", { class: "s-title" }, [h("span", { class: "s-ava big", text: initials(u.name) }), h("div", { style: "min-width:0" }, [
+          h("h1", { class: "page s-name", text: u.name }),
+          h("span", { class: "help", text: (u.username ? u.username + " · " : "") + "ID " + u.id + " · " + relDay(u.joined) }),
+        ])]));
+        var tags = [];
+        if (u.banned) tags.push(h("span", { class: "badge urgent", text: "🚫 Bloklangan" }));
+        if (u.dealer) tags.push(h("span", { class: "badge trust" }, [icon("shield"), "Avtosalon: " + u.dealer.name + (u.dealer.paused ? " (to'xtatilgan)" : "")]));
+        if (tags.length) body.appendChild(h("div", { class: "badges", style: "margin-bottom:12px" }, tags));
+        body.appendChild(h("div", { class: "a-tiles" }, [
+          adminTile("E'lonlar", String(r.ads.length), r.ads.filter(function (a) { return a.status === "active"; }).length + " ta faol"),
+          adminTile("Bepul UP", String(u.freeUps), "do'st taklifi: " + u.referrals),
+          u.dealer ? adminTile("Paket postlari", String(u.dealer.credits), "salon reklamasi") : adminTile("Konkurs bali", String(u.contest), "Top-10"),
+        ]));
+        var acts = [
+          listItem({ icon: "send", color: "#2aabee", title: "Xabar yozish", sub: "Bot orqali shu foydalanuvchiga", onclick: function () { msgSheet(); } }),
+          u.banned
+            ? listItem({ icon: "check", color: "#34c759", title: "Blokdan chiqarish", onclick: function () { runCommand("/unban " + u.id, null, load); } })
+            : listItem({ icon: "trash", color: "#ff3b30", title: "Bloklash", sub: "Botdan foydalana olmaydi", danger: true, onclick: function () { confirmBox(u.name + " bloklansinmi?", function () { runCommand("/ban " + u.id, null, load); }); } }),
+        ];
+        if (u.dealer) {
+          acts.push(listItem({ icon: "building", color: "#af52de", title: "Avtosalonni boshqarish", sub: "To'xtatish, paket postlari, o'chirish", onclick: function () { go("/admin/bot?d=" + encodeURIComponent("dealer_manage:" + u.id) + "&t=" + encodeURIComponent(u.dealer.name)); } }));
+        }
+        body.appendChild(h("div", { class: "list", style: "margin-top:12px" }, acts));
+        if (r.payments.length) {
+          body.appendChild(h("p", { class: "group-title", text: "To'lovlari" }));
+          body.appendChild(h("div", { class: "list" }, r.payments.map(function (p) {
+            return listItem({ icon: "card", color: p.status === "approved" ? "#34c759" : p.status === "pending" ? "#ff9500" : "#8e8e93", title: p.title + " · " + fmtNum(p.amount) + " so'm", sub: { approved: "✅ tasdiqlangan", pending: "⏳ kutilmoqda", rejected: "❌ rad etilgan" }[p.status] + " · " + relDay(p.at), chev: false });
+          })));
+        }
+        body.appendChild(h("p", { class: "sec-title", text: "E'lonlari · " + r.ads.length }));
+        if (r.ads.length) body.appendChild(h("div", { class: "cards" }, r.ads.map(function (it) { return adCard(it); })));
+        else body.appendChild(h("p", { class: "help", text: "E'lonlari yo'q." }));
+        function msgSheet() {
+          var ta = h("textarea", { class: "input", rows: 4, placeholder: "Xabar matni", "aria-label": "Xabar matni" });
+          var b = h("button", { type: "button", class: "btn", text: "Yuborish", onclick: function () {
+            var t = ta.value.trim(); if (!t) return toast("Matn yozing");
+            runCommand("/xabar " + u.id + " " + t, b, function (res) { if (res.ok) closeSheet(); });
+          } });
+          openSheet("Xabar: " + u.name, [ta, h("p", { class: "help", text: "Xabar bot nomidan yuboriladi." }), b]);
+        }
+      });
+    }
+    load();
+    return function () { alive = false; };
+  }
+
+  // ---------- Rassilka ----------
+  function screenAdminBroadcast() {
+    if (!me || !me.isAdmin) { replaceTo("/"); return; }
+    var alive = true, photo = null, poll = null;
+    app.appendChild(h("h1", { class: "page", text: "Rassilka" }));
+    var info = h("p", { class: "page-sub", text: "Xabar botdan foydalangan hammaga yuboriladi." });
+    app.appendChild(info);
+    var ta = h("textarea", { class: "input", rows: 6, placeholder: "Xabar matni. <b>qalin</b>, <i>kursiv</i>, havolalar ishlaydi.", "aria-label": "Rassilka matni" });
+    var preview = h("div", { class: "bot-msg a-preview" });
+    var photoInput = h("input", { type: "file", accept: "image/*", class: "file-input", "aria-label": "Rasm qo'shish" });
+    var photoBox = h("div", { class: "a-photo-pick" });
+    var progress = h("div", { class: "a-progress", hidden: true });
+    var sendBtn = h("button", { type: "button", class: "btn", text: "Hammaga yuborish", onclick: send });
+    function drawPhoto() {
+      photoBox.innerHTML = "";
+      if (photo && photo.url) photoBox.appendChild(h("div", { class: "a-ph-sel" }, [h("img", { src: photo.url, alt: "" }), photo.status === "loading" ? h("span", { text: "Yuklanmoqda..." }) : null,
+        h("button", { type: "button", class: "lb-x", "aria-label": "Rasmni olib tashlash", text: "✕", onclick: function () { photo = null; drawPhoto(); drawPreview(); } })]));
+      else photoBox.appendChild(h("label", { class: "add-tile a-add" }, [photoInput, icon("camera"), "Rasm qo'shish (ixtiyoriy)"]));
+    }
+    function drawPreview() {
+      preview.innerHTML = "";
+      if (photo && photo.url) preview.appendChild(h("img", { src: photo.url, alt: "", class: "a-prev-img" }));
+      preview.appendChild(ta.value.trim() ? safeHtml(ta.value) : h("span", { class: "help", text: "Ko'rinishi shu yerda chiqadi" }));
+    }
+    photoInput.addEventListener("change", function () {
+      var f = photoInput.files && photoInput.files[0]; if (!f) return;
+      photo = { url: URL.createObjectURL(f), status: "loading" }; drawPhoto(); drawPreview();
+      var mine = photo;
+      compressImage(f).then(function (b) { return upload("photo", b); }).then(function (r) {
+        if (photo !== mine) return;
+        if (!r.ok) { toast(r.error || "Rasmni yuklab bo'lmadi"); photo = null; } else { photo.token = r.token; photo.status = "ok"; }
+        drawPhoto(); drawPreview();
+      });
+    });
+    ta.addEventListener("input", drawPreview);
+    app.appendChild(h("div", { class: "group" }, [h("div", { class: "field" }, [h("span", { class: "label", text: "Xabar" }), ta]), h("div", { class: "field" }, [photoBox])]));
+    app.appendChild(h("p", { class: "group-title", text: "Ko'rinishi" }));
+    app.appendChild(preview);
+    app.appendChild(progress);
+    app.appendChild(h("div", { style: "margin-top:14px" }, [sendBtn]));
+    drawPhoto(); drawPreview();
+    function drawJob(r) {
+      if (!alive || !r || !r.ok) return;
+      if (r.users) info.textContent = "Xabar " + fmtNum(r.users) + " ta foydalanuvchiga yuboriladi. Botni bloklaganlarga yetib bormaydi.";
+      var j = r.job;
+      if (!j) { progress.hidden = true; return; }
+      var done = j.success + j.failed, pct = j.total ? Math.round(done / j.total * 100) : 100;
+      progress.hidden = false;
+      progress.innerHTML = "";
+      progress.appendChild(h("div", { class: "a-bar" }, [h("i", { style: "width:" + pct + "%" })]));
+      progress.appendChild(h("p", { class: "help", text: (j.running ? "⏳ Yuborilmoqda: " : "✅ Oxirgi rassilka tugagan: ") + done + " / " + j.total + " · yetkazildi " + j.success + " · xato " + j.failed }));
+      sendBtn.disabled = !!j.running;
+      if (j.running && !poll) poll = setInterval(function () { api("/api/admin/broadcast").then(drawJob); }, 1500);
+      if (!j.running && poll) { clearInterval(poll); poll = null; }
+    }
+    function send() {
+      var t = ta.value.trim();
+      if (!t && !(photo && photo.token)) return toast("Matn yozing yoki rasm qo'shing");
+      if (photo && photo.status === "loading") return toast("Rasm yuklanmoqda, kuting");
+      confirmBox("Xabar hamma foydalanuvchilarga yuborilsinmi? Buni qaytarib bo'lmaydi.", function () {
+        sendBtn.disabled = true;
+        api("/api/admin/broadcast", { json: { text: t, photo: photo && photo.token } }).then(function (r) {
+          if (!r.ok) { sendBtn.disabled = false; toast(r.error || "Xato"); return; }
+          haptic("success"); toast("📢 Rassilka boshlandi");
+          api("/api/admin/broadcast").then(drawJob);
+        });
+      });
+    }
+    api("/api/admin/broadcast").then(drawJob);
+    return function () { alive = false; if (poll) clearInterval(poll); };
+  }
+
+  // ---------- Buyruqlar ----------
+  var ADMIN_COMMANDS = [
+    { c: "/up ", t: "E'lonni kanalda ko'tarish", hint: "/up 735" },
+    { c: "/ban ", t: "Foydalanuvchini bloklash", hint: "/ban 123456789" },
+    { c: "/unban ", t: "Blokdan chiqarish", hint: "/unban 123456789" },
+    { c: "/xabar ", t: "Foydalanuvchiga xabar", hint: "/xabar 123456789 Matn" },
+    { c: "/top", t: "Konkurs reytingi" },
+    { c: "/reset_contest", t: "Konkursni nolga qaytarish", confirm: true },
+    { c: "/tugmalar", t: "Kanal postlari tugmalarini yangilash", confirm: true },
+    { c: "/katalog", t: "Katalog holati" },
+    { c: "/model_qosh ", t: "Model qo'shish", hint: "/model_qosh Chevrolet | Captiva" },
+    { c: "/test_top3", t: "Sinov: TOP-3 posti", confirm: true },
+    { c: "/test_analytics", t: "Sinov: analitika", confirm: true },
+    { c: "/test_chart", t: "Sinov: narx grafigi", confirm: true },
+    { c: "/test_topsearch", t: "Sinov: top qidiruvlar", confirm: true },
+    { c: "/test_sellcall", t: "Sinov: «Sotyapsizmi?» posti", confirm: true },
+    { c: "/test_newbump", t: "Sinov: UP eslatmasi", confirm: true },
+    { c: "/test_up", t: "Sinov: UP", confirm: true },
+  ];
+  function screenAdminCmd() {
+    if (!me || !me.isAdmin) { replaceTo("/"); return; }
+    app.appendChild(h("h1", { class: "page", text: "Buyruqlar" }));
+    app.appendChild(h("p", { class: "page-sub", text: "Botdagi admin buyruqlari — xuddi botda yozgandek ishlaydi." }));
+    var inp = h("input", { class: "input", placeholder: "/buyruq ...", "aria-label": "Buyruq", autocapitalize: "off", autocomplete: "off" });
+    var feed = h("div", { class: "bot-feed" });
+    var btn = h("button", { type: "button", class: "btn", text: "Bajarish", onclick: run });
+    function run() {
+      var line = inp.value.trim(); if (!line) return;
+      if (line[0] !== "/") line = "/" + line;
+      var c = ADMIN_COMMANDS.find(function (x) { return line.indexOf(x.c.trim()) === 0; });
+      var go2 = function () {
+        feed.insertBefore(h("div", { class: "bot-msg mine", text: line }), feed.firstChild);
+        btn.disabled = true;
+        api("/api/admin/command", { json: { line: line } }).then(function (r) {
+          btn.disabled = false;
+          var box = h("div", { class: "bot-msg" });
+          if (!r.ok) box.appendChild(h("p", { text: r.error || "Xato" }));
+          (r.alerts || []).forEach(function (a) { box.appendChild(h("p", { text: a })); });
+          (r.messages || []).forEach(function (msg) {
+            if (msg.url && msg.type === "photo") box.appendChild(h("button", { type: "button", class: "bot-img", onclick: function () { viewImage([msg.url], 0); } }, [h("img", { src: msg.url, alt: "" })]));
+            if (msg.text) box.appendChild(safeHtml(msg.text));
+          });
+          if (r.ok && !(r.messages || []).length && !(r.alerts || []).length) box.appendChild(h("p", { text: "✅ Bajarildi" }));
+          feed.insertBefore(box, feed.children[1] || null);
+        });
+      };
+      if (c && c.confirm) confirmBox(line + " bajarilsinmi? Kanalga yoki foydalanuvchilarga xabar ketishi mumkin.", go2); else go2();
+    }
+    inp.addEventListener("keydown", function (e) { if (e.key === "Enter") run(); });
+    app.appendChild(h("div", { class: "a-cmd" }, [inp, btn]));
+    app.appendChild(h("div", { class: "chips a-cmd-chips" }, ADMIN_COMMANDS.map(function (c) {
+      return h("button", { type: "button", class: "chip", title: c.t, onclick: function () { inp.value = c.hint ? c.c : c.c; inp.focus(); if (c.hint) toast("Masalan: " + c.hint); } }, [c.c.trim(), h("small", { text: " · " + c.t })]);
+    })));
+    app.appendChild(feed);
+  }
+
+  // =====================================================================
   // Navigatsiya
   // =====================================================================
   var TABS = [
@@ -2060,12 +2697,14 @@
   function renderTabbar(activeKey) {
     tabbar.innerHTML = "";
     var inner = h("div", { class: "tabbar-in" });
-    TABS.forEach(function (t) {
+    var tabs = TABS.slice();
+    if (me && me.isAdmin) tabs.push({ key: "admin", path: "/admin", label: "Admin", icon: "shield", badge: adminSum && adminSum.queue ? adminSum.queue.total : 0 });
+    tabs.forEach(function (t) {
       inner.appendChild(h("button", { type: "button", class: "tab" + (t.sell ? " sell" : ""), "aria-current": t.key === activeKey ? "page" : null, onclick: function () {
         if (t.key === activeKey) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
         haptic("select");
         if (t.sell) go(t.path); else replaceTo(t.path);
-      } }, [t.sell ? h("span", { class: "dot" }, [icon(t.icon)]) : icon(t.icon), t.label]));
+      } }, [t.sell ? h("span", { class: "dot" }, [icon(t.icon)]) : icon(t.icon), t.label, t.badge ? h("span", { class: "tab-badge", text: t.badge > 99 ? "99+" : String(t.badge) }) : null]));
     });
     tabbar.appendChild(inner);
   }
@@ -2086,8 +2725,16 @@
     [/^\/dealer$/, screenDealer, { parent: "/services" }],
     [/^\/salon-ad$/, screenSalonAd, { parent: "/services" }],
     [/^\/salon\/(\d+)$/, screenSalon, { parent: "/" }],
+    // 🖥 Admin
+    [/^\/admin$/, screenAdminHome, { tab: "admin" }],
+    [/^\/admin\/queue$/, screenAdminQueue, { parent: "/admin" }],
+    [/^\/admin\/bot$/, screenAdminBot, { parent: "/admin" }],
+    [/^\/admin\/users$/, screenAdminUsers, { parent: "/admin" }],
+    [/^\/admin\/user\/(\d+)$/, screenAdminUser, { parent: "/admin/users" }],
+    [/^\/admin\/broadcast$/, screenAdminBroadcast, { parent: "/admin" }],
+    [/^\/admin\/cmd$/, screenAdminCmd, { parent: "/admin" }],
   ];
-  var cleanup = null;
+  var cleanup = null, currentTab = null;
   function render() {
     var raw = location.hash.slice(1) || "/";
     var qi = raw.indexOf("?");
@@ -2105,6 +2752,7 @@
     var isTab = !!meta.tab;
     document.body.classList.toggle("has-tabbar", isTab);
     tabbar.hidden = !isTab;
+    currentTab = isTab ? meta.tab : null;
     if (isTab) renderTabbar(meta.tab);
     if (inTelegram && tg.BackButton) { if (isTab) tg.BackButton.hide(); else tg.BackButton.show(); }
     app.innerHTML = "";
@@ -2131,7 +2779,7 @@
   function startRoute(p) {
     var m = /^ad_(\d+)$/.exec(p);
     if (m) return "/ad/" + m[1];
-    return { "new": "/new", evaluate: "/evaluate", my: "/my", services: "/services", credit: "/credit" }[p] || null;
+    return { "new": "/new", evaluate: "/evaluate", my: "/my", services: "/services", credit: "/credit", admin: "/admin", admin_queue: "/admin/queue" }[p] || null;
   }
   function boot() {
     app.innerHTML = ""; app.appendChild(skeleton());
@@ -2160,6 +2808,8 @@
       }
       if (!window.__routerOn) { window.__routerOn = true; window.addEventListener("hashchange", render); }
       render();
+      // Admin: pastki menyudagi «Admin» yonida kutayotganlar soni
+      if (m.isAdmin) loadAdminSummary().then(function () { if (!tabbar.hidden && currentTab) renderTabbar(currentTab); });
     });
   }
   boot();
