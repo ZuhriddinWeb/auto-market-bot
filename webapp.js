@@ -26,6 +26,20 @@ const crypto = require("crypto");
 
 let axios = null, sharp = null;
 try { axios = require("axios"); } catch (e) {}
+// Telegram fayl serveridan yuklash: aloqa uzilsa (ECONNRESET, timeout, 5xx) 3 martagacha qayta urinadi
+async function tgGet(url, tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try { return await axios.get(url, { responseType: "arraybuffer", timeout: 20000 }); }
+    catch (e) {
+      last = e;
+      const st = e.response && e.response.status;
+      if (!(["ECONNRESET", "ETIMEDOUT", "ECONNABORTED", "EAI_AGAIN", "EPIPE"].includes(e.code) || (st && st >= 500) || st === 429)) break;
+      await new Promise((r) => setTimeout(r, 600 * (i + 1)));
+    }
+  }
+  throw last;
+}
 try { sharp = require("sharp"); } catch (e) {}
 
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;   // 10 MB (forma rasmlarni oldindan kichraytiradi)
@@ -402,7 +416,7 @@ function startWebApp(deps) {
       const fileId = rows[0] ? photoList(rows[0])[idx] : null;
       if (!fileId || !axios) { res.writeHead(404); return res.end(); }
       const file = await bot.api.getFile(fileId);
-      const resp = await axios.get(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`, { responseType: "arraybuffer", timeout: 15000 });
+      const resp = await tgGet(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`);
       buf = Buffer.from(resp.data);
       if (sharp) {
         try { buf = await sharp(buf).rotate().resize({ width: w, withoutEnlargement: true }).jpeg({ quality: 78 }).toBuffer(); } catch (e) {}
@@ -943,7 +957,7 @@ function startWebApp(deps) {
         const fid = sa.mediaType === "photo" ? sa.mediaId : sa.thumbId;
         if (!fid) { res.writeHead(404); return res.end(); }
         const file = await bot.api.getFile(fid);
-        const resp = await axios.get(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`, { responseType: "arraybuffer", timeout: 15000 });
+        const resp = await tgGet(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`);
         buf = Buffer.from(resp.data);
         if (sharp) { try { buf = await sharp(buf).rotate().resize({ width: 960, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer(); } catch (e) {} }
         salonMediaCache.set(id, buf);
@@ -1062,7 +1076,7 @@ function startWebApp(deps) {
     if (!buf) {
       try {
         const file = await bot.api.getFile(fid);
-        const resp = await axios.get(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`, { responseType: "arraybuffer", timeout: 15000 });
+        const resp = await tgGet(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`);
         buf = Buffer.from(resp.data);
         if (sharp) { try { buf = await sharp(buf).rotate().resize({ width: w, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer(); } catch (e) {} }
         adminFileCache.set(key, buf);

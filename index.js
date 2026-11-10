@@ -6,6 +6,33 @@ const sharp = require("sharp");
 const axios = require("axios");
 const fs = require("fs");
 const crypto = require("crypto");
+const util = require("util");
+// 🔒 Loglarda bot tokeni ko'rinmasin: har qanday console.* chiqishida token yashiriladi,
+// axios/HTTP xatolarining ulkan obyekti esa bitta qisqa qatorga aylantiriladi.
+{
+  const TOKEN = String(process.env.BOT_TOKEN || "");
+  const redact = (str) => {
+    let t = String(str);
+    if (TOKEN) t = t.split(TOKEN).join("***TOKEN***");
+    return t.replace(/bot\d{6,}:[A-Za-z0-9_-]{30,}/g, "bot***TOKEN***");
+  };
+  const compact = (a) => {
+    if (a && (a.isAxiosError || (a.config && (a.request || a.response)))) {
+      const st = a.response ? ` ${a.response.status}` : "";
+      const method = a.config && a.config.method ? a.config.method.toUpperCase() + " " : "";
+      const url = a.config && a.config.url ? String(a.config.url).replace(/\/file\/bot[^/]+\//, "/file/bot***/") : "";
+      return redact(`[HTTP xato] ${a.code || ""}${st} ${a.message} — ${method}${url}`);
+    }
+    if (a instanceof Error) return redact(a.stack || a.message);
+    if (typeof a === "string") return redact(a);
+    if (a && typeof a === "object") return redact(util.inspect(a, { depth: 3, breakLength: 140 }));
+    return a;
+  };
+  for (const level of ["log", "info", "warn", "error"]) {
+    const orig = console[level].bind(console);
+    console[level] = (...args) => orig(...args.map(compact));
+  }
+}
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const path = require("path");
 process.env.FONTCONFIG_PATH = path.join(__dirname, "fonts");
@@ -970,10 +997,30 @@ async function deleteMsgs(ctx, msgIds) {
 // Watermark kesh
 let cachedWatermarkText = null; 
 
+// Telegram'dan fayl yuklash: aloqa uzilsa (ECONNRESET, timeout, 5xx) 3 martagacha qayta urinadi
+const RETRY_CODES = new Set(["ECONNRESET", "ETIMEDOUT", "ECONNABORTED", "EAI_AGAIN", "ENOTFOUND", "EPIPE", "ECONNREFUSED", "ERR_SOCKET_CONNECTION_TIMEOUT"]);
+async function downloadBuffer(url, tries = 3) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await axios.get(url, { responseType: "arraybuffer", timeout: 20000 });
+      return Buffer.from(res.data);
+    } catch (e) {
+      lastErr = e;
+      const st = e.response && e.response.status;
+      if (!(RETRY_CODES.has(e.code) || (st && st >= 500) || st === 429)) break; // 404 kabi — qayta urinish foydasiz
+      await new Promise((r) => setTimeout(r, 700 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
 async function createCollage(photoUrls, badgeInfo = null) {
-  const buffers = await Promise.all(
-    photoUrls.map((url) => axios.get(url, { responseType: "arraybuffer" }).then((res) => res.data))
-  );
+  // Bitta rasm yuklanmasa ham kollaj qolganlaridan yasaladi (hammasi yuklanmasa — xato)
+  const results = await Promise.allSettled(photoUrls.map((url) => downloadBuffer(url)));
+  const buffers = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
+  const failedN = results.length - buffers.length;
+  if (failedN) console.error(`Kollaj: ${failedN} ta rasm yuklanmadi (${results.find((r) => r.status === "rejected").reason.code || "xato"}), qolganlaridan yasaldi.`);
+  if (!buffers.length) throw results.find((r) => r.status === "rejected").reason;
 
   const layoutParams = [];
   const canvasWidth = 1200;
@@ -1492,10 +1539,12 @@ async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot", recei
     adminCaption = makeCaption({ ...ad, history: ad.history.slice(0, keep) + "…" });
   }
 
-  const photoUrls = await getPhotoUrls(ad.photos);
-  const adminCollage = await createCollage(photoUrls);
+  // Kollaj yasalmasa (Telegram'dan yuklab bo'lmasa) — birinchi rasm file_id bilan yuboriladi, e'lon yo'qolmaydi
+  let adminCollage = null;
+  try { adminCollage = await createCollage(await getPhotoUrls(ad.photos)); }
+  catch (e) { console.error("Admin uchun kollaj yasalmadi, birinchi rasm yuboriladi:", e.code || e.message); }
   try {
-    const adminMsg = await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
+    const adminMsg = await bot.api.sendPhoto(ADMIN_ID, adminCollage ? new InputFile(adminCollage) : ad.photos[0], {
       caption: adminCaption, reply_markup: adminKb, parse_mode: "HTML",
     });
     if (ad.videoId) {
@@ -1809,12 +1858,14 @@ async function submitAdEditToAdmin({ adId, ad, userId, firstName, source = "bot"
   );
   const editId = result.insertId;
 
-  const photoUrls = await getPhotoUrls(ad.photos);
-  const adminCollage = await createCollage(photoUrls);
+  // Kollaj yasalmasa (Telegram'dan yuklab bo'lmasa) — birinchi rasm file_id bilan yuboriladi, e'lon yo'qolmaydi
+  let adminCollage = null;
+  try { adminCollage = await createCollage(await getPhotoUrls(ad.photos)); }
+  catch (e) { console.error("Admin uchun kollaj yasalmadi, birinchi rasm yuboriladi:", e.code || e.message); }
   try {
     let adminCaption = `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 <b>Eski ID: ${own.ad.id}</b>\n\n${caption}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a>${countText}${urgentTextEdit}${sourceText}`;
     if (adminCaption.length > 1020) adminCaption = adminCaption.slice(0, 1000) + "…";
-    const adminMsg = await bot.api.sendPhoto(ADMIN_ID, new InputFile(adminCollage), {
+    const adminMsg = await bot.api.sendPhoto(ADMIN_ID, adminCollage ? new InputFile(adminCollage) : ad.photos[0], {
       caption: adminCaption,
       reply_markup: new InlineKeyboard().text("✅ O'zgarishni tasdiqlash", `approve_edit:${editId}`).text("❌ Rad etish", `reject_edit:${editId}`),
       parse_mode: "HTML",
@@ -7199,7 +7250,7 @@ setInterval(checkVipExpiry, 10 * 60 * 1000).unref();
 setTimeout(checkVipExpiry, 60 * 1000).unref();
 
 setInterval(() => runScheduledPosts(new Date()), 60 * 1000 * 30);
-module.exports = { runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds }; // testlar uchun
+module.exports = { runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
 
 // ==============================================================
 // 🧯 JAVOBSIZ TUGMALAR (eng oxirida turishi shart — boshqa handlerlardan keyin)
