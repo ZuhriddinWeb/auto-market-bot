@@ -1025,7 +1025,17 @@ function startWebApp(deps) {
     sendJson(res, 200, { ok: true,
       queue: { ads, edits, bumps, sold, payments: pays, salons, dealers, total: ads + edits + bumps + sold + pays + salons + dealers },
       stats: { users, usersToday, activeAds, adsToday, soldWeek, dealers: dealersN, banned, income30: income30 + salonIncome30 + paidAds30 },
-      awaitingInput: A.adminAwaiting(), broadcast: A.broadcastStatus() });
+      awaitingInput: A.adminAwaiting(), broadcast: A.broadcastStatus(),
+      maintenance: deps.maintenance ? deps.maintenance.info() : { on: false } });
+  }
+
+  // 🛠 Texnik ishlar rejimini yoqish / o'chirish (kanalga xabar ham shu yerda ketadi)
+  async function handleAdminMaintenance(req, res, user) {
+    if (!needAdmin(res, user)) return;
+    if (!deps.maintenance) return sendJson(res, 400, { ok: false, error: "Bu imkoniyat mavjud emas." });
+    const body = await readJson(req);
+    const r = await deps.maintenance.set(!!(body && body.on));
+    sendJson(res, r.ok ? 200 : 409, r);
   }
 
   async function handleAdminQueue(req, res, user) {
@@ -1250,6 +1260,7 @@ function startWebApp(deps) {
     ["GET", /^\/api\/salon-ads$/, (q, s, u) => handleSalonList(q, s, u)],
     // 🖥 Admin paneli
     ["GET", /^\/api\/admin\/summary$/, (q, s, u) => handleAdminSummary(q, s, u)],
+    ["POST", /^\/api\/admin\/maintenance$/, (q, s, u) => handleAdminMaintenance(q, s, u)],
     ["GET", /^\/api\/admin\/queue$/, (q, s, u) => handleAdminQueue(q, s, u)],
     ["POST", /^\/api\/admin\/action$/, (q, s, u) => handleAdminAction(q, s, u)],
     ["POST", /^\/api\/admin\/text$/, (q, s, u) => handleAdminText(q, s, u)],
@@ -1298,6 +1309,12 @@ function startWebApp(deps) {
       if (p.startsWith("/api/")) {
         const user = validateInitData(req.headers["x-telegram-init-data"], BOT_TOKEN);
         if (!user) return sendJson(res, 401, { ok: false, error: "Ilovani Telegram ichida, bot orqali oching." });
+        // 🛠 Texnik ishlar: oddiy foydalanuvchilar uchun ilova yopiq (admin odatdagidek ishlaydi)
+        const MT = deps.maintenance;
+        if (MT && MT.info().on && user.id !== ADMIN_ID) {
+          MT.remember(user.id);
+          return sendJson(res, 503, { ok: false, maintenance: true, error: MT.text, channelUrl: CHANNEL_URL });
+        }
         for (const [method, re, handler] of routes) {
           const m = req.method === method && p.match(re);
           if (m) return await handler(req, res, user, m, url);

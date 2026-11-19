@@ -569,6 +569,19 @@ button.tariff:active { transform: scale(.99); }
 .chip.on { background: var(--ink); color: var(--surface); box-shadow: none; }
 .a-badge { display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 9px; background: #ff3b30; color: #fff; font: 700 11px/18px var(--font); text-align: center; }
 .a-tabs { margin: 0 -16px 12px; padding: 0 16px; }
+/* 🛠 Texnik ishlar kartasi (admin) */
+.a-maint { padding: 12px 14px; border-radius: var(--r-m); background: var(--surface); box-shadow: 0 0 0 1px var(--line); margin-bottom: 12px; display: grid; gap: 10px; }
+.a-maint.on { background: #fff4e5; box-shadow: 0 0 0 1.5px #ff9500; }
+.a-m-head { display: flex; align-items: center; gap: 10px; }
+.a-m-head b { display: block; font-size: 15px; color: var(--ink); }
+.a-maint.on .a-m-head b { color: #b25e00; }
+.a-m-head span:not(.a-m-dot) { display: block; font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+.a-m-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: #34c759; box-shadow: 0 0 0 4px rgba(52,199,89,.18); }
+.a-maint.on .a-m-dot { background: #ff9500; box-shadow: 0 0 0 4px rgba(255,149,0,.22); }
+.a-maint .btn { width: 100%; }
+.btn.a-m-on { background: #34c759; color: #fff; }
+[data-theme="dark"] .a-maint.on { background: rgba(255,149,0,.12); }
+[data-theme="dark"] .a-maint.on .a-m-head b { color: #ffb340; }
 .a-queue { display: block; width: 100%; text-align: left; border: 0; padding: 14px 14px 12px; border-radius: var(--r-m); background: var(--surface); color: var(--ink); cursor: pointer; box-shadow: 0 0 0 1px var(--line); margin-bottom: 12px; font: inherit; }
 .a-queue.has { background: linear-gradient(135deg, #1667d9, #0b3f9a); color: #fff; box-shadow: 0 6px 18px rgba(22,103,217,.28); }
 .a-q-head { display: flex; align-items: center; gap: 12px; }

@@ -34,9 +34,31 @@ const util = require("util");
   }
 }
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+// Kanaldan qo'lda o'chirilgan postlar (qidiruvda qayta-qayta copyMessage qilmaslik uchun)
+const missingChannelPosts = new Set();
 const path = require("path");
 process.env.FONTCONFIG_PATH = path.join(__dirname, "fonts");
 process.env.FONTCONFIG_FILE = path.join(__dirname, "fonts", "fonts.conf");
+// Fontconfig «ambiguous path» ogohlantirishi: fonts.conf dagi nisbiy <dir>/<cachedir> yo'llarini
+// (avvalgidek ishchi papkaga nisbatan) to'liq yo'lga aylantirib, vaqtinchalik nusxasini ishlatamiz.
+try {
+  const fsSync = require("fs");
+  const os = require("os");
+  const confSrc = process.env.FONTCONFIG_FILE;
+  if (fsSync.existsSync(confSrc)) {
+    const fixed = fsSync.readFileSync(confSrc, "utf8").replace(
+      /<(dir|cachedir)((?:\s+[^>]*)?)>([^<]+)<\/\1>/g,
+      (m, tag, attrs, val) => {
+        const v = val.trim();
+        if (/prefix=/.test(attrs) || path.isAbsolute(v) || v.startsWith("~")) return m;
+        return `<${tag}${attrs}>${path.resolve(process.cwd(), v)}</${tag}>`;
+      }
+    );
+    const confTmp = path.join(os.tmpdir(), "avto-bot-fonts.conf");
+    fsSync.writeFileSync(confTmp, fixed);
+    process.env.FONTCONFIG_FILE = confTmp;
+  }
+} catch (e) { /* bo'lmasa — asl fonts.conf ishlatiladi */ }
 const bot = new Bot(process.env.BOT_TOKEN);
 
 // 🚪 Global tugmalar, menyu matnlari va buyruqlar ro'yxati — «tugallanmagan suhbatdan chiqish» uchun
@@ -213,6 +235,8 @@ const dbReady = (async () => {
     `);
     await loadBotSettings();
     // Kanaldagi «Narxga baho» reaksiyalari (🔥 arzon · 👍 normal · 🤔 qimmat) — har bir e'lon uchun soni
+    // 🛠 Texnik ishlar paytida botga yozganlar — bot yoqilganda ularga «ishlayapti» xabari boriladi
+    await db.execute("CREATE TABLE IF NOT EXISTS maint_waiters (userId BIGINT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
     await db.execute(`
       CREATE TABLE IF NOT EXISTS admin_queue (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -321,6 +345,30 @@ const dbReady = (async () => {
 
 bot.catch((err) => console.error(`Хатолик:`, err.error));
 bot.use(session({ initial: () => ({}) }));
+// 🛠 Texnik ishlar paytida oddiy foydalanuvchilarga faqat ogohlantirish ko'rsatiladi (admin odatdagidek ishlaydi).
+// Kanal reaksiyalari, to'lovlar va boshqa xizmat yangilanishlari to'xtatilmaydi.
+const maintReplied = new Map(); // userId -> oxirgi javob vaqti (ketma-ket yozsa, har biriga javob bermaslik uchun)
+bot.use(async (ctx, next) => {
+  if (!isMaintenance() || !ctx.from || ctx.from.id === ADMIN_ID) return next();
+  if (ctx.preCheckoutQuery || ctx.message?.successful_payment) return next();
+  if (ctx.callbackQuery) {
+    if (ctx.callbackQuery.message?.chat?.type === "private") maintRemember(ctx.from.id);
+    await ctx.answerCallbackQuery({ text: "🛠 " + MAINT_PLAIN, show_alert: true }).catch(() => {});
+    return;
+  }
+  if (ctx.inlineQuery) { await ctx.answerInlineQuery([], { cache_time: 10 }).catch(() => {}); return; }
+  if (ctx.message && ctx.chat?.type === "private") {
+    maintRemember(ctx.from.id);
+    const now = Date.now(), last = maintReplied.get(ctx.from.id) || 0;
+    if (now - last > 15000) {
+      maintReplied.set(ctx.from.id, now);
+      if (maintReplied.size > 5000) maintReplied.clear();
+      await ctx.reply(MAINT_USER_TEXT, { parse_mode: "HTML" }).catch(() => {});
+    }
+    return;
+  }
+  return next();
+});
 const LOG_CHANNEL_ID = "-1001742614612";
 
 // ==============================================================
@@ -348,6 +396,67 @@ async function setBotSetting(name, value) {
   value = String(value);
   await db.execute("INSERT INTO bot_settings (name, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)", [name, value]);
   botSettings.set(name, value);
+}
+// ==============================================================
+// 🛠 TEXNIK ISHLAR REJIMI (admin botni vaqtincha o'chiradi / yoqadi)
+// Yoqilganda: kanalga «Texnik ishlar» xabari, foydalanuvchilar bot va ilovada shu xabarni ko'radi.
+// O'chirilganda: kanalga «Bot ishlayapti» xabari + shu vaqtda botga yozganlarga alohida xabar.
+// Holat bazada saqlanadi — bot qayta ishga tushsa ham (masalan, yangilanish paytida) saqlanib qoladi.
+// ==============================================================
+const MAINT_USER_TEXT =
+  "🛠 <b>Botda texnik ishlar olib borilmoqda</b>\n\n" +
+  "Bot va ilova vaqtincha ishlamaydi. Ishlar tugashi bilan sizga shu yerda xabar beramiz.\n\n" +
+  "📢 Yangiliklar kanalimizda: @engarzonidamoshina\n\nNoqulaylik uchun uzr so'raymiz! 🙏";
+const MAINT_PLAIN = "Botda texnik ishlar olib borilmoqda. Bot va ilova vaqtincha ishlamaydi — ishlar tugashi bilan qayta ochiladi. Noqulaylik uchun uzr so'raymiz!";
+const MAINT_CHANNEL_ON =
+  "🛠 <b>Texnik ishlar</b>\n\n" +
+  "Hurmatli obunachilar! Hozir botimizda texnik ishlar olib borilmoqda — bot va ilova vaqtincha ishlamaydi.\n\n" +
+  "Ishlar tugashi bilan shu kanalda xabar beramiz. Noqulaylik uchun uzr so'raymiz! 🙏";
+const MAINT_CHANNEL_OFF =
+  "✅ <b>Bot yana ishlayapti!</b>\n\n" +
+  "Texnik ishlar yakunlandi — bot va ilova odatdagidek ishlamoqda. E'lon berishingiz, qidirishingiz mumkin 🚗";
+function isMaintenance() { return botSettings.get("maint:on") === "1"; }
+function maintenanceInfo() { return { on: isMaintenance(), since: isMaintenance() ? Number(botSettings.get("maint:since")) || null : null }; }
+function maintRemember(userId) {
+  if (!userId || userId === ADMIN_ID) return;
+  db.execute("INSERT IGNORE INTO maint_waiters (userId) VALUES (?)", [userId]).catch(() => {});
+}
+// Texnik ishlar paytida yozganlarga «bot ishlayapti» xabari (fonda, sekin — Telegram limitiga tushmaslik uchun)
+async function notifyMaintWaiters() {
+  let rows = [];
+  try { [rows] = await db.execute("SELECT userId FROM maint_waiters"); await db.execute("DELETE FROM maint_waiters"); } catch (e) { return 0; }
+  (async () => {
+    for (const r of rows) {
+      await bot.api.sendMessage(r.userId, "✅ <b>Bot yana ishlayapti!</b>\n\nTexnik ishlar yakunlandi — endi botdan va ilovadan odatdagidek foydalanishingiz mumkin. Kutganingiz uchun rahmat! 🙏", { parse_mode: "HTML", reply_markup: mainMenu }).catch(() => {});
+      await new Promise((r2) => setTimeout(r2, 60));
+    }
+  })();
+  return rows.length;
+}
+let maintBusy = false;
+async function setMaintenance(on) {
+  on = !!on;
+  if (maintBusy) return { ok: false, error: "Hozir bajarilyapti, biroz kuting." };
+  if (on === isMaintenance()) return { ok: true, changed: false, ...maintenanceInfo() };
+  maintBusy = true;
+  try {
+    await setBotSetting("maint:on", on ? "1" : "0");
+    if (on) await setBotSetting("maint:since", Date.now());
+    let channelOk = true;
+    try {
+      const extra = { parse_mode: "HTML", disable_web_page_preview: true };
+      if (!on) extra.reply_markup = new InlineKeyboard().url("🤖 Botni ochish", `https://t.me/${BOT_LINK_USERNAME}`);
+      await bot.api.sendMessage(CHANNEL_ID, on ? MAINT_CHANNEL_ON : MAINT_CHANNEL_OFF, extra);
+    } catch (e) {
+      channelOk = false;
+      console.error("Texnik ishlar xabarini kanalga yuborib bo'lmadi:", e.message);
+    }
+    const notified = on ? 0 : await notifyMaintWaiters();
+    console.log(on ? "🛠 Texnik ishlar rejimi YOQILDI" : `✅ Texnik ishlar rejimi O'CHIRILDI (${notified} kishiga xabar)`);
+    return { ok: true, changed: true, channelOk, notified, ...maintenanceInfo() };
+  } finally {
+    maintBusy = false;
+  }
 }
 async function setAutoOn(key, on) {
   await setBotSetting(`auto:${key}`, on ? "1" : "0");
@@ -2128,13 +2237,46 @@ const adminMenu = new InlineKeyboard()
   .text("📏 E'lon limiti (foydalanuvchilar)", "admin_adlimit").row()
   .text("💰 Narxlar va to'lovlar", "admin_prices").row()
   .text("⚙️ Sozlamalar (karta, havola, limitlar)", "admin_settings").row()
+  .text("🛠 Texnik ishlar (botni o'chirish / yoqish)", "maint_menu").row()
   .text("🚗 Katalog: marka, model, variantlar", "admin_catalog").row()
   .text("🛠 Boshqa buyruqlar (Qo'llanma)", "admin_help").row()
   .text("❌ Yopish", "admin_close");
 
 bot.command("admin", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
-  await ctx.reply("👨‍💻 <b>Boshqaruv paneliga xush kelibsiz!</b>\n\nQuyidagi tugmalar orqali botdagi barcha jarayonlarni birgina bosish bilan boshqarishingiz mumkin:", { reply_markup: adminMenu, parse_mode: "HTML" });
+  const warn = isMaintenance() ? "⚠️ <b>Texnik ishlar rejimi YOQILGAN</b> — foydalanuvchilar botdan foydalana olmayapti. O'chirish: «🛠 Texnik ishlar».\n\n" : "";
+  await ctx.reply(warn + "👨‍💻 <b>Boshqaruv paneliga xush kelibsiz!</b>\n\nQuyidagi tugmalar orqali botdagi barcha jarayonlarni birgina bosish bilan boshqarishingiz mumkin:", { reply_markup: adminMenu, parse_mode: "HTML" });
+});
+// 🛠 Texnik ishlar: holat va boshqaruv
+function maintView(note) {
+  const m = maintenanceInfo();
+  const since = m.since ? new Date(m.since + 5 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ") : "";
+  const text = (note ? note + "\n\n" : "") + (m.on
+    ? `🛠 <b>Texnik ishlar rejimi: YOQILGAN</b>${since ? `\n🕒 ${since} dan beri` : ""}\n\nFoydalanuvchilar bot va ilovadan foydalana olmaydi — ularga «texnik ishlar» xabari ko'rsatiladi. Siz (admin) odatdagidek ishlaysiz.\n\n<b>🟢 Botni yoqish</b> bosilsa:\n• kanalga «✅ Bot yana ishlayapti» xabari ketadi;\n• shu vaqtda botga yozganlarga ham xabar boradi.`
+    : `✅ <b>Bot ishlayapti</b> — hamma uchun ochiq.\n\n<b>🛠 Texnik ishlarni boshlash</b> bosilsa:\n• kanalga «🛠 Texnik ishlar» xabari ketadi;\n• foydalanuvchilar bot va ilovada «texnik ishlar olib borilmoqda» xabarini ko'radi;\n• siz (admin) odatdagidek ishlay olasiz.`);
+  const kb = new InlineKeyboard()
+    .text(m.on ? "🟢 Botni yoqish" : "🛠 Texnik ishlarni boshlash", m.on ? "maint_off" : "maint_on").row()
+    .text("🔙 Orqaga", "admin_back");
+  return { text, kb };
+}
+bot.callbackQuery("maint_menu", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  const { text, kb } = maintView();
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => ctx.reply(text, { parse_mode: "HTML", reply_markup: kb }));
+});
+bot.callbackQuery(/^maint_(on|off)$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  const on = ctx.match[1] === "on";
+  const r = await setMaintenance(on);
+  await ctx.answerCallbackQuery({ text: !r.ok ? r.error : !r.changed ? "Holat allaqachon shunday." : on ? "🛠 Texnik ishlar yoqildi" : "✅ Bot yoqildi", show_alert: !r.ok }).catch(() => {});
+  let note = "";
+  if (r.ok && r.changed) {
+    note = on ? "🛠 Texnik ishlar rejimi yoqildi." : `✅ Bot yoqildi.${r.notified ? ` ${r.notified} kishiga «bot ishlayapti» xabari yuborilmoqda.` : ""}`;
+    note += r.channelOk ? " Kanalga xabar yuborildi." : " ⚠️ Kanalga xabar yuborib bo'lmadi (bot kanalda admin ekanini tekshiring).";
+  }
+  const { text, kb } = maintView(note);
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => ctx.reply(text, { parse_mode: "HTML", reply_markup: kb }));
 });
 // Orqaga qaytish tugmasi
 bot.callbackQuery("admin_back", async (ctx) => {
@@ -3703,13 +3845,20 @@ async function searchCarConversation(conversation, ctx) {
                  .text(`📋 Ro'yxatga qaytish (${index + 1}/${sortedResults.length})`, "sr_list").row()
                  .text("✅ Qidiruvni yakunlash", "sr_done");
 
-             if (chosenAd.channelMsgId) {
+             if (chosenAd.channelMsgId && !missingChannelPosts.has(String(chosenAd.channelMsgId))) {
                  try {
                      const m = await ctx.api.copyMessage(ctx.chat.id, CHANNEL_ID, chosenAd.channelMsgId, { reply_markup: navKb });
                      viewMsgId = m.message_id;
                      return;
                  } catch (e) {
-                     console.error("Kanaldan nusxa olib bo'lmadi:", e.message);
+                     const desc = e.description || e.message || "";
+                     if (/message to copy not found|message not found/i.test(desc)) {
+                         // Kanal posti qo'lda o'chirilgan — har safar urinmaymiz, logga faqat bir marta yozamiz
+                         missingChannelPosts.add(String(chosenAd.channelMsgId));
+                         console.warn(`ℹ️ E'lon #${chosenAd.id}: kanal posti (${chosenAd.channelMsgId}) o'chirilgan — qidiruvda rasm bilan ko'rsatildi.`);
+                     } else {
+                         console.error("Kanaldan nusxa olib bo'lmadi:", desc);
+                     }
                  }
              }
              // Zaxira: kanalda post topilmasa, rasm + qisqa ma'lumot
@@ -7442,6 +7591,7 @@ dbReady.finally(async () => {
       logUserAction, getAdVotes,
       getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement, SALON_PLAN_DESC,
       // 🖥 Admin paneli (ilovada)
+      maintenance: { info: maintenanceInfo, set: setMaintenance, remember: maintRemember, text: MAINT_PLAIN },
       admin: { runAdminAction, runAdminText, runAdminCommand, cancelAdminInput, rejectAdWithReason, startBroadcast, broadcastStatus, adminAwaiting, adminBlobs, queueDone, isVipActive, fmtTash },
     });
   } catch (e) {

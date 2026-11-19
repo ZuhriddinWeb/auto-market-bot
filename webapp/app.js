@@ -145,11 +145,14 @@
       ta.remove();
     }
   }
-  function confirmBox(text) {
-    return new Promise(function (resolve) {
+  // Tasdiqlash oynasi: Promise qaytaradi; ikkinchi argument (cb) berilsa — «Ha» bosilganda chaqiriladi
+  function confirmBox(text, cb) {
+    var p = new Promise(function (resolve) {
       if (tg && tg.showConfirm && inTelegram) { try { tg.showConfirm(text, function (ok) { resolve(!!ok); }); return; } catch (e) {} }
       resolve(window.confirm(text));
     });
+    if (typeof cb === "function") p.then(function (ok) { if (ok) cb(); });
+    return p;
   }
 
   function api(path, opts) {
@@ -159,7 +162,18 @@
     if (opts.json !== undefined) { headers["Content-Type"] = "application/json"; body = JSON.stringify(opts.json); }
     return fetch(path, { method: opts.method || (opts.json !== undefined ? "POST" : "GET"), headers: headers, body: body })
       .then(function (r) { return r.json().catch(function () { return { ok: false, error: "Server javobi noto'g'ri." }; }); })
-      .catch(function () { return { ok: false, error: "Internet aloqasini tekshiring va qayta urinib ko'ring." }; });
+      .catch(function () { return { ok: false, error: "Internet aloqasini tekshiring va qayta urinib ko'ring." }; })
+      .then(function (j) { if (j && j.ok === false && j.maintenance === true) showMaintenance(j); return j; });
+  }
+  // 🛠 Texnik ishlar: ilova ishlayotgan paytda yoqilsa ham shu ekran chiqadi
+  var maintMode = null;
+  function showMaintenance(j) {
+    maintMode = j || maintMode || {};
+    if (typeof gate !== "function") return;
+    gate("🛠 Texnik ishlar olib borilmoqda", maintMode.error || "Bot va ilova vaqtincha ishlamaydi. Tez orada qayta ochiladi.", [
+      h("button", { type: "button", class: "btn", text: "Qayta tekshirish", onclick: function () { maintMode = null; boot(); } }),
+      maintMode.channelUrl ? h("button", { type: "button", class: "btn ghost", text: "Kanalni ochish", onclick: function () { openLink(maintMode.channelUrl); } }) : null,
+    ].filter(Boolean));
   }
   // Admin uchun log: faqat serverga bosilgan tugma haqida qisqa belgi yuboriladi (javob kutilmaydi)
   function logEvent(event, data) {
@@ -2106,9 +2120,35 @@
       { t: "Qo'llanma", s: "Barcha admin buyruqlari tavsifi", icon: "check", color: "#8e8e93", data: "admin_help" },
     ] },
   ];
-  function confirmBox(text, cb) {
-    if (inTelegram && tg.showConfirm) { try { tg.showConfirm(text, function (ok) { if (ok) cb(); }); return; } catch (e) {} }
-    if (window.confirm(text)) cb();
+  // 🛠 Texnik ishlar: botni foydalanuvchilar uchun vaqtincha o'chirish / qayta yoqish
+  function maintCard(mt) {
+    var since = "";
+    if (mt.on && mt.since) { var d = new Date(mt.since); since = " · " + ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2) + " dan beri"; }
+    var btn = h("button", { type: "button", class: "btn" + (mt.on ? " a-m-on" : " danger"), text: mt.on ? "🟢 Botni yoqish" : "🛠 Texnik ishlarni boshlash" });
+    btn.onclick = function () {
+      var msg = mt.on
+        ? "Bot hamma uchun yoqilsinmi? Kanalga «✅ Bot yana ishlayapti» xabari ketadi va shu vaqtda botga yozganlarga xabar boradi."
+        : "Texnik ishlar boshlansinmi? Kanalga «🛠 Texnik ishlar» xabari ketadi, foydalanuvchilar bot va ilovadan foydalana olmaydi (siz odatdagidek ishlaysiz).";
+      confirmBox(msg, function () {
+        btn.disabled = true; btn.textContent = "Bajarilmoqda…";
+        api("/api/admin/maintenance", { json: { on: !mt.on } }).then(function (r) {
+          if (!r || !r.ok) { btn.disabled = false; btn.textContent = mt.on ? "🟢 Botni yoqish" : "🛠 Texnik ishlarni boshlash"; toast((r && r.error) || "Bajarib bo'lmadi"); return; }
+          haptic("success");
+          toast(r.on ? "🛠 Texnik ishlar yoqildi" + (r.channelOk === false ? " (kanalga yuborilmadi!)" : "") : "✅ Bot yoqildi" + (r.notified ? " · " + r.notified + " kishiga xabar" : ""));
+          loadAdminSummary().then(function () { render(); });
+        });
+      });
+    };
+    return h("div", { class: "a-maint" + (mt.on ? " on" : "") }, [
+      h("div", { class: "a-m-head" }, [
+        h("span", { class: "a-m-dot", "aria-hidden": "true" }),
+        h("div", null, [
+          h("b", { text: mt.on ? "Texnik ishlar yoqilgan" : "Bot ishlayapti" }),
+          h("span", { text: mt.on ? "Foydalanuvchilar bot va ilovadan foydalana olmaydi" + since : "Hamma foydalanuvchilar uchun ochiq" }),
+        ]),
+      ]),
+      btn,
+    ]);
   }
   var adminSum = null;
   function loadAdminSummary() {
@@ -2169,6 +2209,7 @@
       body.innerHTML = "";
       if (!r || !r.ok) { body.appendChild(emptyState("Yuklab bo'lmadi", (r && r.error) || "", "Qayta urinish", function () { loadAdminSummary().then(draw); }, "gear")); return; }
       var q = r.queue, s = r.stats;
+      body.appendChild(maintCard(r.maintenance || { on: false }));
       // Kutayotganlar
       var qCard = h("button", { type: "button", class: "a-queue" + (q.total ? " has" : ""), onclick: function () { go("/admin/queue"); } }, [
         h("div", { class: "a-q-head" }, [h("span", { class: "a-q-num", text: String(q.total) }), h("div", null, [h("b", { text: q.total ? "Tasdiq kutayotganlar" : "Hammasi ko'rib chiqilgan" }), h("span", { text: q.total ? "Bosing — e'lonlar, cheklar va so'rovlar" : "Yangi so'rovlar kelsa shu yerda chiqadi" })]), icon("chev")]),
@@ -2743,6 +2784,7 @@
     if (cleanup) { try { cleanup(); } catch (e) {} cleanup = null; }
     hideActionBar();
     closeSheet();
+    if (maintMode) { showMaintenance(); return; }
     setMain(null);
     var route = null, match = null;
     for (var i = 0; i < ROUTES.length; i++) { match = path.match(ROUTES[i][0]); if (match) { route = ROUTES[i]; break; } }
@@ -2791,6 +2833,7 @@
     openLogged = true;
     Promise.all([api("/api/catalog"), api(mePath)]).then(function (res) {
       var c = res[0], m = res[1];
+      if (m && m.ok === false && m.maintenance === true) { showMaintenance(m); return; }
       if (!c.ok || !m.ok) { gate("Ma'lumotni yuklab bo'lmadi", (m && m.error) || (c && c.error) || "Qayta urinib ko'ring.", [h("button", { type: "button", class: "btn", text: "Qayta urinish", onclick: boot })]); return; }
       catalog = c; me = m;
       if (!m.subscribed) {
