@@ -234,6 +234,8 @@ const dbReady = (async () => {
       )
     `);
     await loadBotSettings();
+    // 👁 Ko'rishlar hisobi qachondan boshlangani (eslatma faqat to'liq 3 kunlik ma'lumot bo'lganda ketadi)
+    if (!botSettings.get("views:since")) await setBotSetting("views:since", Date.now()).catch(() => {});
     // Kanaldagi «Narxga baho» reaksiyalari (🔥 arzon · 👍 normal · 🤔 qimmat) — har bir e'lon uchun soni
     // 👁 Kim qaysi e'lonni qaysi kuni ko'rgani (bir odam sutkada bir marta hisoblanadi). kind: v = ko'rish, c = qo'ng'iroq/raqam
     await db.execute(`
@@ -397,7 +399,7 @@ async function loadBotSettings() {
 }
 // Avto-xabar yoqilganmi? (sukut bo'yicha — yoqilgan, ya'ni avvalgidek ishlaydi)
 // Sukut bo'yicha O'CHIQ turadiganlari (admin o'zi yoqmaguncha): kanal postidagi qo'shimcha tugmalar
-const AUTO_DEFAULT_OFF = new Set(["share_btn", "btn_admin"]);
+const AUTO_DEFAULT_OFF = new Set(["share_btn", "btn_admin", "views_nudge"]);
 function isAutoOn(key) {
   const v = botSettings.get(`auto:${key}`);
   if (v === undefined) return !AUTO_DEFAULT_OFF.has(key);
@@ -440,7 +442,10 @@ async function todayViews(adIds) {
 let nudgeRunning = false;
 async function nudgeLowViewAds() {
   const limit = viewsNudgeBelow();
-  if (!limit || nudgeRunning || isMaintenance()) return;
+  if (!isAutoOn("views_nudge") || !limit || nudgeRunning || isMaintenance()) return;
+  // Hisob boshlanganiga 3 kun bo'lmagan bo'lsa — eski e'lonlar uchun ma'lumot yo'q, «0 kishi ko'rdi» demaymiz
+  const since = Number(botSettings.get("views:since")) || Date.now();
+  if (Date.now() - since < 3 * 86400000) return;
   if (!PROMO_KINDS.some((k) => promoEnabled(k))) return;
   const h = new Date(Date.now() + 5 * 3600 * 1000).getUTCHours();
   if (h < 10 || h >= 20) return; // kechasi bezovta qilmaymiz
@@ -2387,6 +2392,7 @@ const AUTO_POSTS = [
   { key: "remind_new", group: "sotuvchi", btn: "Yangi e'lonni ko'tarish", title: "🆕 Yangi e'lonni ko'tarish taklifi", when: "12:00, e'lonning 1–3-kuni" },
   { key: "remind_price5", group: "sotuvchi", btn: "Narx maslahati (5-kun)", title: "💡 Narxni tushirish maslahati", when: "12:00, 5-kuni" },
   { key: "remind_up7", group: "sotuvchi", btn: "UP taklifi (7-kun)", title: "🔔 Tepaga ko'tarish (UP) taklifi", when: "12:00, 7-kuni" },
+  { key: "views_nudge", group: "sotuvchi", btn: "Kam ko'rilgan e'lon eslatmasi", title: "👀 «E'loningizni N kishi ko'rdi — ko'taring»", when: "10:00–20:00, e'lon 3 kunda kam ko'rilsa (bir marta)" },
   { key: "reaction_notify", group: "sotuvchi", btn: "Kanaldagi baho natijasi", title: "📊 «N kishi 🔥 arzon / 🤔 qimmat dedi»", when: "3, 10, 25… kishi baho berganda" },
   { key: "price_vote", group: "post", btn: "«Narxga baho bering» qatori", title: "👇 «Narxga baho bering: 🔥 · 👍 · 🤔»", when: "yangi va tahrirlangan e'lon matnida" },
   { key: "btn_sell", group: "post", btn: "«E'lon berish» tugmasi", title: "➕ «E'lon berish» tugmasi", when: "e'lon ostida, «Saqlash» yonida" },
@@ -2600,7 +2606,7 @@ function settingsView() {
     `🕗 TOP avto-UP vaqti: <b>${String(th.from).padStart(2, "0")}:00 – ${String(th.to).padStart(2, "0")}:00</b>\n` +
     `📢 Salon reklamasi: kuniga <b>${salonDailyLimit()} ta</b>\n\n` +
     `👁 Ko'rishlar soni xaridorga: <b>${viewsMinShow() ? `${viewsMinShow()} tadan boshlab` : "doim"}</b> ko'rinadi\n` +
-    `🚀 Kam ko'rilgan e'lon eslatmasi: <b>${viewsNudgeBelow() ? `3 kunda ${viewsNudgeBelow()} tadan kam bo'lsa` : "o'chirilgan"}</b>`;
+    `🚀 Kam ko'rilgan e'lon eslatmasi: <b>${!isAutoOn("views_nudge") ? "o'chirilgan" : viewsNudgeBelow() ? `yoqilgan, 3 kunda ${viewsNudgeBelow()} tadan kam bo'lsa` : "o'chirilgan (chegara 0)"}</b>\n<i>Yoqish / o'chirish: «⏰ Avto-xabarlar» → «Kam ko'rilgan e'lon eslatmasi»</i>`;
   const kb = new InlineKeyboard()
     .text("✏️ Karta raqami", "st_edit:card").text("✏️ Karta egasi", "st_edit:card_name").row()
     .text("✏️ Havola", "st_edit:invite").row()
@@ -7491,7 +7497,7 @@ setInterval(checkVipExpiry, 10 * 60 * 1000).unref();
 setTimeout(checkVipExpiry, 60 * 1000).unref();
 
 setInterval(() => runScheduledPosts(new Date()), 60 * 1000 * 30);
-module.exports = { nudgeLowViewAds, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
+module.exports = { nudgeLowViewAds, loadBotSettings, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
 
 // ==============================================================
 // 🧯 JAVOBSIZ TUGMALAR (eng oxirida turishi shart — boshqa handlerlardan keyin)
