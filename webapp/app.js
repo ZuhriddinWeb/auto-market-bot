@@ -750,6 +750,7 @@
         h("div", { class: "ad-title", text: ad.title + (ad.year ? ", " + ad.year : "") }),
         h("div", { class: "ad-sub" }, [
           when ? h("span", null, [icon("clock"), when]) : null,
+          ad.views ? h("span", null, [icon("eye"), fmtNum(ad.views) + " marta ko'rildi"]) : null,
           ad.saves > 0 ? h("span", null, [icon("heart"), ad.saves + " kishi saqlagan"]) : null,
           h("span", { text: "E'lon #" + ad.id }),
         ]),
@@ -1440,6 +1441,15 @@
     if (!v) return null;
     return h("div", { class: "votes", title: "Kanalda narxingizga berilgan baho: 🔥 arzon · 👍 normal · 🤔 qimmat", text: "Kanalda: 🔥 " + v.fire + " · 👍 " + v.ok + " · 🤔 " + v.think });
   }
+  // 👁 E'lon egasiga: ko'rishlar · bugun · qo'ng'iroq · saqlagan
+  function statsLine(it) {
+    var st = it.stats;
+    if (!st || it.status === "pending") return null;
+    var parts = ["👁 " + fmtNum(st.views) + (st.today ? " (bugun +" + st.today + ")" : "")];
+    if (st.contacts) parts.push("📞 " + st.contacts);
+    if (st.saves) parts.push("❤️ " + st.saves);
+    return h("div", { class: "votes", title: "Ko'rishlar (bir odam sutkada bir marta) · qo'ng'iroq qilganlar · saqlaganlar", text: parts.join(" · ") });
+  }
   function screenMy(m, query) {
     var tab = query.get("tab") || "ads";
     app.appendChild(h("h1", { class: "page", text: "Mening" }));
@@ -1461,7 +1471,7 @@
         r.items.forEach(function (it) {
           list.appendChild(h("button", { type: "button", class: "my-row", onclick: function () { go(it.status === "active" ? "/my/ad/" + it.id : "/ad/" + it.id); } }, [
             it.photo ? h("img", { src: it.photo, alt: "" }) : h("span", { class: "noimg" }),
-            h("span", { class: "body" }, [h("div", { class: "t", text: it.title + (it.year ? ", " + it.year : "") }), h("div", { class: "p", text: fmtPrice(it.price) }), votesLine(it), statusPill(it)]),
+            h("span", { class: "body" }, [h("div", { class: "t", text: it.title + (it.year ? ", " + it.year : "") }), h("div", { class: "p", text: fmtPrice(it.price) }), statsLine(it), votesLine(it), statusPill(it)]),
             h("span", { class: "chev" }, [icon("chev")]),
           ]));
         });
@@ -1547,9 +1557,20 @@
         if (!it) { app.appendChild(messageScreen("E'lon topilmadi", "Bu e'lon o'chirilgan yoki sizga tegishli emas.")); return; }
         app.appendChild(h("div", { class: "list", style: "margin-top:4px" }, [h("button", { type: "button", class: "my-row", onclick: function () { go("/ad/" + id); } }, [
           it.photo ? h("img", { src: it.photo, alt: "" }) : h("span", { class: "noimg" }),
-          h("span", { class: "body" }, [h("div", { class: "t", text: it.title + (it.year ? ", " + it.year : "") }), h("div", { class: "p", text: fmtPrice(it.price) }), votesLine(it), statusPill(it)]),
+          h("span", { class: "body" }, [h("div", { class: "t", text: it.title + (it.year ? ", " + it.year : "") }), h("div", { class: "p", text: fmtPrice(it.price) }), statsLine(it), votesLine(it), statusPill(it)]),
           h("span", { class: "chev" }, [icon("chev")]),
         ])]));
+        if (it.stats && it.status === "active") {
+          var st = it.stats;
+          app.appendChild(h("p", { class: "group-title", text: "Statistika" }));
+          app.appendChild(h("div", { class: "stat-row stat-4" }, [
+            h("div", { class: "stat" }, [h("b", { text: fmtNum(st.views) }), h("span", { text: "kishi ko'rdi" })]),
+            h("div", { class: "stat" }, [h("b", { text: (st.today ? "+" : "") + st.today }), h("span", { text: "bugun" })]),
+            h("div", { class: "stat" }, [h("b", { text: String(st.contacts) }), h("span", { text: "qo'ng'iroq / raqam" })]),
+            h("div", { class: "stat" }, [h("b", { text: String(st.saves) }), h("span", { text: "saqlagan" })]),
+          ]));
+          app.appendChild(h("p", { class: "page-sub stat-note", text: "Ilova va bot qidiruvidagi ko'rishlar: bir odam sutkada bir marta hisoblanadi. Kanaldagi ko'rishlar post tagida alohida ko'rinadi." }));
+        }
         if (it.status !== "active") { app.appendChild(h("p", { class: "page-sub", style: "margin-top:12px", text: it.status === "pending" ? "E'lon admin tekshiruvida. Tasdiqlangach shu yerdan boshqarasiz." : "E'lon sotilgan deb belgilangan." })); return; }
         if (it.editPending) app.appendChild(h("div", { class: "notice", style: "margin-top:12px" }, [h("span", { text: "⏳" }), h("div", null, [h("b", { text: "Tahriringiz admin tekshiruvida" }), h("span", { class: "s", text: "Tasdiqlangach kanaldagi e'lon yangilanadi." })])]));
 
@@ -2101,7 +2122,7 @@
     ] },
     { title: "Sozlash", items: [
       { t: "Narxlar va to'lovlar", s: "Statuslar, salon tariflari, pullik rejim", icon: "tag", color: "#34c759", data: "admin_prices" },
-      { t: "Sozlamalar", s: "Karta, havola, TOP vaqti, salon limiti", icon: "gear", color: "#8e8e93", data: "admin_settings" },
+      { t: "Sozlamalar", s: "Karta, havola, TOP vaqti, limitlar, ko'rishlar", icon: "gear", color: "#8e8e93", data: "admin_settings" },
       { t: "Katalog", s: "Marka, model, kraska, korobka, probeg", icon: "car", color: "#5856d6", data: "admin_catalog" },
       { t: "E'lon limiti", s: "Bitta foydalanuvchiga nechta faol e'lon", icon: "gauge", color: "#ff9500", data: "admin_adlimit" },
       { t: "Avto-xabarlar", s: "Bot o'zi yuboradigan xabarlar", icon: "clock", color: "#30b0c7", data: "admin_autoposts" },
@@ -2110,6 +2131,7 @@
       { t: "Statistika", s: "Foydalanuvchilar, e'lonlar, kanal", icon: "gauge", color: "#007aff", data: "admin_stats" },
       { t: "Konkurs (Top-10)", s: "Taklif qilganlar reytingi", icon: "gift", color: "#ff9500", data: "admin_top" },
       { t: "Top qidiruvlar", s: "Nimani ko'p qidirishyapti", icon: "search", color: "#34c759", data: "admin_topsearch" },
+      { t: "Eng ko'p ko'rilganlar", s: "Ko'rishlar va qo'ng'iroqlar reytingi", icon: "eye", color: "#ff9500", data: "admin_top_views" },
       { t: "Narx grafigi", s: "Kanalga grafik yuborish", icon: "calc", color: "#5856d6", data: "admin_chart", confirm: "Narx grafigi kanalga yuboriladi. Davom etasizmi?" },
       { t: "Haftalik analitika", s: "Kanalga yuborish", icon: "calendar", color: "#30b0c7", data: "admin_test_analytics", confirm: "Haftalik analitika kanalga yuboriladi. Davom etasizmi?" },
       { t: "Kunlik TOP-5", s: "Kanalga yuborish", icon: "star", color: "#ffb300", data: "admin_test_top5", confirm: "Kunlik TOP-5 kanalga yuboriladi. Davom etasizmi?" },

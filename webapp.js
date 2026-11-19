@@ -385,6 +385,17 @@ function startWebApp(deps) {
     ]);
     const photos = photoList(ad);
     logLine(user, `E'lonni ko'rdi: ${adLabel(ad)}${ad.status === "sold" ? " (sotilgan)" : ""}`, `ad:${ad.id}`);
+    // 👁 Ko'rishlar: egasi o'z statistikasini doim ko'radi; xaridorga — faqat admin belgilagan chegaradan boshlab
+    const V = deps.views;
+    let views = Number(ad.views) || 0, viewStats = null;
+    if (V) {
+      if (await V.record(ad, user.id)) views += 1;
+      if (isOwner) {
+        const today = await V.today([Number(ad.id)]);
+        viewStats = { views, contacts: Number(ad.contacts) || 0, today: today.get(Number(ad.id)) || 0 };
+      }
+    }
+    const showViews = viewStats ? views : V && views >= V.minShow() && views > 0 ? views : null;
     sendJson(res, 200, {
       ok: true,
       ad: {
@@ -399,6 +410,7 @@ function startWebApp(deps) {
         hasVideo: !!ad.videoId,
         dealer: dealer && dealer.is_dealer === 1 && dealer.dealer_paused !== 1 ? dealer.dealer_name : null,
         saves: Number(saves.cnt), isOwner: !!isOwner,
+        views: showViews, viewStats,
         market, // { count, avg, min, max } yoki null
       },
       similar,
@@ -681,10 +693,21 @@ function startWebApp(deps) {
         if (v) votes.set(Number(r.id), v);
       }));
     }
+    // 👁 Har bir e'lon statistikasi (faqat egasiga): ko'rishlar, bugun, qo'ng'iroqlar, saqlaganlar
+    const ids = rows.map(r => Number(r.id));
+    const today = deps.views && ids.length ? await deps.views.today(ids) : new Map();
+    const savesMap = new Map();
+    if (ids.length) {
+      try {
+        const [sv] = await db.execute(`SELECT adId, COUNT(*) AS c FROM favorites WHERE adId IN (${ids.map(() => "?").join(",")}) GROUP BY adId`, ids);
+        sv.forEach(x => savesMap.set(Number(x.adId), Number(x.c)));
+      } catch (e) {}
+    }
+    const statsOf = (r) => r.status === "pending" ? null : { views: Number(r.views) || 0, today: today.get(Number(r.id)) || 0, contacts: Number(r.contacts) || 0, saves: savesMap.get(Number(r.id)) || 0 };
     logLine(user, `Mening e'lonlarimni ochdi (${rows.length} ta)`, "my");
     sendJson(res, 200, {
       ok: true, freeUps: u?.free_ups || 0,
-      items: rows.map(r => ({ ...card(r, badges, null), editPending: editing.has(Number(r.id)), votes: votes.get(Number(r.id)) || null })),
+      items: rows.map(r => ({ ...card(r, badges, null), editPending: editing.has(Number(r.id)), votes: votes.get(Number(r.id)) || null, stats: statsOf(r) })),
     });
   }
 
@@ -1216,6 +1239,7 @@ function startWebApp(deps) {
       ad = rows[0] || null;
     }
     const adText = ad ? adLabel(ad) : `#${adId}`;
+    if (ad && (event === "call" || event === "copy_phone") && deps.views) deps.views.record(ad, user.id, "c"); // 📞 qiziqish statistikasi
     let text = null, key = null, win = 10 * 60 * 1000;
     if (event === "call" && adId) { text = `Qo'ng'iroq tugmasini bosdi 📞: ${adText}`; key = `call:${adId}`; win = 2 * 60 * 1000; }
     else if (event === "copy_phone" && adId) { text = `Sotuvchi raqamini nusxaladi: ${adText}`; key = `copy:${adId}`; win = 2 * 60 * 1000; }

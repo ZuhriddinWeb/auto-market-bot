@@ -235,6 +235,13 @@ const dbReady = (async () => {
     `);
     await loadBotSettings();
     // Kanaldagi «Narxga baho» reaksiyalari (🔥 arzon · 👍 normal · 🤔 qimmat) — har bir e'lon uchun soni
+    // 👁 Kim qaysi e'lonni qaysi kuni ko'rgani (bir odam sutkada bir marta hisoblanadi). kind: v = ko'rish, c = qo'ng'iroq/raqam
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS ad_hits (
+        adId INT NOT NULL, userId BIGINT NOT NULL, day DATE NOT NULL, kind CHAR(1) NOT NULL DEFAULT 'v',
+        PRIMARY KEY (adId, userId, day, kind), KEY idx_day (day)
+      )
+    `);
     // 🛠 Texnik ishlar paytida botga yozganlar — bot yoqilganda ularga «ishlayapti» xabari boriladi
     await db.execute("CREATE TABLE IF NOT EXISTS maint_waiters (userId BIGINT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
     await db.execute(`
@@ -324,6 +331,10 @@ const dbReady = (async () => {
       "ALTER TABLE ads ADD COLUMN old_price VARCHAR(255) DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN price_dropped_at TIMESTAMP NULL DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN is_hot INT DEFAULT 0",
+      // 👁 Ko'rishlar statistikasi
+      "ALTER TABLE ads ADD COLUMN views INT NOT NULL DEFAULT 0",
+      "ALTER TABLE ads ADD COLUMN contacts INT NOT NULL DEFAULT 0",
+      "ALTER TABLE ads ADD COLUMN views_nudged TINYINT NOT NULL DEFAULT 0",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -397,6 +408,64 @@ async function setBotSetting(name, value) {
   await db.execute("INSERT INTO bot_settings (name, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)", [name, value]);
   botSettings.set(name, value);
 }
+// ==============================================================
+// 👁 KO'RISHLAR STATISTIKASI
+// Bir odam bitta e'lonni sutkada bir marta «ko'rgan» hisoblanadi; e'lon egasi va admin hisobga olinmaydi.
+// Raqamlar har doim haqiqiy. Kam bo'lsa — xaridorga umuman ko'rsatilmaydi (chegarani admin belgilaydi),
+// e'lon egasi esa o'z statistikasini doim to'liq ko'radi.
+// ==============================================================
+const viewsMinShow = () => { const n = parseInt(botSettings.get("views:min_show"), 10); return Number.isFinite(n) && n >= 0 ? n : 30; };
+const viewsNudgeBelow = () => { const n = parseInt(botSettings.get("views:nudge_below"), 10); return Number.isFinite(n) && n >= 0 ? n : 30; };
+async function recordAdHit(ad, userId, kind = "v") {
+  try {
+    if (!ad || !userId || Number(ad.userId) === Number(userId) || Number(userId) === ADMIN_ID) return false;
+    if (ad.status !== "active") return false;
+    const [r] = await db.execute("INSERT IGNORE INTO ad_hits (adId, userId, day, kind) VALUES (?, ?, CURDATE(), ?)", [ad.id, userId, kind]);
+    if (!r || !r.affectedRows) return false;
+    await db.execute(`UPDATE ads SET ${kind === "c" ? "contacts = contacts + 1" : "views = views + 1"} WHERE id = ?`, [ad.id]);
+    return true;
+  } catch (e) { return false; }
+}
+// Egasiga: bugungi ko'rishlar (bir nechta e'lon uchun bitta so'rov)
+async function todayViews(adIds) {
+  const m = new Map();
+  if (!adIds.length) return m;
+  try {
+    const [rows] = await db.execute(`SELECT adId, COUNT(*) AS c FROM ad_hits WHERE kind = 'v' AND day = CURDATE() AND adId IN (${adIds.map(() => "?").join(",")}) GROUP BY adId`, adIds);
+    rows.forEach((r) => m.set(Number(r.adId), Number(r.c)));
+  } catch (e) {}
+  return m;
+}
+// Kam ko'rilgan e'lon egasiga: «e'loningizni ko'tarish» taklifi (bir marta, e'lon 3 kunlik bo'lganda)
+let nudgeRunning = false;
+async function nudgeLowViewAds() {
+  const limit = viewsNudgeBelow();
+  if (!limit || nudgeRunning || isMaintenance()) return;
+  if (!PROMO_KINDS.some((k) => promoEnabled(k))) return;
+  const h = new Date(Date.now() + 5 * 3600 * 1000).getUTCHours();
+  if (h < 10 || h >= 20) return; // kechasi bezovta qilmaymiz
+  nudgeRunning = true;
+  try {
+    const noPromo = PROMO_KINDS.map((k) => `(${PROMOS[k].col} IS NULL OR ${PROMOS[k].col} <= NOW())`).join(" AND ");
+    const [rows] = await db.execute(
+      `SELECT * FROM ads WHERE status = 'active' AND views_nudged = 0 AND views < ? AND created_at <= NOW() - INTERVAL 3 DAY AND created_at > NOW() - INTERVAL 10 DAY AND ${noPromo} ORDER BY created_at LIMIT 20`,
+      [limit]
+    );
+    for (const ad of rows) {
+      await db.execute("UPDATE ads SET views_nudged = 1 WHERE id = ?", [ad.id]);
+      const kb = new InlineKeyboard().text("🚀 E'lonni ko'tarish", `promo_menu:${ad.id}`);
+      await bot.api.sendMessage(ad.userId,
+        `👀 <b>${escapeHtml(ad.carDetails)}</b> e'loningizni hozircha <b>${Number(ad.views) || 0} kishi</b> ko'rdi.\n\n` +
+        "Ko'proq xaridor ko'rishi uchun e'loningizni tepaga chiqaring — VIP, TOP yoki Premium bilan e'lon kanalda va ilovada hammadan oldin ko'rinadi.",
+        { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
+      await new Promise((r) => setTimeout(r, 80));
+    }
+  } catch (e) { console.error("Kam ko'rilgan e'lonlar eslatmasida xato:", e.message); }
+  finally { nudgeRunning = false; }
+}
+setInterval(nudgeLowViewAds, 60 * 60 * 1000).unref();
+setTimeout(nudgeLowViewAds, 5 * 60 * 1000).unref();
+
 // ==============================================================
 // 🛠 TEXNIK ISHLAR REJIMI (admin botni vaqtincha o'chiradi / yoqadi)
 // Yoqilganda: kanalga «Texnik ishlar» xabari, foydalanuvchilar bot va ilovada shu xabarni ko'radi.
@@ -2238,6 +2307,7 @@ const adminMenu = new InlineKeyboard()
   .text("💰 Narxlar va to'lovlar", "admin_prices").row()
   .text("⚙️ Sozlamalar (karta, havola, limitlar)", "admin_settings").row()
   .text("🛠 Texnik ishlar (botni o'chirish / yoqish)", "maint_menu").row()
+  .text("👁 Eng ko'p ko'rilgan e'lonlar", "admin_top_views").row()
   .text("🚗 Katalog: marka, model, variantlar", "admin_catalog").row()
   .text("🛠 Boshqa buyruqlar (Qo'llanma)", "admin_help").row()
   .text("❌ Yopish", "admin_close");
@@ -2246,6 +2316,18 @@ bot.command("admin", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   const warn = isMaintenance() ? "⚠️ <b>Texnik ishlar rejimi YOQILGAN</b> — foydalanuvchilar botdan foydalana olmayapti. O'chirish: «🛠 Texnik ishlar».\n\n" : "";
   await ctx.reply(warn + "👨‍💻 <b>Boshqaruv paneliga xush kelibsiz!</b>\n\nQuyidagi tugmalar orqali botdagi barcha jarayonlarni birgina bosish bilan boshqarishingiz mumkin:", { reply_markup: adminMenu, parse_mode: "HTML" });
+});
+// 👁 Eng ko'p ko'rilgan faol e'lonlar
+bot.callbackQuery("admin_top_views", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  const [rows] = await db.execute("SELECT id, carDetails, price, views, contacts FROM ads WHERE status = 'active' ORDER BY views DESC, contacts DESC LIMIT 15");
+  const [[t]] = await db.execute("SELECT COUNT(*) AS c, COUNT(DISTINCT userId) AS u FROM ad_hits WHERE kind = 'v' AND day = CURDATE()");
+  let text = `👁 <b>ENG KO'P KO'RILGAN E'LONLAR</b>\n<i>Ilova va bot qidiruvidagi ko'rishlar (bir odam sutkada bir marta)</i>\n\nBugun: <b>${Number(t?.c) || 0}</b> ko'rish, <b>${Number(t?.u) || 0}</b> kishi\n\n`;
+  text += rows.length ? rows.map((r, i) => `${i + 1}. #${r.id} ${escapeHtml(r.carDetails)} — ${formatNum(r.price)}$\n     👁 ${Number(r.views) || 0} · 📞 ${Number(r.contacts) || 0}`).join("\n") : "<i>Hali ko'rishlar yo'q.</i>";
+  text += `\n\n⚙️ Xaridorga ko'rinish chegarasi: ${viewsMinShow() ? `${viewsMinShow()} ta` : "yo'q"} (Sozlamalar)`;
+  const kb = new InlineKeyboard().text("⚙️ Sozlamalar", "admin_settings").text("🔙 Orqaga", "admin_back");
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => ctx.reply(text, { parse_mode: "HTML", reply_markup: kb }));
 });
 // 🛠 Texnik ishlar: holat va boshqaruv
 function maintView(note) {
@@ -2504,6 +2586,8 @@ const SETTING_FIELDS = {
   invite: { title: "🔗 Postlar oxiridagi havola", ask: "Kanal postlari oxiridagi havolani yozing (https://t.me/ bilan boshlansin)" },
   top_hours: { title: "🕗 TOP avto-UP vaqti", ask: "Avto-UP qaysi soatlar oralig'ida ishlasin? Masalan: <code>8-22</code> (Toshkent vaqti)" },
   salon_limit: { title: "📢 Salon reklamasi: kunlik limit", ask: "Bitta avtosalon kuniga nechta reklama bera olsin? (1 dan 20 gacha)" },
+  views_min: { title: "👁 Ko'rishlar soni qachondan ko'rinsin", ask: "E'lon kamida necha marta ko'rilgandan keyin xaridorlarga «👁 N marta ko'rildi» yozuvi chiqsin? (0 dan 1000 gacha; 0 — doim ko'rinadi)\n\n<i>Undan kam bo'lsa, yozuv umuman chiqmaydi. E'lon egasi o'z statistikasini doim ko'radi.</i>" },
+  views_nudge: { title: "🚀 Kam ko'rilgan e'lon eslatmasi", ask: "3 kunda nechta ko'rishdan kam bo'lsa, egasiga «e'lonni ko'tarish» taklifi yuborilsin? (0 dan 1000 gacha; 0 — o'chirilgan)" },
 };
 function settingsView() {
   const th = topHours();
@@ -2514,11 +2598,14 @@ function settingsView() {
     `🔗 Postlar oxiridagi havola: ${inviteLink()}\n` +
     "<i>Yangi postlarda va qayta yoziladigan postlarda qo'llanadi.</i>\n\n" +
     `🕗 TOP avto-UP vaqti: <b>${String(th.from).padStart(2, "0")}:00 – ${String(th.to).padStart(2, "0")}:00</b>\n` +
-    `📢 Salon reklamasi: kuniga <b>${salonDailyLimit()} ta</b>`;
+    `📢 Salon reklamasi: kuniga <b>${salonDailyLimit()} ta</b>\n\n` +
+    `👁 Ko'rishlar soni xaridorga: <b>${viewsMinShow() ? `${viewsMinShow()} tadan boshlab` : "doim"}</b> ko'rinadi\n` +
+    `🚀 Kam ko'rilgan e'lon eslatmasi: <b>${viewsNudgeBelow() ? `3 kunda ${viewsNudgeBelow()} tadan kam bo'lsa` : "o'chirilgan"}</b>`;
   const kb = new InlineKeyboard()
     .text("✏️ Karta raqami", "st_edit:card").text("✏️ Karta egasi", "st_edit:card_name").row()
     .text("✏️ Havola", "st_edit:invite").row()
     .text("✏️ TOP vaqti", "st_edit:top_hours").text("✏️ Salon limiti", "st_edit:salon_limit").row()
+    .text("✏️ Ko'rishlar chegarasi", "st_edit:views_min").text("✏️ Eslatma chegarasi", "st_edit:views_nudge").row()
     .text("💰 Narxlar va to'lovlar", "admin_prices").row()
     .text("🔙 Orqaga", "admin_back");
   return { text, kb };
@@ -2530,7 +2617,7 @@ bot.callbackQuery("admin_settings", async (ctx) => {
   const { text, kb } = settingsView();
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb, disable_web_page_preview: true }).catch(() => ctx.reply(text, { parse_mode: "HTML", reply_markup: kb, disable_web_page_preview: true }));
 });
-bot.callbackQuery(/^st_edit:(card|card_name|invite|top_hours|salon_limit)$/, async (ctx) => {
+bot.callbackQuery(/^st_edit:(card|card_name|invite|top_hours|salon_limit|views_min|views_nudge)$/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
   const field = ctx.match[1];
   adminPriceEdit = null;
@@ -2560,6 +2647,10 @@ async function saveSettingInput(field, t) {
     const n = parseInt(t, 10);
     if (!/^\d+$/.test(t) || n < 1 || n > 20) return { error: "❗️ 1 dan 20 gacha raqam yozing. Qayta yozing yoki /cancel." };
     await setBotSetting("limit:salon_daily", n);
+  } else if (field === "views_min" || field === "views_nudge") {
+    const n = parseInt(t, 10);
+    if (!/^\d+$/.test(t) || n < 0 || n > 1000) return { error: "❗️ 0 dan 1000 gacha raqam yozing. Qayta yozing yoki /cancel." };
+    await setBotSetting(field === "views_min" ? "views:min_show" : "views:nudge_below", n);
   }
   return { ok: true };
 }
@@ -3838,6 +3929,7 @@ async function searchCarConversation(conversation, ctx) {
          // Bitta e'lonni o'z tugmalari bilan chiqaradi (tugmalar e'lonning o'zida turadi)
          const showAd = async (index) => {
              const chosenAd = sortedResults[index];
+             recordAdHit(chosenAd, ctx.from?.id); // 👁 ko'rishlar statistikasi
              const navKb = new InlineKeyboard();
              if (index > 0) navKb.text("⬅️ Oldingi", `sr_view:${sortedResults[index - 1].id}`);
              if (index < sortedResults.length - 1) navKb.text("Keyingi ➡️", `sr_view:${sortedResults[index + 1].id}`);
@@ -7399,7 +7491,7 @@ setInterval(checkVipExpiry, 10 * 60 * 1000).unref();
 setTimeout(checkVipExpiry, 60 * 1000).unref();
 
 setInterval(() => runScheduledPosts(new Date()), 60 * 1000 * 30);
-module.exports = { runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
+module.exports = { nudgeLowViewAds, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
 
 // ==============================================================
 // 🧯 JAVOBSIZ TUGMALAR (eng oxirida turishi shart — boshqa handlerlardan keyin)
@@ -7591,6 +7683,7 @@ dbReady.finally(async () => {
       logUserAction, getAdVotes,
       getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement, SALON_PLAN_DESC,
       // 🖥 Admin paneli (ilovada)
+      views: { record: recordAdHit, today: todayViews, minShow: viewsMinShow },
       maintenance: { info: maintenanceInfo, set: setMaintenance, remember: maintRemember, text: MAINT_PLAIN },
       admin: { runAdminAction, runAdminText, runAdminCommand, cancelAdminInput, rejectAdWithReason, startBroadcast, broadcastStatus, adminAwaiting, adminBlobs, queueDone, isVipActive, fmtTash },
     });
