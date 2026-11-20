@@ -2132,6 +2132,7 @@
       { t: "Konkurs (Top-10)", s: "Taklif qilganlar reytingi", icon: "gift", color: "#ff9500", data: "admin_top" },
       { t: "Top qidiruvlar", s: "Nimani ko'p qidirishyapti", icon: "search", color: "#34c759", data: "admin_topsearch" },
       { t: "Eng ko'p ko'rilganlar", s: "Ko'rishlar va qo'ng'iroqlar reytingi", icon: "eye", color: "#ff9500", data: "admin_top_views" },
+      { t: "Jonli panel (widget)", s: "Botdagi chatingizga yangilanib turadigan karta", icon: "gauge", color: "#5856d6", data: "admin_dash" },
       { t: "Narx grafigi", s: "Kanalga grafik yuborish", icon: "calc", color: "#5856d6", data: "admin_chart", confirm: "Narx grafigi kanalga yuboriladi. Davom etasizmi?" },
       { t: "Haftalik analitika", s: "Kanalga yuborish", icon: "calendar", color: "#30b0c7", data: "admin_test_analytics", confirm: "Haftalik analitika kanalga yuboriladi. Davom etasizmi?" },
       { t: "Kunlik TOP-5", s: "Kanalga yuborish", icon: "star", color: "#ffb300", data: "admin_test_top5", confirm: "Kunlik TOP-5 kanalga yuboriladi. Davom etasizmi?" },

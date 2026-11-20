@@ -244,6 +244,13 @@ const dbReady = (async () => {
         PRIMARY KEY (adId, userId, day, kind), KEY idx_day (day)
       )
     `);
+    // 🧩 Yuborilgan statistika widgetlari (avtomatik yangilash uchun)
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS stat_widgets (
+        chatId BIGINT NOT NULL, messageId INT NOT NULL, adId INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (chatId, messageId), KEY idx_ad (adId)
+      )
+    `);
     // 🛠 Texnik ishlar paytida botga yozganlar — bot yoqilganda ularga «ishlayapti» xabari boriladi
     await db.execute("CREATE TABLE IF NOT EXISTS maint_waiters (userId BIGINT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
     await db.execute(`
@@ -382,6 +389,12 @@ bot.use(async (ctx, next) => {
   }
   return next();
 });
+// 🧩 Widget so'rovlari (grammY bu yangilanish turini hali tanimaydi — o'zimiz ushlaymiz)
+bot.use(async (ctx, next) => {
+  if (ctx.update && ctx.update.widget_query) return handleWidgetQuery(ctx.update.widget_query);
+  if (ctx.update && ctx.update.shared_widget_query) return bot.api.raw.answerWidgetQuery({ widget_query_id: ctx.update.shared_widget_query.id }).catch(() => {});
+  return next();
+});
 const LOG_CHANNEL_ID = "-1001742614612";
 
 // ==============================================================
@@ -470,6 +483,169 @@ async function nudgeLowViewAds() {
 }
 setInterval(nudgeLowViewAds, 60 * 60 * 1000).unref();
 setTimeout(nudgeLowViewAds, 5 * 60 * 1000).unref();
+
+// ==============================================================
+// 🧩 TELEGRAM WIDGETLAR (Bot API 10.4): chat ichidagi interaktiv kartalar
+// grammY bu metodlarni hali bilmaydi — bot.api.raw orqali to'g'ridan-to'g'ri chaqiramiz.
+// Widget ishlamasa (eski server/kutubxona) — oddiy matn bilan javob beramiz.
+// ==============================================================
+const WIDGETS = require("./widgets");
+async function sendWidgetMsg(chatId, html, caption, chatData, extra = {}) {
+  return bot.api.raw.sendWidget({
+    chat_id: chatId, html, caption, parse_mode: "HTML",
+    chat_data: JSON.stringify(chatData), ...extra,
+  });
+}
+const tashNow = () => { const d = new Date(Date.now() + 5 * 3600 * 1000); return `${String(d.getUTCDate()).padStart(2, "0")}.${String(d.getUTCMonth() + 1).padStart(2, "0")} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`; };
+// E'lon statistikasi widget uchun (≤ 1024 bayt)
+async function adStatsData(ad) {
+  const id = Number(ad.id);
+  const today = (await todayViews([id])).get(id) || 0;
+  let saves = 0, days = [0, 0, 0, 0, 0, 0, 0];
+  try {
+    const [[sv]] = await db.execute("SELECT COUNT(*) AS c FROM favorites WHERE adId = ?", [id]);
+    saves = Number(sv?.c) || 0;
+    const [rows] = await db.execute("SELECT DATEDIFF(CURDATE(), day) AS ago, COUNT(*) AS c FROM ad_hits WHERE adId = ? AND kind = 'v' AND day >= CURDATE() - INTERVAL 6 DAY GROUP BY day", [id]);
+    rows.forEach((r) => { const i = 6 - Number(r.ago); if (i >= 0 && i < 7) days[i] = Number(r.c) || 0; });
+  } catch (e) {}
+  const name = String(ad.carDetails || "").slice(0, 60) + (ad.year ? `, ${ad.year}` : "");
+  const todayMon = (new Date(Date.now() + 5 * 3600 * 1000).getUTCDay() + 6) % 7; // 0 = dushanba
+  return { n: name, p: `${formatNum(ad.price)} $ · e'lon #${ad.id}`, a: ad.status === "active" ? 1 : 0, v: Number(ad.views) || 0, t: today, c: Number(ad.contacts) || 0, s: saves, d: days, w: (todayMon + 1) % 7, u: tashNow() };
+}
+function statsCaption(d) {
+  return `📊 <b>${escapeHtml(d.n)}</b> — 👁 ${d.v} ko'rish${d.t ? ` (bugun +${d.t})` : ""} · 📞 ${d.c} · ❤️ ${d.s}`;
+}
+async function sendStatsWidget(ctx, ad) {
+  const d = await adStatsData(ad);
+  try {
+    const m = await sendWidgetMsg(ctx.chat.id, WIDGETS.STATS_HTML, statsCaption(d), d, { width: 0, height: 450, allow_queries: true });
+    if (m?.message_id) await db.execute("INSERT IGNORE INTO stat_widgets (chatId, messageId, adId) VALUES (?, ?, ?)", [ctx.chat.id, m.message_id, ad.id]).catch(() => {});
+    return true;
+  } catch (e) {
+    console.error("Statistika widgetini yuborib bo'lmadi:", e.message);
+    // Zaxira: oddiy matn
+    await ctx.reply(`${statsCaption(d)}\n\n<i>Oxirgi 7 kun: ${d.d.join(" · ")}</i>`, { parse_mode: "HTML" }).catch(() => {});
+    return false;
+  }
+}
+// 👨‍💻 Admin jonli paneli uchun ma'lumot (≤ 1024 bayt). stat_widgets jadvalida adId = 0 bo'lib saqlanadi.
+async function adminDashData() {
+  const c = async (sql) => { try { const [[r]] = await db.execute(sql); return Number(r?.c) || 0; } catch (e) { return 0; } };
+  const q = await Promise.all([
+    c("SELECT COUNT(*) AS c FROM ads WHERE status = 'pending'"),
+    c("SELECT COUNT(*) AS c FROM ad_edits"),
+    c("SELECT COUNT(*) AS c FROM vip_requests WHERE status = 'pending'"),
+    c("SELECT COUNT(*) AS c FROM salon_ads WHERE status = 'pending'"),
+    c("SELECT COUNT(*) AS c FROM admin_queue q JOIN ads a ON a.id = q.refId WHERE q.kind IN ('bump', 'sold') AND q.status = 'pending' AND a.status = 'active'"),
+    c("SELECT COUNT(*) AS c FROM users WHERE COALESCE(is_dealer, 0) = 0 AND dealer_name IS NOT NULL"),
+  ]);
+  const [users, usersToday, activeAds, adsToday, views, viewers, inc1, inc2, inc3] = await Promise.all([
+    c("SELECT COUNT(*) AS c FROM users"),
+    c("SELECT COUNT(*) AS c FROM users WHERE joined_at >= CURDATE()"),
+    c("SELECT COUNT(*) AS c FROM ads WHERE status = 'active'"),
+    c("SELECT COUNT(*) AS c FROM ads WHERE created_at >= CURDATE()"),
+    c("SELECT COUNT(*) AS c FROM ad_hits WHERE kind = 'v' AND day = CURDATE()"),
+    c("SELECT COUNT(DISTINCT userId) AS c FROM ad_hits WHERE kind = 'v' AND day = CURDATE()"),
+    c("SELECT COALESCE(SUM(amount), 0) AS c FROM vip_requests WHERE status = 'approved' AND created_at >= NOW() - INTERVAL 30 DAY"),
+    c("SELECT COALESCE(SUM(price), 0) AS c FROM salon_ads WHERE status IN ('active', 'deleted') AND created_at >= NOW() - INTERVAL 30 DAY"),
+    c("SELECT COALESCE(SUM(paid_amount), 0) AS c FROM ads WHERE paid_amount > 0 AND status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 30 DAY"),
+  ]);
+  const days = [0, 0, 0, 0, 0, 0, 0];
+  try {
+    const [rows] = await db.execute("SELECT DATEDIFF(CURDATE(), day) AS ago, COUNT(*) AS c FROM ad_hits WHERE kind = 'v' AND day >= CURDATE() - INTERVAL 6 DAY GROUP BY day");
+    rows.forEach((r) => { const i = 6 - Number(r.ago); if (i >= 0 && i < 7) days[i] = Number(r.c) || 0; });
+  } catch (e) {}
+  const promo = await Promise.all(["premium", "vip", "top", "urgent"].map((k) => PROMOS[k] ? c(`SELECT COUNT(*) AS c FROM ads WHERE status = 'active' AND ${PROMOS[k].col} > NOW()`) : 0));
+  return { q, u: [users, usersToday], a: [activeAds, adsToday], v: views, vu: viewers, d: days, p: promo, i: inc1 + inc2 + inc3, m: isMaintenance() ? 1 : 0, t: tashNow() };
+}
+function adminDashCaption(d) {
+  const qt = d.q.reduce((x, y) => x + y, 0);
+  return `👨‍💻 <b>Admin paneli</b> — ⏳ ${qt} so'rov · 🚗 ${d.a[0]} faol e'lon · 👁 bugun ${d.v}`;
+}
+async function sendAdminDash(chatId) {
+  const d = await adminDashData();
+  try {
+    const m = await sendWidgetMsg(chatId, WIDGETS.ADMIN_HTML, adminDashCaption(d), d, { width: 0, height: 585, allow_queries: true });
+    if (m?.message_id) await db.execute("INSERT IGNORE INTO stat_widgets (chatId, messageId, adId) VALUES (?, ?, 0)", [chatId, m.message_id]).catch(() => {});
+    return true;
+  } catch (e) {
+    console.error("Admin panel widgetini yuborib bo'lmadi:", e.message);
+    await bot.api.sendMessage(chatId, `${adminDashCaption(d)}\n\n<i>Widget ochilmadi — Telegram ilovangizni yangilang.</i>`, { parse_mode: "HTML" }).catch(() => {});
+    return false;
+  }
+}
+// Widgetdan kelgan so'rov (🔄 Yangilash / 🚀 Ko'tarish)
+async function handleWidgetQuery(q) {
+  const answer = (data) => bot.api.raw.answerWidgetQuery({ widget_query_id: q.id, ...(data ? { data } : {}) }).catch(() => {});
+  try {
+    if (isMaintenance() && q.from?.id !== ADMIN_ID) return answer("🛠 Texnik ishlar olib borilmoqda");
+    const chatId = q.chat?.id, msgId = q.message_id;
+    if (!chatId || !msgId) return answer();
+    const [[w]] = await db.execute("SELECT adId FROM stat_widgets WHERE chatId = ? AND messageId = ?", [chatId, msgId]);
+    if (!w) return answer("Bu karta eskirgan");
+    const cmd = String(q.data || "").slice(0, 8);
+    const isAdm = Number(q.from?.id) === ADMIN_ID;
+    if (Number(w.adId) === 0) { // 👨‍💻 admin paneli
+      if (!isAdm) return answer();
+      if (cmd === "q") {
+        await bot.api.sendMessage(chatId, "⏳ <b>Kutayotgan so'rovlar</b> — bo'limni tanlang:", { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("⏳ Kutayotganlar", "admin_pending").text("⭐ Statuslar", "admin_vip").row().text("📢 Salon reklamalari", "admin_salon_ads").text("🏢 Avtosalonlar", "admin_dealers") }).catch(() => {});
+        return answer("Pastda tanlang 👇");
+      }
+      await bot.api.raw.editMessageWidgetData({ chat_id: chatId, message_id: msgId, chat_data: JSON.stringify(await adminDashData()) }).catch(() => {});
+      return answer("Yangilandi ✅");
+    }
+    const [[ad]] = await db.execute("SELECT * FROM ads WHERE id = ?", [w.adId]);
+    if (!ad || (Number(ad.userId) !== Number(q.from?.id) && !isAdm)) return answer("E'lon topilmadi");
+    if (cmd === "r") {
+      const d = await adStatsData(ad);
+      await bot.api.raw.editMessageWidgetData({ chat_id: chatId, message_id: msgId, chat_data: JSON.stringify(d) }).catch(() => {});
+      return answer("Yangilandi ✅");
+    }
+    if (cmd === "p") {
+      if (ad.status !== "active") return answer("E'lon faol emas");
+      if (isAdm && Number(ad.userId) !== ADMIN_ID) {
+        await bot.api.sendMessage(chatId, `🛠 <b>#${ad.id} ${escapeHtml(ad.carDetails)}</b> — status berish uchun:`, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("⭐ Status berish / olish", "admin_promo_grant") }).catch(() => {});
+        return answer("Pastda 👇");
+      }
+      await bot.api.sendMessage(chatId, `🚀 <b>${escapeHtml(ad.carDetails)}</b> — e'lonni ko'tarish usulini tanlang:`, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🚀 VIP, TOP, Premium, Shoshilinch", `promo_menu:${ad.id}`) }).catch(() => {});
+      return answer("Pastda tanlang 👇");
+    }
+    return answer();
+  } catch (e) {
+    console.error("Widget so'rovida xato:", e.message);
+    return answer("Xatolik");
+  }
+}
+// Statistika kartalarini o'zi yangilab turadi (oxirgi 7 kunda yuborilganlar)
+let statWidgetsRunning = false;
+async function refreshStatWidgets() {
+  if (statWidgetsRunning) return;
+  statWidgetsRunning = true;
+  try {
+    await db.execute("DELETE FROM stat_widgets WHERE created_at < NOW() - INTERVAL 7 DAY").catch(() => {});
+    const [dash] = await db.execute("SELECT chatId, messageId FROM stat_widgets WHERE adId = 0 ORDER BY created_at DESC LIMIT 3");
+    if (dash.length) {
+      const dd = JSON.stringify(await adminDashData());
+      for (const r of dash) {
+        await bot.api.raw.editMessageWidgetData({ chat_id: r.chatId, message_id: r.messageId, chat_data: dd }).catch(async (e) => {
+          if (/not found|can't be edited|message to edit/i.test(e.message || "")) await db.execute("DELETE FROM stat_widgets WHERE chatId = ? AND messageId = ?", [r.chatId, r.messageId]).catch(() => {});
+        });
+      }
+    }
+    const [rows] = await db.execute("SELECT w.chatId, w.messageId, a.* FROM stat_widgets w JOIN ads a ON a.id = w.adId ORDER BY w.created_at DESC LIMIT 80");
+    for (const r of rows) {
+      const d = await adStatsData(r);
+      try {
+        await bot.api.raw.editMessageWidgetData({ chat_id: r.chatId, message_id: r.messageId, chat_data: JSON.stringify(d) });
+      } catch (e) {
+        if (/not found|can't be edited|message to edit/i.test(e.message || "")) await db.execute("DELETE FROM stat_widgets WHERE chatId = ? AND messageId = ?", [r.chatId, r.messageId]).catch(() => {});
+      }
+      await new Promise((res) => setTimeout(res, 120));
+    }
+  } catch (e) { console.error("Statistika kartalarini yangilashda xato:", e.message); }
+  finally { statWidgetsRunning = false; }
+}
+setInterval(refreshStatWidgets, 30 * 60 * 1000).unref();
 
 // ==============================================================
 // 🛠 TEXNIK ISHLAR REJIMI (admin botni vaqtincha o'chiradi / yoqadi)
@@ -2295,6 +2471,7 @@ bot.use(createConversation(broadcastConversation));
  * ✅ АДМИН БУЙРУҚЛАРИ
  */
 const adminMenu = new InlineKeyboard()
+  .text("📟 Jonli panel (widget)", "admin_dash").row()
   .text("📊 Statistika", "admin_stats")
   .text("⏳ Kutayotganlar", "admin_pending").row()
   .text("📢 Rassilka", "admin_broadcast")
@@ -2331,7 +2508,10 @@ bot.callbackQuery("admin_top_views", async (ctx) => {
   let text = `👁 <b>ENG KO'P KO'RILGAN E'LONLAR</b>\n<i>Ilova va bot qidiruvidagi ko'rishlar (bir odam sutkada bir marta)</i>\n\nBugun: <b>${Number(t?.c) || 0}</b> ko'rish, <b>${Number(t?.u) || 0}</b> kishi\n\n`;
   text += rows.length ? rows.map((r, i) => `${i + 1}. #${r.id} ${escapeHtml(r.carDetails)} — ${formatNum(r.price)}$\n     👁 ${Number(r.views) || 0} · 📞 ${Number(r.contacts) || 0}`).join("\n") : "<i>Hali ko'rishlar yo'q.</i>";
   text += `\n\n⚙️ Xaridorga ko'rinish chegarasi: ${viewsMinShow() ? `${viewsMinShow()} ta` : "yo'q"} (Sozlamalar)`;
-  const kb = new InlineKeyboard().text("⚙️ Sozlamalar", "admin_settings").text("🔙 Orqaga", "admin_back");
+  text += "\n📊 Istalgan e'lon kartasi: tugmani bosing yoki <code>/stat ID</code> yozing.";
+  const kb = new InlineKeyboard();
+  rows.slice(0, 6).forEach((r, i) => { kb.text(`📊 #${r.id}`, `stat_w:${r.id}`); if (i % 3 === 2) kb.row(); });
+  kb.row().text("⚙️ Sozlamalar", "admin_settings").text("🔙 Orqaga", "admin_back");
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => ctx.reply(text, { parse_mode: "HTML", reply_markup: kb }));
 });
 // 🛠 Texnik ishlar: holat va boshqaruv
@@ -3341,6 +3521,8 @@ bot.callbackQuery("admin_help", async (ctx) => {
     `🚀 <b>E'lonni qo'lda UP qilish (Tepaga ko'tarish):</b>\n<code>/up [E'lon_ID]</code>\n\n` +
     `✉️ <b>G'olibga yoki uzerga xabar yuborish:</b>\n<code>/xabar [Foydalanuvchi_ID] [Sizning matningiz]</code>\n\n` +
     `🔄 <b>Konkurs ballarini nollash (Yangi hafta uchun):</b>\n<code>/reset_contest</code>\n\n` +
+    `📊 <b>Istalgan e'lon statistikasi kartasi:</b>\n<code>/stat [E'lon_ID]</code>\n\n` +
+    `📟 <b>Jonli admin paneli (widget):</b>\n<code>/panel</code>\n\n` +
     `━━━━━━━━━━━━━━━━━━\n` +
     `🧪 <b>TEST BUYRUQLARI (kanalga post yuboradi):</b>\n\n` +
     `📊 <b>Kunlik TOP post:</b>\n<code>/test_top3</code>\n\n` +
@@ -4959,6 +5141,15 @@ async function creditCalcConversation(conversation, ctx) {
   resultText += `<i>⚠️ Bu taxminiy hisob. Aniq shartlarni bank yoki sotuvchi bilan aniqlashtiring.</i>`;
 
   await ctx.reply(resultText, { parse_mode: "HTML", reply_markup: mainMenu });
+  // 🧮 Shartlarni chatning o'zida o'zgartirib ko'rish (Telegram widget). Ishlamasa — jim o'tib ketadi.
+  const chatId = ctx.chat?.id;
+  await conversation.external(() =>
+    sendWidgetMsg(chatId, WIDGETS.CALC_HTML,
+      "🎛 <b>Shartlarni o'zgartirib ko'ring</b> — boshlang'ich to'lov, muddat va foizni bosib tanlang",
+      { p: carPrice, d: downPayment, m: months, r: annualRate, c: isUzs ? "so'm" : "$" },
+      { width: 0, height: 445 })
+      .catch((e) => console.error("Kalkulyator widgetini yuborib bo'lmadi:", e.message))
+  );
 }
 bot.use(createConversation(creditCalcConversation));
 /**
@@ -6120,6 +6311,33 @@ bot.callbackQuery(/^myads_page:(\d+)/, async (ctx) => {
   await sendMyAdsPage(ctx, page);
 });
 
+// 📊 Statistika kartasi (widget) — faqat e'lon egasiga
+bot.callbackQuery(/^stat_w:(\d+)$/, async (ctx) => {
+  const [[ad]] = ctx.from.id === ADMIN_ID
+    ? await db.execute("SELECT * FROM ads WHERE id = ?", [ctx.match[1]])
+    : await db.execute("SELECT * FROM ads WHERE id = ? AND userId = ?", [ctx.match[1], ctx.from.id]);
+  if (!ad) return ctx.answerCallbackQuery({ text: "E'lon topilmadi.", show_alert: true }).catch(() => {});
+  await ctx.answerCallbackQuery({ text: "📊 Karta yuborilmoqda..." }).catch(() => {});
+  await sendStatsWidget(ctx, ad);
+});
+// 👨‍💻 Admin: /stat 123 — istalgan e'lon statistikasi kartasi; /panel — jonli admin paneli
+bot.command("stat", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const id = parseInt(String(ctx.match || "").replace(/\D/g, ""), 10);
+  if (!id) return ctx.reply("ℹ️ Foydalanish: <code>/stat 123</code> — e'lon ID raqami bilan.", { parse_mode: "HTML" });
+  const [[ad]] = await db.execute("SELECT * FROM ads WHERE id = ?", [id]);
+  if (!ad) return ctx.reply(`❌ #${id} e'lon topilmadi.`);
+  await sendStatsWidget(ctx, ad);
+});
+bot.command("panel", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await sendAdminDash(ctx.chat.id);
+});
+bot.callbackQuery("admin_dash", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery({ text: "📟 Panel yuborilmoqda..." }).catch(() => {});
+  await sendAdminDash(ctx.chat?.id || ADMIN_ID);
+});
 // 3. Bitta e'lonni tanlaganda uning menyusini chiqarish
 bot.callbackQuery(/^manage_ad:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
@@ -6135,7 +6353,8 @@ bot.callbackQuery(/^manage_ad:(\d+)/, async (ctx) => {
     .text("💰 Sotildi", `sold_req:${ad.id}`)
     .text("📉 Narxni tushirish", `edit_price:${ad.id}`).row()
     .text("✏️ To'liq tahrirlash", `full_edit_req:${ad.id}`).row()
-    .text("🚀 E'lonni ko'tarish (VIP, TOP, Shoshilinch...)", `promo_menu:${ad.id}`).row();
+    .text("🚀 E'lonni ko'tarish (VIP, TOP, Shoshilinch...)", `promo_menu:${ad.id}`).row()
+    .text("📊 Statistika kartasi", `stat_w:${ad.id}`).row();
 
   if (freeUps > 0) {
     kb.text(`🚀 BEPUL UP (${freeUps} ta bor)`, `free_up_req:${ad.id}`).row();
@@ -6145,7 +6364,9 @@ bot.callbackQuery(/^manage_ad:(\d+)/, async (ctx) => {
   const votes = await getAdVotes(ad.id, ad.channelMsgId);
   const votesLine = votes ? `\n📊 <b>Kanaldagi baho:</b> 🔥 ${votes.fire} arzon · 👍 ${votes.ok} normal · 🤔 ${votes.think} qimmat` : "";
   const vipLine = PROMO_KINDS.filter((k) => tsActive(ad[PROMOS[k].col])).map((k) => `\n${PROMOS[k].title}: ${fmtTash(ad[PROMOS[k].col])} gacha`).join("");
-  const text = `🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n💰 <b>Narxi: ${formatNum(ad.price)}$</b>${vipLine}${votesLine}\n\n👇 <i>Kerakli amalni tanlang:</i>`;
+  const todayN = (await todayViews([Number(ad.id)])).get(Number(ad.id)) || 0;
+  const viewsLine = `\n👁 <b>Ko'rishlar:</b> ${Number(ad.views) || 0}${todayN ? ` (bugun +${todayN})` : ""} · 📞 ${Number(ad.contacts) || 0}`;
+  const text = `🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n💰 <b>Narxi: ${formatNum(ad.price)}$</b>${vipLine}${viewsLine}${votesLine}\n\n👇 <i>Kerakli amalni tanlang:</i>`;
   
   await ctx.answerCallbackQuery().catch(()=>{});
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
@@ -7709,7 +7930,7 @@ dbReady.finally(async () => {
 
   bot.start({
     // message_reaction_count — kanal postlaridagi reaksiyalar soni («Narxga baho»). Ro'yxatda bo'lmasa Telegram yubormaydi.
-    allowed_updates: ["message", "edited_message", "callback_query", "chat_member", "my_chat_member", "channel_post", "edited_channel_post", "message_reaction_count"]
+    allowed_updates: ["message", "edited_message", "callback_query", "chat_member", "my_chat_member", "channel_post", "edited_channel_post", "message_reaction_count", "widget_query", "shared_widget_query"]
   });
 });
 console.log("Бот муваффақиятли ишга тушди...");
