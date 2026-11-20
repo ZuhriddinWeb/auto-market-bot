@@ -518,13 +518,14 @@ function statsCaption(d) {
 async function sendStatsWidget(ctx, ad) {
   const d = await adStatsData(ad);
   try {
-    const m = await sendWidgetMsg(ctx.chat.id, WIDGETS.STATS_HTML, statsCaption(d), d, { width: 0, height: 450, allow_queries: true });
+    const m = await sendWidgetMsg(ctx.chat.id, WIDGETS.STATS_HTML, statsCaption(d), d, { height: 450, allow_queries: true });
     if (m?.message_id) await db.execute("INSERT IGNORE INTO stat_widgets (chatId, messageId, adId) VALUES (?, ?, ?)", [ctx.chat.id, m.message_id, ad.id]).catch(() => {});
     return true;
   } catch (e) {
     console.error("Statistika widgetini yuborib bo'lmadi:", e.message);
-    // Zaxira: oddiy matn
-    await ctx.reply(`${statsCaption(d)}\n\n<i>Oxirgi 7 kun: ${d.d.join(" · ")}</i>`, { parse_mode: "HTML" }).catch(() => {});
+    // Zaxira: oddiy matn (adminga — Telegram xatosi ham ko'rinadi)
+    const why = ctx.from?.id === ADMIN_ID ? `\n\n⚠️ <i>Widget yuborilmadi:</i> <code>${escapeHtml(String(e.message || e).slice(0, 300))}</code>` : "";
+    await ctx.reply(`${statsCaption(d)}\n\n<i>Oxirgi 7 kun: ${d.d.join(" · ")}</i>${why}`, { parse_mode: "HTML" }).catch(() => {});
     return false;
   }
 }
@@ -565,12 +566,12 @@ function adminDashCaption(d) {
 async function sendAdminDash(chatId) {
   const d = await adminDashData();
   try {
-    const m = await sendWidgetMsg(chatId, WIDGETS.ADMIN_HTML, adminDashCaption(d), d, { width: 0, height: 585, allow_queries: true });
+    const m = await sendWidgetMsg(chatId, WIDGETS.ADMIN_HTML, adminDashCaption(d), d, { height: 585, allow_queries: true });
     if (m?.message_id) await db.execute("INSERT IGNORE INTO stat_widgets (chatId, messageId, adId) VALUES (?, ?, 0)", [chatId, m.message_id]).catch(() => {});
     return true;
   } catch (e) {
     console.error("Admin panel widgetini yuborib bo'lmadi:", e.message);
-    await bot.api.sendMessage(chatId, `${adminDashCaption(d)}\n\n<i>Widget ochilmadi — Telegram ilovangizni yangilang.</i>`, { parse_mode: "HTML" }).catch(() => {});
+    await bot.api.sendMessage(chatId, `${adminDashCaption(d)}\n\n⚠️ <i>Widget yuborilmadi. Telegram javobi:</i>\n<code>${escapeHtml(String(e.message || e).slice(0, 300))}</code>`, { parse_mode: "HTML" }).catch(() => {});
     return false;
   }
 }
@@ -5147,7 +5148,7 @@ async function creditCalcConversation(conversation, ctx) {
     sendWidgetMsg(chatId, WIDGETS.CALC_HTML,
       "🎛 <b>Shartlarni o'zgartirib ko'ring</b> — boshlang'ich to'lov, muddat va foizni bosib tanlang",
       { p: carPrice, d: downPayment, m: months, r: annualRate, c: isUzs ? "so'm" : "$" },
-      { width: 0, height: 445 })
+      { height: 445 })
       .catch((e) => console.error("Kalkulyator widgetini yuborib bo'lmadi:", e.message))
   );
 }
