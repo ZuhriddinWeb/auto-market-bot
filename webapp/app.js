@@ -532,6 +532,16 @@
     return n;
   }
 
+  // Marka belgisi: webapp/brands/ da logotip bo'lsa — rasm, bo'lmasa — bosh harflar
+  function brandSlug(name) { return String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
+  function brandMark(b) {
+    var initials = b.name.replace(/[^A-Za-zА-Яа-я0-9]/g, "").slice(0, 2).toUpperCase();
+    var src = catalog.logos && catalog.logos[brandSlug(b.name)];
+    if (!src) return h("i", { text: initials });
+    var box = h("i", { class: "logo" });
+    box.appendChild(h("img", { src: src, alt: "", loading: "lazy", decoding: "async", onerror: function () { box.className = ""; box.textContent = initials; } }));
+    return box;
+  }
   function screenMarket() {
     var refs = {};
     var hero = h("div", { class: "mk-hero" });
@@ -561,7 +571,7 @@
         // Markalar
         var bl = catalog.brands.slice(0, 9);
         extras.appendChild(h("div", { class: "brand-tiles", role: "group", "aria-label": "Marka" }, bl.map(function (b) {
-          return h("button", { type: "button", class: "bt", onclick: function () { haptic("select"); market.f.brandId = b.id; market.f.modelId = null; refreshAll(); } }, [h("i", { text: b.name.replace(/[^A-Za-zА-Яа-я0-9]/g, "").slice(0, 2).toUpperCase() }), h("span", { text: b.name })]);
+          return h("button", { type: "button", class: "bt", onclick: function () { haptic("select"); market.f.brandId = b.id; market.f.modelId = null; refreshAll(); } }, [brandMark(b), h("span", { text: b.name })]);
         }).concat([h("button", { type: "button", class: "bt more", onclick: openBrands }, [h("i", { text: "+" }), h("span", { text: "Hammasi" })])])));
         // Oxirgi kirganingizdan beri
         var ns = me && me.newSince;

@@ -55,6 +55,22 @@ const STATIC_FILES = {
   // Shriftlar o'zimizda (Google Fonts'ga bog'liq emas — sekin internetda ham tez ochiladi)
   "/fonts/onest.woff": "fonts/onest.woff", "/fonts/unbounded.woff": "fonts/unbounded.woff", "/fonts/permanent-marker.woff": "fonts/permanent-marker.woff",
 };
+// Marka nomidan fayl nomi: "Mercedes-Benz" → "mercedes-benz", "Lada (VAZ)" → "lada-vaz"
+const brandSlug = (name) => String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+// webapp/brands papkasidagi logotiplar ro'yxati (1 daqiqa keshlanadi): { slug: "/brands/slug.png" }
+let logoCache = { t: 0, map: {} };
+function brandLogos() {
+  if (Date.now() - logoCache.t < 60000) return logoCache.map;
+  const map = {};
+  try {
+    for (const f of fs.readdirSync(path.join(__dirname, "webapp", "brands"))) {
+      const m = f.toLowerCase().match(/^([a-z0-9-]{1,40})\.(png|svg|webp)$/);
+      if (m && (!map[m[1]] || m[2] === "svg")) map[m[1]] = `/brands/${m[1]}.${m[2]}`;
+    }
+  } catch (e) { /* papka yo'q — logotipsiz */ }
+  logoCache = { t: Date.now(), map };
+  return map;
+}
 const STATIC_TYPES = { ".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff": "font/woff" };
 
 // Telegram initData imzosini tekshiradi. To'g'ri bo'lsa foydalanuvchi obyektini qaytaradi.
@@ -1425,10 +1441,19 @@ function startWebApp(deps) {
         res.writeHead(200, { "Content-Type": STATIC_TYPES[ext], "Cache-Control": ext === ".woff" ? "public, max-age=2592000, immutable" : "no-cache" });
         return res.end(body);
       }
+      // 🏷 Marka logotiplari: webapp/brands/<marka>.png|svg|webp (siz yuklagan fayllar)
+      const lg = req.method === "GET" && p.match(/^\/brands\/([a-z0-9-]{1,40})\.(png|svg|webp)$/);
+      if (lg) {
+        const file = path.join(STATIC_DIR, "brands", `${lg[1]}.${lg[2]}`);
+        if (!fs.existsSync(file)) { res.writeHead(404); return res.end(); }
+        const type = { png: "image/png", svg: "image/svg+xml", webp: "image/webp" }[lg[2]];
+        res.writeHead(200, { "Content-Type": type, "Cache-Control": "public, max-age=604800", "X-Content-Type-Options": "nosniff", ...(lg[2] === "svg" ? { "Content-Security-Policy": "script-src 'none'" } : {}) });
+        return res.end(fs.readFileSync(file));
+      }
       if (req.method === "GET" && p === "/health") { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end("ok"); }
       if (req.method === "GET" && p === "/api/catalog") {
         const year = new Date().getFullYear();
-        return sendJson(res, 200, { ok: true, brands: catalog.get().brands, options: catalog.AD_OPTIONS, years: { min: 1985, max: year + 1 } });
+        return sendJson(res, 200, { ok: true, brands: catalog.get().brands, options: catalog.AD_OPTIONS, years: { min: 1985, max: year + 1 }, logos: brandLogos() });
       }
       const pm = req.method === "GET" && p.match(/^\/api\/photo\/(\d+)\/(\d)$/);
       if (pm) return await handlePhoto(req, res, int(pm[1]), int(pm[2]), url);

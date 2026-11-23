@@ -851,3 +851,6 @@ button.tariff:active { transform: scale(.99); }
 .form-progress { margin: 6px -16px 4px; }
 .brand-tiles { align-items: stretch; }
 .brand-tiles .bt { justify-content: flex-start; margin: 0; }
+/* Marka logotipi (webapp/brands/ papkasidan) */
+.brand-tiles .bt i.logo { background: #fff; box-shadow: 0 0 0 1px var(--line); overflow: hidden; }
+.brand-tiles .bt i.logo img { width: 24px; height: 24px; object-fit: contain; display: block; }
