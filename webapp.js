@@ -395,8 +395,10 @@ function startWebApp(deps) {
     if (!ad || (!["active", "sold"].includes(ad.status) && !isOwner)) return sendJson(res, 404, { ok: false, error: "E'lon topilmadi yoki o'chirilgan." });
 
     const [[dealer]] = await db.execute("SELECT is_dealer, dealer_name, dealer_paused FROM users WHERE id = ?", [ad.userId]);
+    // Faol e'lonlar soni faqat avtosalonlar uchun ko'rsatiladi (admin joylagan e'lonlar va xususiy sotuvchilarda — yo'q)
     let sellerAds = 0;
-    try { const [[sc]] = await db.execute("SELECT COUNT(*) AS c FROM ads WHERE userId = ? AND status = 'active'", [ad.userId]); sellerAds = Number(sc?.c) || 0; } catch (e) {}
+    const isSalon = !!(dealer && dealer.is_dealer === 1 && dealer.dealer_paused !== 1) && Number(ad.userId) !== ADMIN_ID;
+    if (isSalon) try { const [[sc]] = await db.execute("SELECT COUNT(*) AS c FROM ads WHERE userId = ? AND status = 'active'", [ad.userId]); sellerAds = Number(sc?.c) || 0; } catch (e) {}
     const [[saves]] = await db.execute("SELECT COUNT(*) AS cnt FROM favorites WHERE adId = ?", [ad.id]);
     const [badges, favs, market, similar] = await Promise.all([
       priceBadges([ad]), favoriteSet(user.id, [Number(ad.id)]),
