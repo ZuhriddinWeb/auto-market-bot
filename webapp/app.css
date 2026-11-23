@@ -854,3 +854,7 @@ button.tariff:active { transform: scale(.99); }
 /* Marka logotipi (webapp/brands/ papkasidan) */
 .brand-tiles .bt i.logo { background: #fff; box-shadow: 0 0 0 1px var(--line); overflow: hidden; }
 .brand-tiles .bt i.logo img { width: 24px; height: 24px; object-fit: contain; display: block; }
+/* Asosiy ko'rsatkichlar: uzun qiymat (Benzin + Metan, 124 000 km) kesilmasin — 2 qatorga o'tadi */
+.spec-row .sp { padding: 10px 4px; justify-content: center; }
+.spec-row .sp .v { white-space: normal; overflow: visible; text-overflow: clip; font-size: 13px; line-height: 1.2; overflow-wrap: anywhere; }
+@media (max-width: 360px) { .spec-row .sp .v { font-size: 12px; } }

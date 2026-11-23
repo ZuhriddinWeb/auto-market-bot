@@ -916,7 +916,7 @@
       if (ad.market && ad.status === "active") app.appendChild(priceMeter(Number(digits(ad.price)), ad.market));
 
       // Asosiy ko'rsatkichlar
-      var tiles = [["calendar", "Yili", ad.year], ["gauge", "Probeg", fmtKm(ad.probeg)], ["gear", "Korobka", ad.trans], ["fuel", "Yoqilg'i", ad.fuel]]
+      var tiles = [["calendar", "Yili", ad.year], ["gauge", "Probeg", fmtKm(ad.probeg)], ["gear", "Korobka", ad.trans], ["fuel", "Yoqilg'i", ad.fuel ? String(ad.fuel).replace(/\s*\+\s*/g, " + ") : ""]]
         .filter(function (t) { return t[2]; });
       app.appendChild(h("div", { class: "spec-row" }, tiles.map(function (t) { return h("div", { class: "sp" }, [h("span", { class: "k", text: t[1] }), h("b", { class: "v", text: t[2] })]); })));
       // Sotuvchi
