@@ -792,7 +792,7 @@ async function buildChannelCaption(ad) {
   if (ad.dealer_offer) c += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
   c += recentDrop(ad)
     ? `💰 Narxi: <s>${formatNum(ad.old_price)} $</s> <b>${formatNum(ad.price)}$ 📉</b>\n`
-    : `💰 Narxi: ${formatNum(ad.price)}$\n`;
+    : `💰 Narxi: ${formatNum(ad.price)}$${await getPriceBadge(ad.carDetails, ad.price, ad.year, ad)}\n`;
   c += `☎️ +${ad.phone}\n🚩 #${String(ad.region || "").replace(/\s+/g, "_")}\n\n` +
     `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
   return addPriceVoteLine(c);
@@ -1629,92 +1629,32 @@ function formatNum(value) {
   return Number(num).toLocaleString("en-US"); 
 }
 // ==============================================================
-// 📊 BOZOR BAHOSI BELGISINI HISOBLASH (Markaziy funksiya)
+// 📊 BOZOR NARXI (market.js): shu model + yil + karobka, mediana, sotilganlar ham
+// Kanal belgisi, rasm lentasi, ilova, «Narxni aniqlash» va admin tekshiruvi — hammasi bir xil hisob.
+// Belgi faqat ishonchli bo'lsa (kamida 5 ta o'xshash e'lon) chiqadi.
 // ==============================================================
-async function getPriceBadge(carDetails, priceRaw, year = null) {
+const market = require("./market").createMarket({ db, catalog });
+const adForMarket = (carDetails, priceRaw, year, ad = {}) => ({ ...ad, carDetails: carDetails || ad.carDetails, price: priceRaw, year: year || ad.year });
+async function getPriceBadge(carDetails, priceRaw, year = null, ad = {}) {
   try {
-    const numericPrice = parseInt(String(priceRaw).replace(/\D/g, "")) || 0;
-    if (numericPrice <= 0) return "";
-
-    // Model nomini ajratib olamiz (masalan "Chevrolet Cobalt" -> "Cobalt")
-    const parts = carDetails.trim().split(" ");
-    const modelKey = parts.length > 1 ? parts.slice(1).join(" ") : carDetails;
-
-    // Shu modeldagi boshqa faol e'lonlar o'rtacha narxini olamiz
-    // (model ID bo'yicha — "Lexus RX" va "Exeed RX" aralashmaydi; ID siz eski e'lonlar nomi bo'yicha)
-    const { modelId } = catalog.matchCarDetails(carDetails);
-    const f = catalog.modelFilter(modelId, modelKey);
-    let sql = `SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice, COUNT(*) as cnt FROM ads WHERE ${f.sql} AND status = 'active' AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000`;
-    const params = [...f.params];
-
-    // Agar yil berilgan bo'lsa, aniqroq bo'lishi uchun +/- 2 yil oralig'ini olamiz
-    if (year) {
-      sql += " AND CAST(year AS UNSIGNED) BETWEEN ? AND ?";
-      params.push(parseInt(year) - 2, parseInt(year) + 2);
-    }
-
-    const [rows] = await db.execute(sql, params);
-    const avgPrice = rows[0].avgPrice;
-    const cnt = rows[0].cnt;
-
-    // Ishonchli hisob-kitob uchun kamida 3 ta o'xshash e'lon bo'lishi kerak
-    if (!avgPrice || cnt < 3) return "";
-
-    const diffPercent = Math.round(((numericPrice - avgPrice) / avgPrice) * 100);
-
-if (diffPercent <= -5) {
-      return `\n🔥 <b>Bozordan ${Math.abs(diffPercent)}% arzon!</b>`;
-    } else if (diffPercent >= 10) {
-      // Qimmat bo'lsa hech narsa yozilmaydi (sotuvchini xafa qilmaslik uchun)
-      return "";
-    } else {
-      return `\n📊 <b>Bozor narxida (o'rtacha)</b>`;
-    }
+    const c = await market.compareAd(adForMarket(carDetails, priceRaw, year, ad));
+    if (!c || !c.confident) return "";
+    if (c.kind === "cheap") return `\n🔥 <b>Bozordan ${Math.abs(c.diff)}% arzon!</b>`;
+    if (c.kind === "market") return `\n📊 <b>Bozor narxida</b>`;
+    return ""; // qimmat bo'lsa hech narsa yozilmaydi (sotuvchini xafa qilmaslik uchun)
   } catch (e) {
     console.error("Badge hisoblashda xato:", e.message);
     return "";
   }
 }
-// ==============================================================
-// 🎨 RASM UCHUN NARX LENTASI MA'LUMOTINI HISOBLASH
-// ==============================================================
-async function getPriceBadgeForImage(carDetails, priceRaw, year = null) {
+// 🎨 Rasm uchun narx lentasi
+async function getPriceBadgeForImage(carDetails, priceRaw, year = null, ad = {}) {
   try {
-    const numericPrice = parseInt(String(priceRaw).replace(/\D/g, "")) || 0;
-    if (numericPrice <= 0) return null;
-
-    const parts = carDetails.trim().split(" ");
-    const modelKey = parts.length > 1 ? parts.slice(1).join(" ") : carDetails;
-
-    const { modelId } = catalog.matchCarDetails(carDetails);
-    const f = catalog.modelFilter(modelId, modelKey);
-    let sql = `SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice, COUNT(*) as cnt FROM ads WHERE ${f.sql} AND status = 'active' AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000`;
-    const params = [...f.params];
-
-    if (year) {
-      sql += " AND CAST(year AS UNSIGNED) BETWEEN ? AND ?";
-      params.push(parseInt(year) - 2, parseInt(year) + 2);
-    }
-
-    const [rows] = await db.execute(sql, params);
-    const avgPrice = rows[0].avgPrice;
-    const cnt = rows[0].cnt;
-
-    // Ishonchli hisob uchun kamida 3 ta o'xshash e'lon kerak
-    if (!avgPrice || cnt < 3) return null;
-
-    const diffPercent = Math.round(((numericPrice - avgPrice) / avgPrice) * 100);
-
-    if (diffPercent <= -5) {
-      // Yashil lenta — arzon
-      return { text: `BOZORDAN ${Math.abs(diffPercent)}% ARZON`, color: "#27ae60" };
-    } else if (diffPercent >= 10) {
-      // Qimmat bo'lsa lenta ko'rsatilmaydi (sotuvchini xafa qilmaslik uchun)
-      return null;
-    } else {
-      // Kulrang lenta — o'rtacha
-      return { text: `BOZOR NARXIDA`, color: "#7f8c8d" };
-    }
+    const c = await market.compareAd(adForMarket(carDetails, priceRaw, year, ad));
+    if (!c || !c.confident) return null;
+    if (c.kind === "cheap") return { text: `BOZORDAN ${Math.abs(c.diff)}% ARZON`, color: "#27ae60" };
+    if (c.kind === "market") return { text: `BOZOR NARXIDA`, color: "#7f8c8d" };
+    return null;
   } catch (e) {
     console.error("Rasm lentasi hisobida xato:", e.message);
     return null;
@@ -1797,15 +1737,13 @@ function buildAdCaption(ad, priceBadge = "") {
 // Ko'rib chiqish oynasi uchun narx tahlili (shu modelning o'rtacha narxiga solishtiradi)
 async function getPreviewPriceBadge(ad) {
   try {
-    const numericPrice = parseInt(ad.price) || 0;
-    const f = catalog.modelFilter(ad.model_id, ad.model);
-    const [avgRows] = await db.execute(
-      `SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice FROM ads WHERE ${f.sql} AND status = 'active' AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000`,
-      f.params
-    );
-    const avgPrice = avgRows[0].avgPrice;
-    if (avgPrice && numericPrice < avgPrice * 0.95) return " 🔥 (Qaynoq narx)";
-    if (avgPrice && numericPrice > avgPrice * 1.1) return " 📈 (Bozordan biroz qimmat)";
+    const c = await market.compareAd(ad);
+    if (!c) return " ❔ (bozor narxi: ma'lumot kam)";
+    const base = `${c.label}, bozor narxi ~${formatNum(c.median)}$`;
+    if (!c.confident) return ` ❔ (taxminiy: ${base})`;
+    if (c.kind === "cheap") return ` 🔥 (Bozordan ${Math.abs(c.diff)}% arzon · ${base})`;
+    if (c.kind === "high") return ` 📈 (Bozordan ${c.diff}% qimmat · ${base})`;
+    return ` 📊 (Bozor narxida · ${base})`;
   } catch (e) {
     console.error("Narx analitikasi xatosi:", e);
   }
@@ -2292,22 +2230,13 @@ async function useFreeUp({ adId, userId }) {
 }
 
 // 🧮 Baholash: shu model (±2 yil) e'lonlari va sotilganlarining o'rtacha narxi asosida oraliq
-async function estimateCarPrice({ modelId, model, year }) {
-  const f = catalog.modelFilter(modelId, model);
-  const [rows] = await db.execute(`SELECT price, year FROM ads WHERE ${f.sql} AND status IN ('active', 'sold')`, f.params);
-  const targetYear = parseInt(year);
-  const validPrices = rows
-    .filter(r => Math.abs((parseInt(r.year) || 0) - targetYear) <= 2)
-    .map(r => parseInt(String(r.price).replace(/\D/g, "")))
-    .filter(p => p > 1000 && p < 200000);
-  if (validPrices.length === 0) return { ok: false, error: "Bazamizda bu moshina uchun yetarli ma'lumot yo'q." };
-  const avg = validPrices.reduce((a, b) => a + b, 0) / validPrices.length;
-  return {
-    ok: true,
-    minPrice: Math.round((avg * 0.94) / 100) * 100,
-    maxPrice: Math.round((avg * 1.06) / 100) * 100,
-    count: validPrices.length,
-  };
+async function estimateCarPrice({ modelId, model, year, transmission }) {
+  const m = await market.marketPrice({ modelId, model, year, transmission });
+  if (!m.ok) return { ok: false, error: "Bazamizda bu moshina uchun yetarli ma'lumot yo'q." };
+  // Oraliq: o'xshash e'lonlarning o'rta yarmi (25–75%); juda tor bo'lsa ±4%
+  let lo = m.low, hi = m.high;
+  if (hi - lo < m.median * 0.06) { lo = Math.round((m.median * 0.96) / 100) * 100; hi = Math.round((m.median * 1.04) / 100) * 100; }
+  return { ok: true, minPrice: lo, maxPrice: hi, median: m.median, count: m.count, confident: m.confident, label: m.label, trans: m.trans };
 }
 
 // 🏢 Avtosalon (diler) arizasi
@@ -4965,6 +4894,24 @@ async function evaluateCarConversation(conversation, ctx) {
 
         await safeAnswerCbq(res);
         await deleteMsgs(ctx, chatToClean);
+        step = "TRANS";
+      }
+      else if (step === "TRANS") {
+        // Karobka: avtomat va mexanika narxi sezilarli farq qiladi — aniqroq baho uchun so'raymiz
+        const kb = new InlineKeyboard()
+          .text("⚙️ Avtomat", "tr:Avtomat").text("🕹 Mexanika", "tr:Mexanika").row()
+          .text("🤷 Farqi yo'q", "tr:").row()
+          .text("🔙 Orqaga", "back_YEAR").text("❌ Bekor qilish", "cancel_ad");
+        msgPrompt = await ctx.reply("⚙️ <b>Karobkasi qanday?</b>\n\n<i>Avtomat va mexanika narxi farq qiladi — tanlasangiz, baho aniqroq chiqadi.</i>", { reply_markup: kb, parse_mode: "HTML" });
+        chatToClean.push(msgPrompt.message_id);
+        const res = await conversation.waitFor(["callback_query:data", "message:text"]);
+        if (res.message) chatToClean.push(res.message.message_id);
+        if (res.callbackQuery?.data === "cancel_ad") break;
+        if (res.callbackQuery?.data === "back_YEAR") { step = "YEAR"; await safeAnswerCbq(res); await deleteMsgs(ctx, chatToClean); continue; }
+        const d = res.callbackQuery?.data || "";
+        ad.transmission = d.startsWith("tr:") ? d.slice(3) : (market.transGroup(res.message?.text) === "M" ? "Mexanika" : market.transGroup(res.message?.text) === "A" ? "Avtomat" : "");
+        await safeAnswerCbq(res);
+        await deleteMsgs(ctx, chatToClean);
         step = "CALCULATE";
       }
       else if (step === "CALCULATE") {
@@ -4972,21 +4919,23 @@ async function evaluateCarConversation(conversation, ctx) {
 
         try {
             // Hisob-kitob umumiy funksiyada (Mini App ham shuni chaqiradi)
-            const estimate = await estimateCarPrice({ modelId: ad.model_id, model: ad.model, year: ad.year });
+            const estimate = await estimateCarPrice({ modelId: ad.model_id, model: ad.model, year: ad.year, transmission: ad.transmission });
             ad.brand = ad.brand === "Boshqa" ? "" : ad.brand; // natija matnida "Boshqa" so'zi chiqmasin
             await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(()=>{});
 
             if (!estimate.ok) {
                 await ctx.reply(`📭 <b>Kechirasiz, bazamizda ${ad.year} yil ${ad.brand} ${ad.model} uchun yetarli ma'lumot yo'q.</b>\n\nMoshinangizning narxi holatiga qarab turlicha bo'lishi mumkin.`, { parse_mode: "HTML", reply_markup: mainMenu });
             } else {
-                const { minPrice, maxPrice } = estimate; // o'rtacha narxning -6% / +6% oralig'i
+                const { minPrice, maxPrice, median, label, confident } = estimate; // o'xshash e'lonlarning o'rta yarmi
 
                 const text = 
                   `📊 <b>SIZNING MOSHINANGIZ BAHOLANDI!</b>\n\n` +
                   `🚗 <b>Model:</b> ${ad.brand} ${ad.model}\n` +
-                  `📅 <b>Yili:</b> ${ad.year}\n\n` +
-                  `Bizning bazadagi e'lonlar va sotilgan moshinalar tahliliga ko'ra, hozirda bozorda bunday moshinalarning o'rtacha narxi:\n\n` +
-                  `💰 <b>${minPrice}$ - ${maxPrice}$</b> atrofida bo'lmoqda.\n\n` +
+                  `📅 <b>Yili:</b> ${ad.year}\n` +
+                  (ad.transmission ? `⚙️ <b>Karobka:</b> ${ad.transmission}\n` : "") + "\n" +
+                  `Bazamizdagi e'lonlar va sotilgan moshinalar tahliliga ko'ra bozor narxi:\n\n` +
+                  `💰 <b>~${formatNum(median)}$</b>  (ko'pchiligi <b>${formatNum(minPrice)}$ – ${formatNum(maxPrice)}$</b>)\n` +
+                  `📈 <i>${label}${confident ? "" : " — ma'lumot kam, taxminiy baho"}</i>\n\n` +
                   `<i>⚠️ Eslatma: Aniq narx moshinaning kraskasi, probegi va umumiy holatiga qarab o'zgarishi mumkin!\n\nMoshinangizni hoziroq sotuvga qo'yish uchun «📝 E'lon berish tugmasini bosing.</i>`;
 
                 await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenu });
@@ -5526,7 +5475,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
         return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
       })
     );
-        const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year);
+        const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year, ad);
     const collagePath = await createCollage(photoUrls, badgeInfo);
 
     let caption =dealerBadge +
@@ -5546,7 +5495,7 @@ if (ad.barter && ad.barter !== "Yo'q") {
     if (ad.dealer_offer) {
       caption += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
     }
-        const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year);
+        const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year, ad);
     caption += `💰 Narxi: ${formatNum(ad.price)}$${badge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
     caption = addPriceVoteLine(caption); // 👇 Narxga baho bering: 🔥 · 👍 · 🤔
@@ -5657,7 +5606,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
         return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
       })
     );
-        const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year);
+        const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year, ad);
     const collagePath = await createCollage(photoUrls, badgeInfo);
 
     // ================= MATN TEPASIGA QAYNOQ NARX QO'SHILDI =================
@@ -5679,7 +5628,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
     if (ad.dealer_offer) {
       caption += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
     }
-        const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year);
+        const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year, ad);
     caption += `💰 Narxi: ${formatNum(ad.price)}$${badge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
       `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
     caption = addPriceVoteLine(caption); // 👇 Narxga baho bering: 🔥 · 👍 · 🤔
@@ -7907,7 +7856,7 @@ dbReady.finally(async () => {
       // Bot ham, Mini App ham aynan shu funksiyalarni chaqiradi:
       checkCanPostAd, submitNewAdToAdmin, sanitizeText, normalizePhone, parseAdPrice,
       requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
-      estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
+      estimateCarPrice, market, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
       logUserAction, getAdVotes,
       getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement, SALON_PLAN_DESC,
       // 🖥 Admin paneli (ilovada)

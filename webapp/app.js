@@ -687,8 +687,9 @@
     var diff = (price - mk.avg) / mk.avg;
     var pct = Math.round(Math.abs(diff) * 100);
     var verdict = "Bozor narxida", cls = "";
-    if (diff <= -0.05) { verdict = "O'rtachadan " + pct + "% arzon"; cls = "cheap"; }
-    else if (diff >= 0.10) { verdict = "O'rtachadan " + pct + "% qimmat"; cls = "high"; }
+    if (diff <= -0.05) { verdict = "Bozor narxidan " + pct + "% arzon"; cls = "cheap"; }
+    else if (diff >= 0.10) { verdict = "Bozor narxidan " + pct + "% qimmat"; cls = "high"; }
+    if (mk.confident === false) verdict = "Taxminan: " + verdict.charAt(0).toLowerCase() + verdict.slice(1);
     var RANGE = 0.3; // shkala: o'rtachadan ±30%
     var left = Math.max(3, Math.min(97, (Math.max(-RANGE, Math.min(RANGE, diff)) + RANGE) / (2 * RANGE) * 100));
     var pin = h("span", { class: "pin" });
@@ -696,8 +697,8 @@
       h("div", { class: "m-title", text: "Narx bozorga nisbatan" }),
       h("div", { class: "m-verdict " + cls, text: verdict }),
       h("div", { class: "bar", style: "grid-template-columns:25fr 15fr 20fr", "aria-hidden": "true" }, [h("i"), h("i"), h("i"), pin]),
-      h("div", { class: "scale", "aria-hidden": "true" }, [h("span", { text: "Arzon" }), h("span", { text: "O'rtacha " + fmtPrice(mk.avg) }), h("span", { text: "Qimmat" })]),
-      h("p", { class: "m-foot", text: "Shu model, ±2 yil: " + mk.count + " ta faol e'lon, " + fmtPrice(mk.min) + " dan " + fmtPrice(mk.max) + " gacha." }),
+      h("div", { class: "scale", "aria-hidden": "true" }, [h("span", { text: "Arzon" }), h("span", { text: "Bozor narxi " + fmtPrice(mk.avg) }), h("span", { text: "Qimmat" })]),
+      h("p", { class: "m-foot", text: (mk.label || mk.count + " ta o'xshash e'lon") + ". Ko'pchiligi " + fmtPrice(mk.min) + " – " + fmtPrice(mk.max) + "." + (mk.confident === false ? " O'xshash e'lonlar kam — baho taxminiy." : "") }),
     ]);
     // Yagona animatsiya: ko'rsatkich o'rtadan e'lon narxi turgan joyga siljiydi
     requestAnimationFrame(function () { requestAnimationFrame(function () { pin.style.left = left + "%"; }); });
@@ -1733,10 +1734,11 @@
 
   // ---------- Baholash ----------
   function screenEvaluate() {
-    var st = { brandId: null, modelId: null, text: "", year: "" };
+    var st = { brandId: null, modelId: null, text: "", year: "", trans: "" };
     var refs = {};
     app.appendChild(h("h1", { class: "page", text: "Moshina narxini aniqlash" }));
-    app.appendChild(h("p", { class: "page-sub", text: "Kanalimizdagi faol va sotilgan e'lonlar asosida o'rtacha bozor narxini hisoblaymiz." }));
+    app.appendChild(h("p", { class: "page-sub", text: "Shu model, yil va karobkadagi faol va sotilgan e'lonlar asosida bozor narxini hisoblaymiz." }));
+    var TRANS = [{ id: "Avtomat", name: "Avtomat" }, { id: "Mexanika", name: "Mexanika" }, { id: "", name: "Farqi yo'q" }];
     var modelBox = h("div", { class: "slot" });
     var resultBox = h("div");
     function renderModels() {
@@ -1750,6 +1752,7 @@
       field(refs, "brand", "Marka", chipGroup("lbl-brand", function () { return catalog.brands.concat([{ id: 0, name: "Boshqa marka", dashed: true }]); }, function (b) { return st.brandId === b.id; }, function (b) { st.brandId = b.id; st.modelId = null; setError(refs, "brand", ""); renderModels(); }, { collapse: 9 })),
       modelBox,
       field(refs, "year", "Yili", selectBox(st, "year", yearOptions(), "Tanlang", function () { setError(refs, "year", ""); })),
+      field(refs, "trans", "Karobka", chipGroup("lbl-trans", function () { return TRANS; }, function (x) { return st.trans === x.id; }, function (x) { st.trans = x.id; })),
     ]));
     app.appendChild(resultBox);
     var busy = false;
@@ -1760,7 +1763,7 @@
       if (st.brandId === 0 && st.text.trim().length < 2) return setError(refs, "model", "Marka va modelni yozing.");
       if (!st.year) return setError(refs, "year", "Yilini tanlang.");
       busy = true; mainBusy(true, "Hisoblanmoqda...");
-      api("/api/evaluate", { json: { modelId: st.modelId, text: st.text, year: st.year } }).then(function (r) {
+      api("/api/evaluate", { json: { modelId: st.modelId, text: st.text, year: st.year, transmission: st.trans } }).then(function (r) {
         busy = false; mainBusy(false);
         resultBox.innerHTML = "";
         if (!r.ok) return toast(r.error || "Xatolik");
@@ -1768,9 +1771,10 @@
           resultBox.appendChild(h("div", { class: "result" }, [h("b", { text: r.year + " yil " + r.title }), h("p", { class: "lbl", text: "Bazamizda bu moshina uchun hali yetarli ma'lumot yo'q. Narx holatiga qarab turlicha bo'lishi mumkin." })]));
         } else {
           resultBox.appendChild(h("div", { class: "result" }, [
-            h("div", { class: "lbl", text: r.year + " yil " + r.title + ", bozordagi o'rtacha narx" }),
-            h("div", { class: "tag-price", text: fmtNum(r.minPrice) + " – " + fmtNum(r.maxPrice) + " $" }),
-            h("p", { class: "lbl", text: r.count + " ta e'lon asosida. Aniq narx kraska, probeg va umumiy holatga qarab o'zgaradi." }),
+            h("div", { class: "lbl", text: r.year + " yil " + r.title + (r.transmission ? ", " + r.transmission.toLowerCase() : "") + " — bozor narxi" }),
+            h("div", { class: "tag-price", text: "~" + fmtNum(r.median || r.minPrice) + " $" }),
+            h("p", { class: "lbl", text: "Ko'pchiligi " + fmtNum(r.minPrice) + " – " + fmtNum(r.maxPrice) + " $ oralig'ida." }),
+            h("p", { class: "lbl", text: (r.label || r.count + " ta e'lon") + "." + (r.confident === false ? " O'xshash e'lonlar kam — baho taxminiy." : "") + " Aniq narx kraska, probeg va umumiy holatga qarab o'zgaradi." }),
             st.modelId ? h("button", { type: "button", class: "btn secondary", style: "margin-top:10px", text: "Shu moshinani sotish", onclick: function () {
               var mm = modelById(st.modelId); go("/new?brandId=" + mm.brand.id + "&modelId=" + mm.id + "&year=" + st.year);
             } }) : null,

@@ -135,7 +135,7 @@ function startWebApp(deps) {
     ADMIN_ID, LOG_CHANNEL_ID, WEBAPP_URL,
     checkCanPostAd, submitNewAdToAdmin, sanitizeText, normalizePhone, parseAdPrice,
     requestSoldToAdmin, changeAdPrice, submitAdEditToAdmin, submitVipRequest, useFreeUp,
-    estimateCarPrice, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
+    estimateCarPrice, market, submitDealerApplication, getSalonAdStatus, submitSalonAd, getReferralInfo,
     VIP_PRICE, VIP_CARD, VIP_CARD_NAME, payCard, payCardName, salonDailyLimit, promoEnabled, logUserAction, getAdVotes,
     getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement, SALON_PLAN_DESC,
   } = deps;
@@ -198,25 +198,19 @@ function startWebApp(deps) {
     return u;
   }
 
-  // Bozor narxiga solishtirish (kanaldagi belgi bilan bir xil qoida: shu model, ±2 yil, kamida 3 ta)
+  // Bozor narxiga solishtirish — kanaldagi belgi bilan BIR XIL hisob (market.js: model + yil + karobka, mediana).
+  // Faqat ishonchli bo'lsa (kamida 5 ta o'xshash e'lon) belgi qo'yiladi.
   async function priceBadges(items) {
-    const modelIds = [...new Set(items.map(a => a.model_id).filter(Boolean))];
     const out = new Map();
-    if (!modelIds.length) return out;
-    const [rows] = await db.execute(
-      `SELECT model_id, year, price FROM ads WHERE status = 'active' AND model_id IN (${modelIds.map(() => "?").join(",")}) AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000`,
-      modelIds
-    );
-    for (const ad of items) {
-      if (!ad.model_id) continue;
-      const y = int(ad.year, 0);
-      const same = rows.filter(r => r.model_id === ad.model_id && Math.abs(int(r.year, 0) - y) <= 2).map(r => int(r.price, 0));
-      if (same.length < 3) continue;
-      const avg = same.reduce((a, b) => a + b, 0) / same.length;
-      const diff = Math.round(((int(ad.price, 0) - avg) / avg) * 100);
-      if (diff <= -5) out.set(ad.id, { type: "cheap", pct: Math.abs(diff), text: `Bozordan ${Math.abs(diff)}% arzon` });
-      else if (diff < 10) out.set(ad.id, { type: "market", text: "Bozor narxida" });
-    }
+    if (!market) return out;
+    await Promise.all(items.map(async (ad) => {
+      try {
+        const c = await market.compareAd(ad);
+        if (!c || !c.confident) return;
+        if (c.kind === "cheap") out.set(ad.id, { type: "cheap", pct: Math.abs(c.diff), text: `Bozordan ${Math.abs(c.diff)}% arzon` });
+        else if (c.kind === "market") out.set(ad.id, { type: "market", text: "Bozor narxida" });
+      } catch (e) {}
+    }));
     return out;
   }
 
@@ -345,18 +339,12 @@ function startWebApp(deps) {
     });
   }
 
-  // E'lon sahifasidagi «narx shkalasi» uchun: shu model (±2 yil) faol e'lonlari narxi (kamida 3 ta bo'lsa)
+  // E'lon sahifasidagi «narx shkalasi» uchun: bozor narxi (mediana), o'rta yarmi oralig'i va nima bilan solishtirilgani
   async function marketStats(ad) {
-    if (!ad.model_id) return null;
-    const [rows] = await db.execute(
-      "SELECT id, year, price FROM ads WHERE status = 'active' AND model_id = ? AND CAST(price AS UNSIGNED) BETWEEN 300 AND 500000",
-      [ad.model_id]
-    );
-    const y = int(ad.year, 0);
-    const prices = rows.filter(r => Math.abs(int(r.year, 0) - y) <= 2).map(r => int(r.price, 0)).filter(Boolean);
-    if (prices.length < 3) return null;
-    const avg = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
-    return { count: prices.length, avg, min: Math.min(...prices), max: Math.max(...prices) };
+    if (!market) return null;
+    const c = await market.compareAd(ad);
+    if (!c) return null;
+    return { count: c.count, avg: c.median, median: c.median, min: c.low, max: c.high, label: c.label, confident: c.confident };
   }
   // «O'xshash e'lonlar»: shu model, yili eng yaqinlari
   async function similarAds(ad, user) {
@@ -861,9 +849,10 @@ function startWebApp(deps) {
     }
     const year = int(body.year);
     if (!year) return sendJson(res, 400, { ok: false, error: "Yilini tanlang." });
-    const out = await estimateCarPrice({ modelId, model, year });
-    logLine(user, `Narx aniqladi: ${title}, ${year} → ${out.ok ? `${money(out.minPrice)}–${money(out.maxPrice)} (${out.count} ta e'lon)` : "ma'lumot topilmadi"}`);
-    sendJson(res, 200, { ok: true, title, year, ...(out.ok ? { found: true, minPrice: out.minPrice, maxPrice: out.maxPrice, count: out.count } : { found: false }) });
+    const transmission = /^(Avtomat|Mexanika)$/.test(String(body.transmission || "")) ? body.transmission : "";
+    const out = await estimateCarPrice({ modelId, model, year, transmission });
+    logLine(user, `Narx aniqladi: ${title}, ${year}${transmission ? `, ${transmission}` : ""} → ${out.ok ? `${money(out.minPrice)}–${money(out.maxPrice)} (${out.count} ta e'lon)` : "ma'lumot topilmadi"}`);
+    sendJson(res, 200, { ok: true, title, year, transmission, ...(out.ok ? { found: true, minPrice: out.minPrice, maxPrice: out.maxPrice, median: out.median, count: out.count, label: out.label, confident: out.confident } : { found: false }) });
   }
 
   async function handleDealer(req, res, user) {
