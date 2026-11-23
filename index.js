@@ -251,6 +251,13 @@ const dbReady = (async () => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (chatId, messageId), KEY idx_ad (adId)
       )
     `);
+    // 🌙 Tungi sokinlik: kechasi (22:00–08:00) shaxsiy xabarnomalar navbatda kutadi
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS notify_queue (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, userId BIGINT NOT NULL, payload TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, KEY idx_user (userId)
+      )
+    `);
     // 🛠 Texnik ishlar paytida botga yozganlar — bot yoqilganda ularga «ishlayapti» xabari boriladi
     await db.execute("CREATE TABLE IF NOT EXISTS maint_waiters (userId BIGINT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
     await db.execute(`
@@ -322,6 +329,18 @@ const dbReady = (async () => {
       "ALTER TABLE salon_ads ADD COLUMN app_calls INT DEFAULT 0",
       "ALTER TABLE salon_ads ADD COLUMN app_notified INT DEFAULT 0",
       "ALTER TABLE users ADD COLUMN salon_credits INT DEFAULT 0",
+      // 📱 Ilova: oxirgi kirish (yangi e'lonlar soni uchun), tanlangan yo'nalish, tungi sokinlik
+      "ALTER TABLE users ADD COLUMN app_seen_at DATETIME NULL DEFAULT NULL",
+      "ALTER TABLE users ADD COLUMN app_prev_seen DATETIME NULL DEFAULT NULL",
+      "ALTER TABLE users ADD COLUMN app_role VARCHAR(8) NULL DEFAULT NULL",
+      "ALTER TABLE users ADD COLUMN quiet_hours TINYINT NOT NULL DEFAULT 1",
+      // 🔔 Obuna shartlari: marka, yildan, karobka guruhi, viloyat, narxi tushsa ham
+      "ALTER TABLE alerts ADD COLUMN brand_id INT NULL DEFAULT NULL",
+      "ALTER TABLE alerts ADD COLUMN min_year INT NULL DEFAULT NULL",
+      "ALTER TABLE alerts ADD COLUMN trans_group CHAR(1) NULL DEFAULT NULL",
+      "ALTER TABLE alerts ADD COLUMN region VARCHAR(60) NULL DEFAULT NULL",
+      "ALTER TABLE alerts ADD COLUMN notify_drop TINYINT NOT NULL DEFAULT 1",
+      "ALTER TABLE favorites ADD COLUMN saved_price INT NULL DEFAULT NULL",
       // VIP muddati: qachongacha VIP (kanal tepasida + ilovada birinchi) va «ertaga tugaydi» eslatmasi yuborilganmi
       "ALTER TABLE ads ADD COLUMN vip_until TIMESTAMP NULL DEFAULT NULL",
       "ALTER TABLE ads ADD COLUMN vip_reminded INT DEFAULT 0",
@@ -1863,9 +1882,81 @@ async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot", recei
 
 // Obuna (alert) shu e'longa mos keladimi: model ID bo'yicha, ID bo'lmasa nomi bo'yicha
 function alertMatchesAd(alert, ad) {
+  // Qo'shimcha shartlar: yildan, karobka guruhi, viloyat
+  if (alert.min_year && (parseInt(ad.year, 10) || 0) < Number(alert.min_year)) return false;
+  if (alert.trans_group && market.transGroup(ad.transmission) !== alert.trans_group) return false;
+  if (alert.region && String(ad.region || "") !== String(alert.region)) return false;
   if (alert.model_id && ad.model_id) return Number(alert.model_id) === Number(ad.model_id);
+  if (!alert.model_id && alert.brand_id) {
+    const m = ad.model_id ? catalog.modelById(ad.model_id) : null;
+    if (m) return Number(m.brandId || (m.brand && m.brand.id)) === Number(alert.brand_id);
+    const b = catalog.brandById ? catalog.brandById(alert.brand_id) : null;
+    return !!b && String(ad.carDetails || "").toLowerCase().startsWith(String(b.name).toLowerCase());
+  }
   const q = String(alert.query || "").toLowerCase();
   return q.length > 0 && String(ad.carDetails || "").toLowerCase().includes(q);
+}
+// 🌙 Tungi sokinlik: Toshkent vaqti bilan 22:00–08:00
+const isQuietNow = () => { const h = new Date(Date.now() + 5 * 3600 * 1000).getUTCHours(); return h >= 22 || h < 8; };
+// Shaxsiy xabarnoma: kechasi bo'lsa va foydalanuvchi sokinlikni yoqqan bo'lsa — ertalabgacha navbatga
+// payload: { kind: "text", text, extra } yoki { kind: "copy", fromChat, msgId, header }
+async function deliverNotice(userId, payload) {
+  try {
+    if (isQuietNow()) {
+      const [[u]] = await db.execute("SELECT quiet_hours FROM users WHERE id = ?", [userId]);
+      if (!u || Number(u.quiet_hours) !== 0) {
+        await db.execute("INSERT INTO notify_queue (userId, payload) VALUES (?, ?)", [userId, JSON.stringify(payload)]);
+        return "queued";
+      }
+    }
+    await sendNoticeNow(userId, payload);
+    return "sent";
+  } catch (e) {
+    if (e.error_code === 429) await delay((e.parameters?.retry_after || 1) * 1000);
+    return "failed";
+  }
+}
+async function sendNoticeNow(userId, p) {
+  if (p.kind === "copy") {
+    if (p.header) await bot.api.sendMessage(userId, p.header, { parse_mode: "HTML" });
+    await bot.api.copyMessage(userId, p.fromChat || CHANNEL_ID, p.msgId);
+  } else {
+    await bot.api.sendMessage(userId, p.text, { parse_mode: "HTML", ...(p.extra || {}) });
+  }
+}
+// Ertalab 08:00 dan keyin navbatdagilarni yuboramiz
+let queueFlushing = false;
+async function flushNotifyQueue() {
+  if (queueFlushing || isQuietNow()) return;
+  queueFlushing = true;
+  try {
+    const [rows] = await db.execute("SELECT * FROM notify_queue ORDER BY id LIMIT 300");
+    for (const r of rows) {
+      await db.execute("DELETE FROM notify_queue WHERE id = ?", [r.id]);
+      if (Date.now() - new Date(r.created_at).getTime() > 2 * 86400000) continue; // juda eskirgan
+      try { await sendNoticeNow(r.userId, JSON.parse(r.payload)); } catch (e) { if (e.error_code === 429) await delay((e.parameters?.retry_after || 1) * 1000); }
+      await delay(60);
+    }
+  } catch (e) { console.error("Xabarnoma navbatini yuborishda xato:", e.message); }
+  finally { queueFlushing = false; }
+}
+setInterval(flushNotifyQueue, 10 * 60 * 1000).unref();
+// Yangi e'lon kanalga chiqqanda — mos obunachilarga
+async function notifyAlertsForAd(ad, channelMsgId) {
+  try {
+    const [alerts] = await db.execute("SELECT * FROM alerts");
+    const adPrice = parseInt(String(ad.price).replace(/\D/g, ""), 10) || 0;
+    const sent = new Set();
+    for (const alert of alerts) {
+      if (sent.has(Number(alert.userId)) || Number(alert.userId) === Number(ad.userId)) continue;
+      if (!alertMatchesAd(alert, ad) || adPrice > alert.maxPrice) continue;
+      sent.add(Number(alert.userId));
+      let deal = "";
+      try { const c = await market.compareAd(ad); if (c && c.confident && c.kind === "cheap") deal = ` · 🔥 bozordan ${Math.abs(c.diff)}% arzon`; } catch (e) {}
+      await deliverNotice(alert.userId, { kind: "copy", msgId: channelMsgId, header: `🔔 <b>Siz kutgan mashina chiqdi!</b>\n${escapeHtml(ad.carDetails)}${ad.year ? `, ${ad.year}` : ""} — <b>${formatNum(ad.price)}$</b>${deal}` });
+      await delay(50);
+    }
+  } catch (e) { console.error("Obuna xabarnomasida xato:", e.message); }
 }
 
 // Marka tugmalari: callback = `${prefix}:${brandId}` ("Boshqa" = 0)
@@ -2115,20 +2206,31 @@ async function changeAdPrice({ adId, userId, newPrice }) {
     // Saqlaganlarga xabar (orqa fonda — javobni kutib turmaydi)
     (async () => {
       const [favs] = await db.execute("SELECT userId FROM favorites WHERE adId = ?", [ad.id]);
+      const told = new Set();
+      const kb = (extra) => {
+        const k = new InlineKeyboard();
+        if (ad.channelMsgId) k.url("📱 Ko'rish", `https://t.me/engarzonidamoshina/${ad.channelMsgId}`);
+        if (extra) k.text(extra[0], extra[1]);
+        return k;
+      };
       for (const fav of favs) {
-        try {
-          await bot.api.sendMessage(fav.userId,
-            `🔔 <b>SIZ KUZATAYOTGAN MOSHINA ARZONLASHDI!</b>\n\n` +
-            `🚗 <b>${ad.carDetails}</b> narxi <b>${diff}$</b> ga tushdi.\n\n` +
-            `❌ Eski narx: <s>${oldPriceNum}$</s>\n` +
-            `✅ Yangi narx: <b>${newPriceNum}$</b>\n\n` +
-            `Kanalda ko'rish: https://t.me/engarzonidamoshina/${ad.channelMsgId}`,
-            { parse_mode: "HTML" }
-          );
-          await delay(50);
-        } catch (e) {
-          if (e.error_code === 429) await delay((e.parameters?.retry_after || 1) * 1000);
-        }
+        told.add(Number(fav.userId));
+        await deliverNotice(fav.userId, { kind: "text",
+          text: `📉 <b>Saqlagan mashinangiz arzonladi</b>\n\n🚗 <b>${escapeHtml(ad.carDetails)}</b>${ad.year ? `, ${ad.year}` : ""}\n<s>${formatNum(oldPriceNum)}$</s> → <b>${formatNum(newPriceNum)}$</b>  (−${formatNum(diff)}$)`,
+          extra: { reply_markup: kb(["🔕 Bu xabarni o'chirish", `unfav:${ad.id}`]) } });
+        await delay(50);
+      }
+      // Narxi tushganda: mos obunasi bor va «narxi tushsa ham» yoqilganlar (saqlamaganlar)
+      const [alerts] = await db.execute("SELECT * FROM alerts WHERE notify_drop = 1");
+      const full = { ...ad, price: String(newPriceNum) };
+      for (const a of alerts) {
+        if (told.has(Number(a.userId)) || Number(a.userId) === Number(ad.userId)) continue;
+        if (!alertMatchesAd(a, full) || newPriceNum > a.maxPrice) continue;
+        told.add(Number(a.userId));
+        await deliverNotice(a.userId, { kind: "text",
+          text: `📉 <b>Qidirayotgan mashinangiz arzonladi</b>\n\n🚗 <b>${escapeHtml(ad.carDetails)}</b>${ad.year ? `, ${ad.year}` : ""}\n<s>${formatNum(oldPriceNum)}$</s> → <b>${formatNum(newPriceNum)}$</b>  (−${formatNum(diff)}$)`,
+          extra: { reply_markup: kb(null) } });
+        await delay(50);
       }
     })().catch((e) => console.error("Saqlaganlarga xabar yuborishda xato:", e));
   }
@@ -5556,26 +5658,7 @@ if (ad.barter && ad.barter !== "Yo'q") {
         console.log(`⚠️ ${ad.userId} ID egasi botni blok qilgani sababli xabar bormadi.`);
       }
       
-      try {
-        const [alerts] = await db.execute("SELECT * FROM alerts");
-        const adPrice = parseInt(ad.price.replace(/\D/g, "")) || 0;
-        const adDetails = ad.carDetails.toLowerCase();
-
-        for (const alert of alerts) {
-            if (alertMatchesAd(alert, ad) && adPrice <= alert.maxPrice) { // model ID bo'yicha (bo'lmasa nomi bo'yicha)
-                try {
-                    await bot.api.sendMessage(alert.userId, `🔔 <b>SIZ Qidirayotgan moshina chiqdi!</b>\n\nBizning kanalga sizning talabingizga mos moshina joylandi:`, { parse_mode: "HTML" });
-                    await bot.api.copyMessage(alert.userId, CHANNEL_ID, msg.message_id);
-                    
-                    await delay(50); // <--- MANA SHU PAUZA QO'SHILDI
-                } catch(e) {
-                    if (e.error_code === 429) {
-                       await delay((e.parameters?.retry_after || 1) * 1000);
-                    }
-                }
-            }
-        }
-      } catch(e) { console.error("Xabarnoma yuborishda xato:", e); }
+      notifyAlertsForAd(ad, msg.message_id); // 🔔 mos obunachilarga (tungi sokinlik bilan)
       
     } catch (e) {
       console.error("Kanalga yuborishda xatolik:", e);
@@ -5696,26 +5779,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
       
       // Alert xabarnomalari
      // Alert xabarnomalari
-      try {
-        const [alerts] = await db.execute("SELECT * FROM alerts");
-        const adPrice = parseInt(ad.price.replace(/\D/g, "")) || 0;
-        const adDetails = ad.carDetails.toLowerCase();
-
-        for (const alert of alerts) {
-            if (alertMatchesAd(alert, ad) && adPrice <= alert.maxPrice) { // model ID bo'yicha (bo'lmasa nomi bo'yicha)
-                try {
-                    await bot.api.sendMessage(alert.userId, `🔔 <b>SIZ Qidirayotgan moshina chiqdi!</b>`, { parse_mode: "HTML" });
-                    await bot.api.copyMessage(alert.userId, CHANNEL_ID, msg.message_id);
-                    
-                    await delay(50); // <--- MANA SHU PAUZA QO'SHILDI
-                } catch(e) {
-                    if (e.error_code === 429) {
-                       await delay((e.parameters?.retry_after || 1) * 1000);
-                    }
-                }
-            }
-        }
-      } catch(e) {}
+      notifyAlertsForAd(ad, msg.message_id); // 🔔 mos obunachilarga (tungi sokinlik bilan)
       
     } catch (e) {
       console.error("Kanalga yuborishda xatolik:", e);
@@ -6261,6 +6325,12 @@ bot.callbackQuery(/^myads_page:(\d+)/, async (ctx) => {
   await sendMyAdsPage(ctx, page);
 });
 
+// 🔕 Narx xabarini o'chirish: e'lon saqlanganlardan olib tashlanadi
+bot.callbackQuery(/^unfav:(\d+)$/, async (ctx) => {
+  await db.execute("DELETE FROM favorites WHERE userId = ? AND adId = ?", [ctx.from.id, ctx.match[1]]).catch(() => {});
+  await ctx.answerCallbackQuery({ text: "🔕 Bu mashina bo'yicha xabar kelmaydi (saqlanganlardan olindi)." }).catch(() => {});
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+});
 // 📊 Statistika kartasi (widget) — faqat e'lon egasiga
 bot.callbackQuery(/^stat_w:(\d+)$/, async (ctx) => {
   const [[ad]] = ctx.from.id === ADMIN_ID
@@ -7668,7 +7738,7 @@ setInterval(checkVipExpiry, 10 * 60 * 1000).unref();
 setTimeout(checkVipExpiry, 60 * 1000).unref();
 
 setInterval(() => runScheduledPosts(new Date()), 60 * 1000 * 30);
-module.exports = { nudgeLowViewAds, loadBotSettings, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
+module.exports = { nudgeLowViewAds, loadBotSettings, alertMatchesAd, notifyAlertsForAd, flushNotifyQueue, deliverNotice, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
 
 // ==============================================================
 // 🧯 JAVOBSIZ TUGMALAR (eng oxirida turishi shart — boshqa handlerlardan keyin)

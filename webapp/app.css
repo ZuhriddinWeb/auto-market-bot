@@ -695,3 +695,159 @@ button.tariff:active { transform: scale(.99); }
 .a-cmd-chips { margin-bottom: 14px; }
 .a-cmd-chips .chip { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
 .a-cmd-chips small { font-family: var(--font); color: var(--ink-3); }
+
+/* =====================================================================
+   ✨ YANGI DIZAYN (2026-11): Bozor bosh sahifasi, kartalar, e'lon sahifasi,
+   e'lon berish bosqichlari, narx maslahati, xush kelibsiz, saqlanganlar
+   ===================================================================== */
+:root { --drop: #0a6fe0; --drop-soft: #e2eefd; --gold: #ffb800; }
+[data-theme="dark"] { --drop: #5aa2ff; --drop-soft: #13294a; }
+
+/* --- Bozor tepasi --- */
+.mk-hero:empty { display: none; }
+.mk-brandline { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 2px 2px 8px; }
+.mk-logo { font: 700 21px/1 var(--display); letter-spacing: -.02em; color: var(--ink); }
+.mk-logo span { color: var(--brand); }
+.live { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--deal); background: var(--deal-soft); padding: 5px 10px; border-radius: 999px; white-space: nowrap; }
+.live i { width: 7px; height: 7px; border-radius: 50%; background: var(--deal); box-shadow: 0 0 0 0 var(--deal); animation: livePulse 1.8s infinite; }
+@keyframes livePulse { 0% { box-shadow: 0 0 0 0 rgba(10,135,84,.5); } 70% { box-shadow: 0 0 0 7px rgba(10,135,84,0); } 100% { box-shadow: 0 0 0 0 rgba(10,135,84,0); } }
+@media (prefers-reduced-motion: reduce) { .live i { animation: none; } }
+
+.chips.quick .chip { font-weight: 600; }
+.chip.brand-x { background: var(--ink); color: var(--surface); }
+
+.mk-extras:empty { display: none; }
+.brand-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 12px 0 4px; }
+.brand-tiles .bt { border: 0; background: var(--surface); border-radius: var(--r-m); padding: 10px 2px 8px; display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; color: var(--ink); font: inherit; min-width: 0; box-shadow: 0 0 0 1px var(--line); }
+.brand-tiles .bt:active { transform: scale(.96); }
+.brand-tiles .bt i { width: 34px; height: 34px; border-radius: 50%; background: var(--brand-soft); color: var(--brand); display: grid; place-items: center; font: 700 12px/1 var(--display); font-style: normal; }
+.brand-tiles .bt span { font-size: 11.5px; font-weight: 500; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 3px; }
+.brand-tiles .bt.more i { background: var(--surface-2); color: var(--ink-2); font-size: 18px; }
+
+.new-banner { width: 100%; border: 0; margin: 12px 0 0; padding: 12px 14px; border-radius: var(--r-m); display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer; font: inherit; color: #fff; background: linear-gradient(120deg, var(--brand), #3f8cf3); box-shadow: 0 8px 20px -12px rgba(22,103,217,.7); }
+.new-banner .n { flex: none; min-width: 42px; height: 42px; padding: 0 6px; border-radius: 12px; background: rgba(255,255,255,.2); display: grid; place-items: center; font: 700 17px/1 var(--display); }
+.new-banner .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.new-banner .tx b { font-size: 14.5px; }
+.new-banner .tx span { font-size: 12.5px; opacity: .9; }
+.new-banner .go { flex: none; background: #fff; color: var(--brand); font-weight: 700; font-size: 13px; padding: 7px 12px; border-radius: 10px; }
+
+.sec-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 18px 2px 8px; }
+.sec-row h3 { margin: 0; font: 600 15.5px/1.2 var(--display); letter-spacing: -.01em; }
+.link { border: 0; background: none; color: var(--brand); font: 500 13.5px var(--font); cursor: pointer; padding: 4px 0; }
+
+.recent-row, .prem-row { display: flex; gap: 10px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 2px 16px 4px; scroll-snap-type: x proximity; }
+.recent-row::-webkit-scrollbar, .prem-row::-webkit-scrollbar { display: none; }
+.recent-row .rc { flex: none; width: 118px; border: 0; padding: 0; background: var(--surface); border-radius: 12px; overflow: hidden; text-align: left; cursor: pointer; color: var(--ink); font: inherit; box-shadow: 0 0 0 1px var(--line); scroll-snap-align: start; }
+.recent-row .rc img, .recent-row .rc .noimg { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--surface-2); }
+.recent-row .rc b { display: block; padding: 6px 8px 0; font: 600 13px/1.2 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recent-row .rc small { display: block; padding: 2px 8px 8px; color: var(--ink-2); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.prem-row .prem { flex: none; width: min(78vw, 320px); aspect-ratio: 16 / 10; position: relative; border: 0; padding: 0; border-radius: var(--r-m); overflow: hidden; cursor: pointer; background: #1b2433; color: #fff; text-align: left; font: inherit; scroll-snap-align: start; box-shadow: 0 0 0 2px rgba(179,107,255,.55); }
+.prem-row .prem img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.prem-row .prem .ov { position: absolute; inset: 0; background: linear-gradient(to top, rgba(9,14,22,.82) 0, rgba(9,14,22,.1) 55%, rgba(9,14,22,.25) 100%); }
+.prem-row .prem .tl { position: absolute; left: 10px; top: 10px; right: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+.prem-row .prem .tl .deal-tag { position: static; }
+.prem-row .prem .tx { position: absolute; left: 12px; right: 12px; bottom: 10px; display: flex; flex-direction: column; gap: 2px; }
+.prem-row .prem .tx b { font: 700 19px/1.1 var(--display); letter-spacing: -.01em; }
+.prem-row .prem .tx span { font-size: 12.5px; opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.sub-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin: 12px 0 4px; border-radius: var(--r-m); background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--brand-soft), 0 0 0 1px var(--line); }
+.sub-card .bell { flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; font-size: 20px; background: #fff3dc; }
+[data-theme="dark"] .sub-card .bell { background: #3a2c10; }
+.sub-card .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sub-card .tx b { font-size: 14px; }
+.sub-card .tx span { font-size: 12.5px; color: var(--ink-2); }
+.btn.sm { flex: none; width: auto; height: 36px; min-height: 36px; padding: 0 14px; font-size: 13.5px; border-radius: 10px; }
+
+/* --- Karta belgilari: tepada status, pastda chapda narx afzalligi, o'ngda rasmlar soni --- */
+.card .cnt { left: auto; right: 7px; }
+.deal-tag { position: absolute; left: 7px; bottom: 7px; z-index: 1; background: var(--deal); color: #fff; font-size: 11.5px; font-weight: 700; line-height: 1; padding: 5px 7px; border-radius: 7px; white-space: nowrap; box-shadow: 0 2px 6px rgba(10,135,84,.35); }
+.deal-tag.drop { background: var(--drop); box-shadow: 0 2px 6px rgba(10,111,224,.35); }
+[data-theme="dark"] .deal-tag { color: #04150d; }
+[data-theme="dark"] .deal-tag.drop { color: #04142a; }
+.new-dot { position: absolute; top: 9px; right: 48px; z-index: 2; width: 10px; height: 10px; border-radius: 50%; background: #ff3b30; box-shadow: 0 0 0 2px #fff; }
+.card.mini .new-dot { right: 44px; }
+.card.is-premium { box-shadow: 0 0 0 2px #a066ff, 0 4px 14px rgba(122,61,240,.18); }
+.saved-drop { margin-top: 4px; font-size: 12px; font-weight: 700; color: var(--drop); background: var(--drop-soft); padding: 3px 7px; border-radius: 7px; align-self: flex-start; }
+
+/* --- E'lon sahifasi --- */
+.drop-chip { display: inline-block; vertical-align: middle; margin-left: 8px; font: 700 13px/1 var(--font); color: var(--drop); background: var(--drop-soft); padding: 5px 8px; border-radius: 8px; letter-spacing: 0; }
+.ad-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; color: var(--ink-2); font-size: 13px; }
+.ad-sub > span:not(.plate) { display: inline-flex; align-items: center; gap: 5px; }
+.ad-sub svg { width: 15px; height: 15px; }
+.spec-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 0; margin-top: 16px; background: var(--surface); border-radius: var(--r-m); box-shadow: 0 0 0 1px var(--line); overflow: hidden; }
+.spec-row .sp { padding: 11px 8px; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; text-align: center; }
+.spec-row .sp + .sp { box-shadow: inset 1px 0 0 var(--line); }
+.spec-row .sp .k { font-size: 11.5px; color: var(--ink-3); }
+.spec-row .sp .v { font: 600 13.5px/1.2 var(--display); letter-spacing: -.01em; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.seller { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding: 12px 14px; border-radius: var(--r-m); background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
+.seller.trusted { box-shadow: inset 0 0 0 1.5px var(--brand), 0 6px 18px -12px rgba(22,103,217,.6); }
+.seller .av { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); color: var(--ink-2); font: 700 15px/1 var(--display); }
+.seller .av svg { width: 22px; height: 22px; }
+.seller.trusted .av { background: var(--brand); color: #fff; }
+.seller .who { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.seller .who b { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 15px; }
+.seller .who small { color: var(--ink-2); font-size: 12.5px; }
+.seller .who small:empty { display: none; }
+.seller .ok { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 700; color: var(--brand); background: var(--brand-soft); padding: 3px 7px; border-radius: 7px; }
+.seller .ok svg { width: 12px; height: 12px; }
+
+.safety { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 11px 13px; border-radius: 12px; background: var(--amber-soft, #fff4dc); color: var(--ink); font-size: 13px; line-height: 1.4; }
+
+.actionbar .btn { gap: 10px; }
+.call-t { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; text-align: left; }
+.call-t b { font-size: 15px; }
+.call-t small { font-size: 12px; font-weight: 500; opacity: .85; font-variant-numeric: tabular-nums; }
+
+/* --- E'lon berish: bosqichlar va narx maslahati --- */
+.form-progress { position: sticky; top: 0; z-index: 3; background: var(--bg); margin: -12px -16px 4px; padding: 10px 16px 10px; }
+.form-progress .pl { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 13px; margin-bottom: 7px; }
+.form-progress .pt { font-weight: 600; color: var(--ink); }
+.form-progress .pn { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.pbar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.pbar i { height: 5px; border-radius: 3px; background: var(--line); transition: background .25s; }
+.pbar i.d { background: var(--deal); }
+.pbar i.cur { background: var(--brand); }
+
+.price-hint { margin-top: 10px; padding: 11px 13px; border-radius: 12px; background: var(--surface-2); font-size: 13px; }
+.price-hint[hidden] { display: none; }
+.price-hint b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+.price-hint p { margin: 0; color: var(--ink-2); }
+.price-hint.good { background: var(--deal-soft); } .price-hint.good b { color: var(--deal); }
+.price-hint.ok { background: var(--brand-soft); } .price-hint.ok b { color: var(--brand); }
+.price-hint.high { background: var(--amber-soft, #fff4dc); } .price-hint.high b { color: var(--amber, #b26b00); }
+.ph-bar { position: relative; height: 6px; margin: 12px 0 6px; }
+.ph-bar i { position: absolute; inset: 0; border-radius: 3px; background: linear-gradient(90deg, var(--deal) 0 33%, var(--brand) 33% 66%, var(--amber, #e8930c) 66%); opacity: .85; }
+.ph-bar .pin { position: absolute; top: 50%; width: 14px; height: 14px; margin-left: -7px; transform: translateY(-50%); border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 3px var(--ink), 0 2px 6px rgba(0,0,0,.25); transition: left .3s; }
+.ph-sc { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* --- Xush kelibsiz --- */
+.welcome { max-width: 440px; margin: 0 auto; padding: 28px 2px 10px; display: flex; flex-direction: column; gap: 12px; }
+.welcome .wave { font-size: 44px; line-height: 1; transform-origin: 70% 70%; animation: wave 1.6s ease-in-out 1; }
+@keyframes wave { 0%,100% { transform: rotate(0); } 20%,60% { transform: rotate(16deg); } 40%,80% { transform: rotate(-8deg); } }
+@media (prefers-reduced-motion: reduce) { .welcome .wave { animation: none; } }
+.welcome h1 { margin: 6px 0 0; font: 700 25px/1.2 var(--display); letter-spacing: -.02em; }
+.welcome .lead { margin: 0 0 8px; color: var(--ink-2); font-size: 15px; }
+.welcome .role { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px; border: 0; border-radius: var(--r-l); background: var(--surface); color: var(--ink); text-align: left; font: inherit; cursor: pointer; box-shadow: 0 0 0 1px var(--line), 0 6px 18px -14px rgba(9,14,22,.4); transition: transform .12s; }
+.welcome .role:active { transform: scale(.985); }
+.welcome .role .ic { flex: none; width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; font-size: 26px; }
+.welcome .role .ic.buy { background: var(--brand-soft); }
+.welcome .role .ic.sell { background: var(--deal-soft); }
+.welcome .role .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.welcome .role .tx b { font-size: 16px; }
+.welcome .role .tx span { color: var(--ink-2); font-size: 13px; }
+.welcome .role > svg { flex: none; width: 18px; height: 18px; color: var(--ink-3); }
+.w-stats { display: flex; gap: 10px; margin-top: 6px; }
+.w-stats > div { flex: 1; background: var(--surface); border-radius: var(--r-m); padding: 12px; box-shadow: 0 0 0 1px var(--line); display: flex; flex-direction: column; gap: 2px; }
+.w-stats b { font: 700 20px/1.1 var(--display); color: var(--brand); }
+.w-stats span { font-size: 12.5px; color: var(--ink-2); }
+.w-note { color: var(--ink-3); font-size: 12.5px; text-align: center; margin: 8px 0 0; }
+
+/* Pastki menyu 5 ta bo'lim bilan: yozuvlar sig'sin */
+.tabbar-in .tab { font-size: 10.5px; min-width: 0; }
+.tab.sell .dot { width: 42px; }
+.list-tools { margin-top: 4px; }
+.form-progress { margin: 6px -16px 4px; }
+.brand-tiles { align-items: stretch; }
+.brand-tiles .bt { justify-content: flex-start; margin: 0; }

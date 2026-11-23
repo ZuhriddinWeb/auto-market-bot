@@ -249,8 +249,15 @@ function startWebApp(deps) {
       hasNasiya: !!(ad.nasiya && ad.nasiya !== "Yo'q"),
       status: ad.status, soldPrice: ad.sold_price ? digits(ad.sold_price) : null,
       createdAt: ad.created_at, channelUrl: channelLink(ad),
+      modelId: ad.model_id || null, brandId: ad.brand_id || null,
       ...promoFlags(ad),
     };
+  }
+  // Karobka guruhi (avtomat / mexanika) — SQL shart
+  function transGroupSql(g) {
+    if (g === "A") return "LOWER(transmission) REGEXP 'avto|robot|variator|tiptronic|tiptronik|cvt|dsg|amt|dct'";
+    if (g === "M") return "LOWER(transmission) LIKE '%mex%'";
+    return null;
   }
 
   // Ro'yxat boshida turadiganlar: avval 💎 Premium, keyin 🌟 VIP (muddati tugamaganlari)
@@ -298,6 +305,15 @@ function startWebApp(deps) {
     const fuel = q.get("fuel"); if (fuel && opts.fuels.includes(fuel)) { where.push("fuel = ?"); params.push(fuel); logParts.push(fuel); }
     if (q.get("nasiya") === "1") { where.push("nasiya IS NOT NULL AND nasiya <> 'Yo''q'"); logParts.push("nasiyaga"); }
     if (q.get("urgent") === "1") { where.push("urgent_until > NOW()"); logParts.push("shoshilinch"); }
+    // ⚡ Tez filtrlar (bosh sahifadagi tugmalar)
+    if (q.get("drop") === "1") { where.push("old_price IS NOT NULL AND price_dropped_at > NOW() - INTERVAL 14 DAY AND CAST(old_price AS UNSIGNED) > CAST(price AS UNSIGNED)"); logParts.push("narxi tushgan"); }
+    if (q.get("today") === "1") { where.push("created_at > NOW() - INTERVAL 24 HOUR"); logParts.push("bugungi"); }
+    if (q.get("prem") === "1") { where.push("(premium_until > NOW() OR vip_until > NOW())"); }
+    const since = q.get("since") ? new Date(q.get("since")) : null;
+    if (since && !isNaN(since.getTime())) { where.push("created_at > ?"); params.push(since); logParts.push("oxirgi kirishdan beri"); }
+    const tg = transGroupSql(q.get("transg")); if (tg) { where.push(tg); logParts.push(q.get("transg") === "A" ? "avtomat" : "mexanika"); }
+    const dealOnly = q.get("deal") === "1";
+    if (dealOnly) logParts.push("bozordan arzon");
 
     const sorts = { new: "created_at DESC, id DESC", price_asc: "CAST(price AS UNSIGNED) ASC, id DESC", price_desc: "CAST(price AS UNSIGNED) DESC, id DESC" };
     // ⭐ VIP e'lonlar har doim birinchi (to'lov tasdiqlangandan keyin VIP_TOP_DAYS kun davomida)
@@ -309,12 +325,25 @@ function startWebApp(deps) {
     const page = Math.max(1, int(q.get("page"), 1));
     const whereSql = where.join(" AND ");
 
-    const [[cnt]] = await db.execute(`SELECT COUNT(*) AS total FROM ads WHERE ${whereSql}`, params);
-    const [rows] = await db.execute(
-      `SELECT id, carDetails, brand_id, model_id, price, year, probeg, region, transmission, fuel, photoId, nasiya, status, sold_price, created_at, channelMsgId, vip_until, premium_until, urgent_until, top_until, posted_at, old_price, price_dropped_at FROM ads WHERE ${whereSql} ORDER BY ${order} LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
-      params.concat(vipIds)
-    );
-    const [badges, favs] = await Promise.all([priceBadges(rows), favoriteSet(user.id, rows.map(r => Number(r.id)))]);
+    const COLS = "id, carDetails, brand_id, model_id, price, year, probeg, region, transmission, fuel, photoId, nasiya, status, sold_price, created_at, channelMsgId, vip_until, premium_until, urgent_until, top_until, posted_at, old_price, price_dropped_at";
+    let cnt, rows, badges;
+    if (dealOnly) {
+      // «🔥 Arzon»: bozor narxidan kamida 5% arzon (ishonchli hisob) — eng katta chegirmadan boshlab
+      const [all] = await db.execute(`SELECT ${COLS} FROM ads WHERE ${whereSql} ORDER BY created_at DESC LIMIT 500`, params);
+      const b = await priceBadges(all);
+      const deals = all.filter(r => (b.get(r.id) || {}).type === "cheap").sort((x, y) => b.get(y.id).pct - b.get(x.id).pct);
+      cnt = { total: deals.length };
+      rows = deals.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+      badges = b;
+    } else {
+      [[cnt]] = await db.execute(`SELECT COUNT(*) AS total FROM ads WHERE ${whereSql}`, params);
+      [rows] = await db.execute(
+        `SELECT ${COLS} FROM ads WHERE ${whereSql} ORDER BY ${order} LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
+        params.concat(vipIds)
+      );
+      badges = await priceBadges(rows);
+    }
+    const favs = await favoriteSet(user.id, rows.map(r => Number(r.id)));
 
     // Qidiruv statistikasi (botdagi kabi): model tanlangan bo'lsa, faqat 1-sahifada
     if (modelId && page === 1 && modelName) {
@@ -366,6 +395,8 @@ function startWebApp(deps) {
     if (!ad || (!["active", "sold"].includes(ad.status) && !isOwner)) return sendJson(res, 404, { ok: false, error: "E'lon topilmadi yoki o'chirilgan." });
 
     const [[dealer]] = await db.execute("SELECT is_dealer, dealer_name, dealer_paused FROM users WHERE id = ?", [ad.userId]);
+    let sellerAds = 0;
+    try { const [[sc]] = await db.execute("SELECT COUNT(*) AS c FROM ads WHERE userId = ? AND status = 'active'", [ad.userId]); sellerAds = Number(sc?.c) || 0; } catch (e) {}
     const [[saves]] = await db.execute("SELECT COUNT(*) AS cnt FROM favorites WHERE adId = ?", [ad.id]);
     const [badges, favs, market, similar] = await Promise.all([
       priceBadges([ad]), favoriteSet(user.id, [Number(ad.id)]),
@@ -398,6 +429,7 @@ function startWebApp(deps) {
         hasVideo: !!ad.videoId,
         dealer: dealer && dealer.is_dealer === 1 && dealer.dealer_paused !== 1 ? dealer.dealer_name : null,
         saves: Number(saves.cnt), isOwner: !!isOwner,
+        sellerAds,
         views: showViews, viewStats,
         market, // { count, avg, min, max } yoki null
       },
@@ -442,7 +474,28 @@ function startWebApp(deps) {
       } catch (e) {}
     }
     const check = subscribed ? await checkCanPostAd(user.id) : { ok: false, code: "not_subscribed", message: "Kanalimizga obuna bo'ling." };
-    const [[u]] = await db.execute("SELECT is_dealer, dealer_paused, dealer_name, dealer_phone, free_ups FROM users WHERE id = ?", [user.id]);
+    const [[u]] = await db.execute("SELECT is_dealer, dealer_paused, dealer_name, dealer_phone, free_ups, app_seen_at, app_prev_seen, app_role, quiet_hours FROM users WHERE id = ?", [user.id]);
+    // 🆕 «Oxirgi kirganingizdan beri»: 30 daqiqadan ko'p tanaffusdan keyin yangi sessiya hisoblanadi
+    let since = null, firstVisit = false;
+    try {
+      const seen = u?.app_seen_at ? new Date(u.app_seen_at) : null;
+      if (!seen) { firstVisit = true; await db.execute("UPDATE users SET app_seen_at = NOW() WHERE id = ?", [user.id]); }
+      else if (Date.now() - seen.getTime() > 30 * 60 * 1000) { since = seen; await db.execute("UPDATE users SET app_prev_seen = app_seen_at, app_seen_at = NOW() WHERE id = ?", [user.id]); }
+      else { since = u.app_prev_seen ? new Date(u.app_prev_seen) : null; await db.execute("UPDATE users SET app_seen_at = NOW() WHERE id = ?", [user.id]); }
+    } catch (e) {}
+    let newSince = null, todayCount = 0, activeCount = 0;
+    try {
+      const [[t]] = await db.execute("SELECT COUNT(*) AS c FROM ads WHERE status = 'active' AND created_at > NOW() - INTERVAL 24 HOUR");
+      todayCount = Number(t?.c) || 0;
+      if (firstVisit || !u?.app_role) { const [[ac]] = await db.execute("SELECT COUNT(*) AS c FROM ads WHERE status = 'active'"); activeCount = Number(ac?.c) || 0; }
+      if (since && Date.now() - since.getTime() < 30 * 86400000) {
+        const [recent] = await db.execute("SELECT id, carDetails, model_id, price, year, transmission FROM ads WHERE status = 'active' AND created_at > ? ORDER BY id DESC LIMIT 150", [since]);
+        if (recent.length) {
+          const b = await priceBadges(recent);
+          newSince = { since: since.toISOString(), count: recent.length, cheap: recent.filter(r => (b.get(r.id) || {}).type === "cheap").length };
+        }
+      }
+    } catch (e) {}
     const [lastRows] = await db.execute("SELECT phone FROM ads WHERE userId = ? ORDER BY id DESC LIMIT 1", [user.id]);
     if (url && url.searchParams.get("open") === "1") {
       // Qayerdan kelgani (kanal postidagi tugma) — reklama samarasini ko'rish uchun
@@ -468,6 +521,7 @@ function startWebApp(deps) {
       dealerPending: !!(u && u.is_dealer !== 1 && u.dealer_name),
       freeUps: u?.free_ups || 0,
       lastPhone: lastRows[0]?.phone || null,
+      role: u?.app_role || null, firstVisit, newSince, todayCount, activeCount, quiet: !u || Number(u.quiet_hours) !== 0,
       channelUrl: CHANNEL_URL,
       vip: { price: getPrice ? String(getPrice("vip")) : VIP_PRICE, days: getVipDays ? getVipDays() : 7, card: payCard ? payCard() : VIP_CARD, cardName: payCardName ? payCardName() : VIP_CARD_NAME },
       salonLimit: salonDailyLimit ? salonDailyLimit() : 2,
@@ -780,13 +834,19 @@ function startWebApp(deps) {
   // ---------- Saqlanganlar ----------
   async function handleFavorites(req, res, user) {
     const [rows] = await db.execute(
-      "SELECT a.* FROM favorites f JOIN ads a ON a.id = f.adId WHERE f.userId = ? AND a.status IN ('active', 'sold') ORDER BY f.created_at DESC",
+      "SELECT a.*, f.saved_price AS fav_saved_price FROM favorites f JOIN ads a ON a.id = f.adId WHERE f.userId = ? AND a.status IN ('active', 'sold') ORDER BY f.created_at DESC",
       [user.id]
     );
     const badges = await priceBadges(rows.filter(r => r.status === "active"));
     const favs = new Set(rows.map(r => Number(r.id)));
     logLine(user, `Saqlanganlarni ochdi (${rows.length} ta)`, "fav");
-    sendJson(res, 200, { ok: true, items: rows.map(r => card(r, badges, favs)) });
+    // 📉 Saqlagandan beri qancha arzonladi
+    sendJson(res, 200, { ok: true, items: rows.map(r => {
+      const c = card(r, badges, favs), saved = Number(r.fav_saved_price) || 0, now = int(digits(r.price)) || 0;
+      c.savedDrop = r.status === "active" && saved > now && now > 0 ? saved - now : (c.priceDrop ? (int(c.priceDrop.old) - now) : 0);
+      c.savedFrom = saved > now ? String(saved) : (c.priceDrop ? c.priceDrop.old : null);
+      return c;
+    }) });
   }
   async function handleFavoriteToggle(req, res, user, adId) {
     const body = await readJson(req);
@@ -794,7 +854,7 @@ function startWebApp(deps) {
     const ad = rows[0];
     if (body.on) {
       if (!ad || ad.status !== "active") return sendJson(res, 404, { ok: false, error: "E'lon faol emas." });
-      await db.execute("INSERT IGNORE INTO favorites (userId, adId) VALUES (?, ?)", [user.id, adId]);
+      await db.execute("INSERT IGNORE INTO favorites (userId, adId, saved_price) VALUES (?, ?, ?)", [user.id, adId, int(digits(ad.price)) || null]);
       logLine(user, `Saqladi ❤️: ${adLabel(ad)}`);
     } else {
       await db.execute("DELETE FROM favorites WHERE userId = ? AND adId = ?", [user.id, adId]);
@@ -809,30 +869,84 @@ function startWebApp(deps) {
     logLine(user, `Obunalarini ochdi (${rows.length} ta)`, "alerts");
     sendJson(res, 200, {
       ok: true,
-      items: rows.map(a => ({ id: a.id, title: alertTitle(a), maxPrice: a.maxPrice, modelId: a.model_id || null })),
+      items: rows.map(a => ({ id: a.id, title: alertTitle(a), maxPrice: a.maxPrice, modelId: a.model_id || null, brandId: a.brand_id || null, minYear: a.min_year || null, trans: a.trans_group || null, region: a.region || null, notifyDrop: Number(a.notify_drop) !== 0, conditions: alertConditions(a) })),
     });
   }
   function alertTitle(a) {
     const m = a.model_id ? catalog.modelById(a.model_id) : null;
-    return m ? `${m.brandName} ${m.name}` : String(a.query || "").replace(/^./, c => c.toUpperCase());
+    if (m) return `${m.brandName} ${m.name}`;
+    const b = !a.model_id && a.brand_id ? catalog.brandById(a.brand_id) : null;
+    if (b) return b.name;
+    return String(a.query || "").replace(/^./, c => c.toUpperCase());
+  }
+  function alertConditions(a) {
+    const out = [];
+    if (a.maxPrice && a.maxPrice < 999999) out.push(`${money(a.maxPrice)} gacha`);
+    if (a.min_year) out.push(`${a.min_year}+`);
+    if (a.trans_group) out.push(a.trans_group === "A" ? "Avtomat" : "Mexanika");
+    if (a.region) out.push(a.region);
+    return out;
   }
   async function handleAlertCreate(req, res, user) {
     const body = await readJson(req);
     const m = int(body.modelId) ? catalog.modelById(int(body.modelId)) : null;
-    const query = m ? m.name.toLowerCase() : sanitizeText(body.query, 60).toLowerCase();
-    if (!query) return sendJson(res, 400, { ok: false, error: "Avval moshina modelini tanlang." });
+    const b = !m && int(body.brandId) ? catalog.brandById(int(body.brandId)) : null;
+    const query = m ? m.name.toLowerCase() : b ? b.name.toLowerCase() : sanitizeText(body.query, 60).toLowerCase();
+    if (!query) return sendJson(res, 400, { ok: false, error: "Avval marka yoki modelni tanlang." });
     const maxPrice = Math.min(int(body.maxPrice, 999999) || 999999, 999999);
+    const minYear = int(body.minYear) > 1950 ? int(body.minYear) : null;
+    const transG = ["A", "M"].includes(body.trans) ? body.trans : null;
+    const region = body.region && catalog.AD_OPTIONS.regions.includes(body.region) ? body.region : null;
+    const notifyDrop = body.notifyDrop === false ? 0 : 1;
     const [[cnt]] = await db.execute("SELECT COUNT(*) AS c FROM alerts WHERE userId = ?", [user.id]);
     if (Number(cnt.c) >= 20) return sendJson(res, 400, { ok: false, error: "Ko'pi bilan 20 ta obuna bo'lishi mumkin. Keraksizlarini o'chiring." });
-    await db.execute("INSERT INTO alerts (userId, query, maxPrice, model_id) VALUES (?, ?, ?, ?)", [user.id, query, maxPrice, m ? m.id : null]);
-    logLine(user, `Obuna bo'ldi 🔔: ${alertTitle({ query, model_id: m ? m.id : null })}${maxPrice < 999999 ? `, ${money(maxPrice)} gacha` : ""}`);
-    sendJson(res, 200, { ok: true });
+    const [ins] = await db.execute("INSERT INTO alerts (userId, query, maxPrice, model_id, brand_id, min_year, trans_group, region, notify_drop) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [user.id, query, maxPrice, m ? m.id : null, b ? b.id : null, minYear, transG, region, notifyDrop]);
+    const a = { query, model_id: m ? m.id : null, brand_id: b ? b.id : null, maxPrice, min_year: minYear, trans_group: transG, region };
+    logLine(user, `Obuna bo'ldi 🔔: ${alertTitle(a)}${alertConditions(a).length ? ` · ${alertConditions(a).join(" · ")}` : ""}`);
+    sendJson(res, 200, { ok: true, id: ins && ins.insertId, title: alertTitle(a), conditions: alertConditions(a) });
   }
   async function handleAlertDelete(req, res, user, alertId) {
     const [rows] = await db.execute("SELECT * FROM alerts WHERE id = ? AND userId = ?", [alertId, user.id]);
     await db.execute("DELETE FROM alerts WHERE id = ? AND userId = ?", [alertId, user.id]);
     if (rows[0]) logLine(user, `Obunani o'chirdi: ${alertTitle(rows[0])}`);
     sendJson(res, 200, { ok: true });
+  }
+
+  async function handleAlertUpdate(req, res, user, alertId) {
+    const body = await readJson(req);
+    if (typeof body.notifyDrop === "boolean") await db.execute("UPDATE alerts SET notify_drop = ? WHERE id = ? AND userId = ?", [body.notifyDrop ? 1 : 0, alertId, user.id]);
+    sendJson(res, 200, { ok: true });
+  }
+  // 👋 Birinchi kirish: «sotib olaman» / «sotaman»
+  async function handleRole(req, res, user) {
+    const body = await readJson(req);
+    const role = ["buy", "sell"].includes(body.role) ? body.role : null;
+    if (!role) return sendJson(res, 400, { ok: false, error: "Tanlang." });
+    await db.execute("UPDATE users SET app_role = ? WHERE id = ?", [role, user.id]);
+    logLine(user, role === "buy" ? "Yo'nalish tanladi: 🚗 sotib olaman" : "Yo'nalish tanladi: 💰 sotaman");
+    sendJson(res, 200, { ok: true, role });
+  }
+  // 🌙 Tungi sokinlik (22:00–08:00 xabarnomalar ertalab keladi)
+  async function handlePrefs(req, res, user) {
+    const body = await readJson(req);
+    if (typeof body.quiet === "boolean") await db.execute("UPDATE users SET quiet_hours = ? WHERE id = ?", [body.quiet ? 1 : 0, user.id]);
+    sendJson(res, 200, { ok: true });
+  }
+  // 💡 E'lon berishda narx maslahati: shu model + yil + karobka bozor narxi
+  async function handlePriceHint(req, res, user) {
+    const body = await readJson(req);
+    if (!market) return sendJson(res, 200, { ok: true, found: false });
+    const m = int(body.modelId) ? catalog.modelById(int(body.modelId)) : null;
+    const text = sanitizeText(body.text, 60);
+    const modelId = m ? m.id : text ? catalog.matchCarDetails(text).modelId : null;
+    const year = int(body.year);
+    if (!year || (!modelId && !text)) return sendJson(res, 200, { ok: true, found: false });
+    const r = await market.marketPrice({ modelId, model: m ? m.name : text, year, transmission: body.trans || "" });
+    if (!r.ok) return sendJson(res, 200, { ok: true, found: false });
+    const price = int(digits(body.price));
+    const diff = price ? Math.round(((price - r.median) / r.median) * 100) : null;
+    sendJson(res, 200, { ok: true, found: true, median: r.median, low: r.low, high: r.high, count: r.count, confident: r.confident, label: r.label, diff });
   }
 
   // ---------- Xizmatlar ----------
@@ -1261,10 +1375,14 @@ function startWebApp(deps) {
     ["GET", /^\/api\/my\/ads\/(\d+)$/, (q, s, u, m) => handleMyAdGet(q, s, u, int(m[1]))],
     ["POST", /^\/api\/my\/ads\/(\d+)\/(sold|price|edit|vip|up)$/, (q, s, u, m) => handleMyAdAction(q, s, u, int(m[1]), m[2])],
     ["GET", /^\/api\/favorites$/, (q, s, u) => handleFavorites(q, s, u)],
+    ["POST", /^\/api\/role$/, (q, s, u) => handleRole(q, s, u)],
+    ["POST", /^\/api\/prefs$/, (q, s, u) => handlePrefs(q, s, u)],
+    ["POST", /^\/api\/price-hint$/, (q, s, u) => handlePriceHint(q, s, u)],
     ["POST", /^\/api\/favorites\/(\d+)$/, (q, s, u, m) => handleFavoriteToggle(q, s, u, int(m[1]))],
     ["GET", /^\/api\/alerts$/, (q, s, u) => handleAlerts(q, s, u)],
     ["POST", /^\/api\/alerts$/, (q, s, u) => handleAlertCreate(q, s, u)],
     ["DELETE", /^\/api\/alerts\/(\d+)$/, (q, s, u, m) => handleAlertDelete(q, s, u, int(m[1]))],
+    ["POST", /^\/api\/alerts\/(\d+)$/, (q, s, u, m) => handleAlertUpdate(q, s, u, int(m[1]))],
     ["POST", /^\/api\/evaluate$/, (q, s, u) => handleEvaluate(q, s, u)],
     ["GET", /^\/api\/referral$/, async (q, s, u) => { logLine(u, "Taklif (bepul UP) bo'limini ochdi", "ref"); sendJson(s, 200, await getReferralInfo(u.id)); }],
     ["POST", /^\/api\/dealer$/, (q, s, u) => handleDealer(q, s, u)],
