@@ -147,8 +147,13 @@ function createMarket({ db, catalog }) {
     return { ...m, diff, kind };
   }
 
+  // Hisobotlar uchun: shu modelning yillik qadrsizlanishi va avtomat/mexanika nisbati
+  async function modelInfo(modelId, model) {
+    const M = await modelRows(modelId, model);
+    return { rate: M.rate, ratio: M.ratio, count: M.rows.length };
+  }
   function clear() { cache.clear(); }
-  return { marketPrice, compareAd, transGroup, clear };
+  return { marketPrice, compareAd, transGroup, modelInfo, clear };
 }
 
 module.exports = { createMarket, transGroup, median };

@@ -931,6 +931,14 @@
         ]));
       }
 
+      // 💬 Narx taklifi
+      if (ad.offer && ad.status === "active") {
+        if (ad.offer.pending > 0) app.appendChild(h("button", { type: "button", class: "offer-box in", onclick: function () { go("/my/ad/" + ad.id); } }, [h("span", { class: "oi", text: "💬" }), h("span", { class: "tx" }, [h("b", { text: ad.offer.pending + " ta narx taklifi" }), h("span", { text: "Xaridorlar javobingizni kutyapti" })]), h("span", { class: "btn sm", text: "Javob berish" })]));
+        else if (ad.offer.can || ad.offer.mine) {
+          app.appendChild(offerBlock(ad));
+          if (pendingOfferAd === Number(ad.id)) { pendingOfferAd = null; if (ad.offer.can && (!ad.offer.mine || !/pending|countered|accepted/.test(ad.offer.mine.status))) setTimeout(function () { offerSheet(ad); }, 350); }
+        }
+      }
       var specs = h("dl", { class: "specs" });
       [["Kraska", ad.paint], ["Rangi", ad.color]].forEach(function (row) {
         if (!row[1]) return;
@@ -1669,6 +1677,7 @@
     var parts = ["👁 " + fmtNum(st.views) + (st.today ? " (bugun +" + st.today + ")" : "")];
     if (st.contacts) parts.push("📞 " + st.contacts);
     if (st.saves) parts.push("❤️ " + st.saves);
+    if (st.offers) parts.push("💬 " + st.offers + " ta taklif");
     return h("div", { class: "votes", title: "Ko'rishlar (bir odam sutkada bir marta) · qo'ng'iroq qilganlar · saqlaganlar", text: parts.join(" · ") });
   }
   function screenMy(m, query) {
@@ -1703,6 +1712,132 @@
     } else {
       renderAlerts(body);
     }
+  }
+  // 💬 NARX TAKLIF QILISH (xaridor)
+  function askWriteAccess() {
+    return new Promise(function (resolve) {
+      try { if (tg && tg.requestWriteAccess && tg.isVersionAtLeast && tg.isVersionAtLeast("6.9")) return tg.requestWriteAccess(function () { resolve(); }); } catch (e) {}
+      resolve();
+    });
+  }
+  function offerBlock(ad) {
+    var o = ad.offer, mine = o.mine;
+    var box = h("div", { class: "offer-box" });
+    var newBtn = o.can ? h("button", { type: "button", class: "btn sm", text: mine ? "Yangi taklif" : "Taklif qilish", onclick: function () { offerSheet(ad); } }) : null;
+    function act(action, okText) {
+      return function (e) {
+        var b = e.currentTarget; b.disabled = true;
+        api("/api/offers/" + mine.id, { json: { action: action } }).then(function (r) {
+          b.disabled = false;
+          if (!r.ok) return toast(r.error || "Xatolik");
+          haptic("success"); toast(okText); render();
+        });
+      };
+    }
+    var v;
+    if (!mine) v = ["💬", "Narx taklif qiling", "Sotuvchi javobini bot orqali bilasiz", [newBtn], ""];
+    else if (mine.status === "pending") v = ["⏳", "Taklifingiz: " + fmtPrice(mine.amount), "Sotuvchi javobini kutyapmiz. Javob bot orqali keladi.", null, "wait"];
+    else if (mine.status === "countered") v = ["🔁", "Sotuvchi " + fmtPrice(mine.counter) + " ga rozi", "Siz taklif qilgan: " + fmtPrice(mine.amount), [
+      h("button", { type: "button", class: "btn sm", text: "Roziman", onclick: act("agree", "✅ Kelishildi! Sotuvchining raqami bot orqali yuborildi.") }),
+      h("button", { type: "button", class: "btn sm ghost", text: "Yo'q", onclick: act("decline", "Sotuvchiga xabar berildi") })], "counter"];
+    else if (mine.status === "accepted") v = ["✅", "Kelishildi: " + fmtPrice(mine.counter || mine.amount), "Sotuvchiga qo'ng'iroq qiling — raqami pastda", null, "ok"];
+    else v = [mine.status === "expired" ? "⏳" : "❌", mine.status === "expired" ? "Sotuvchi javob bermadi" : fmtPrice(mine.amount) + " qabul qilinmadi", "Boshqa narx taklif qilishingiz yoki qo'ng'iroq qilishingiz mumkin", [newBtn], "no"];
+    box.className = "offer-box" + (v[4] ? " " + v[4] : "");
+    box.appendChild(h("span", { class: "oi", text: v[0] }));
+    box.appendChild(h("span", { class: "tx" }, [h("b", { text: v[1] }), h("span", { text: v[2] })]));
+    var btns = (v[3] || []).filter(Boolean);
+    if (btns.length) box.appendChild(h("span", { class: "ob" }, btns));
+    return box;
+  }
+  function offerSheet(ad) {
+    var price = Number(digits(ad.price)), min = Math.ceil(price * 0.5);
+    var st = { amount: "" };
+    var sugs = [];
+    [3, 5, 8].forEach(function (p) { var v = Math.floor(price * (1 - p / 100) / 100) * 100; if (v >= min && v < price && sugs.every(function (x) { return x.v !== v; })) sugs.push({ v: v, p: Math.round((price - v) / price * 100) }); });
+    var hint = h("p", { class: "help offer-hint" });
+    var inp;
+    function upd() {
+      var a = Number(digits(st.amount));
+      hint.classList.remove("bad");
+      if (!a) { hint.textContent = ""; return; }
+      if (a >= price) { hint.textContent = "Taklif e'lon narxidan (" + fmtPrice(price) + ") past bo'lsin"; hint.classList.add("bad"); }
+      else if (a < min) { hint.textContent = "Juda past — kamida " + fmtPrice(min); hint.classList.add("bad"); }
+      else hint.textContent = "−" + Math.round((price - a) / price * 100) + "% · e'lon narxidan " + fmtPrice(price - a) + " kam";
+      chips.querySelectorAll(".chip").forEach(function (c) { c.setAttribute("aria-pressed", c.dataset.v === String(a) ? "true" : "false"); });
+    }
+    var chips = h("div", { class: "chips" }, sugs.map(function (x) {
+      return h("button", { type: "button", class: "chip", "data-v": String(x.v), "aria-pressed": "false", onclick: function () { st.amount = String(x.v); inp.value = fmtNum(x.v); haptic("select"); upd(); } }, [fmtNum(x.v) + " $ · −" + x.p + "%"]);
+    }));
+    inp = textInput(st, "offer", { inputmode: "numeric", placeholder: sugs[1] ? "Masalan: " + fmtNum(sugs[1].v) : "Narx, $", "aria-labelledby": "lbl-offer" }, function (val) { st.amount = val; upd(); });
+    var mk = ad.market && ad.market.confident && ad.market.median ? h("div", { class: "offer-mk" }, ["📊 Bozor narxi:", h("b", { text: "~" + fmtPrice(ad.market.median) }), ad.market.label ? h("small", { text: ad.market.label }) : null]) : null;
+    var send = h("button", { type: "button", class: "btn", text: "Taklifni yuborish", onclick: function () {
+      var a = Number(digits(st.amount));
+      if (!a || a >= price || a < min) { upd(); if (!a) toast("Narxni yozing"); return; }
+      send.disabled = true; send.textContent = "Yuborilmoqda...";
+      askWriteAccess().then(function () { return api("/api/offers", { json: { adId: ad.id, amount: a } }); }).then(function (r) {
+        send.disabled = false; send.textContent = "Taklifni yuborish";
+        if (!r.ok) return toast(r.error || "Xatolik");
+        closeSheet(); haptic("success"); toast("✅ Taklif yuborildi. Javobni bot orqali bilasiz."); render();
+      });
+    } });
+    openSheet("💬 Narx taklif qilish", [
+      h("p", { class: "page-sub" }, ["E'lon narxi: ", h("b", { text: fmtPrice(price) }), ". Sotuvchi qabul qilsa, bot sizga uning raqamini yuboradi."]),
+      mk,
+      h("div", { class: "group" }, [h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-offer", text: "Sizning taklifingiz, $" }), sugs.length ? chips : null, h("div", { style: sugs.length ? "margin-top:10px" : "" }, [inp]), hint])]),
+      h("p", { class: "help", style: "margin:10px 2px 0", text: "🔒 Ismingiz va Telegram profilingiz sotuvchiga ko'rsatilmaydi. Taklif 48 soat amal qiladi." }),
+      h("div", { class: "actions" }, [send]),
+    ]);
+  }
+  // 💬 Sotuvchi: e'loniga kelgan takliflar (boshqarish sahifasida)
+  function offersSection(id, onChange) {
+    var wrap = h("div");
+    function load() {
+      api("/api/offers?adId=" + id).then(function (r) {
+        wrap.innerHTML = "";
+        if (!r.ok || !r.items || !r.items.length) return;
+        var price = r.price || 0;
+        var pend = r.items.filter(function (o) { return o.status === "pending"; }).length;
+        wrap.appendChild(h("p", { class: "group-title", text: "💬 Narx takliflari" + (pend ? " · " + pend + " ta javob kutyapti" : "") }));
+        var list = h("div", { class: "offer-list" });
+        r.items.forEach(function (o) {
+          var st = { pending: ["Javob kutyapti", "wait"], countered: ["Qarshi taklif: " + fmtPrice(o.counter), "counter"], accepted: ["✅ Kelishildi" + (o.counter ? ": " + fmtPrice(o.counter) : ""), "ok"], rejected: ["Rad etilgan", "no"], expired: ["Muddati o'tgan", "no"] }[o.status] || [o.status, "no"];
+          var row = h("div", { class: "offer-row " + st[1] }, [
+            h("div", { class: "or-top" }, [h("b", { text: fmtPrice(o.amount) }), price ? h("span", { class: "pct", text: "−" + Math.round((price - o.amount) / price * 100) + "%" }) : null, h("span", { class: "when", text: relDay(o.at) })]),
+            h("div", { class: "or-st", text: st[0] }),
+          ]);
+          if (o.status === "pending") row.appendChild(h("div", { class: "or-act" }, [
+            h("button", { type: "button", class: "btn sm", text: "Qabul qilish", onclick: function () { reply(o, "accept"); } }),
+            h("button", { type: "button", class: "btn sm ghost", text: "Qarshi taklif", onclick: function () { counter(o); } }),
+            h("button", { type: "button", class: "btn sm ghost danger", text: "Rad etish", onclick: function () { reply(o, "reject"); } }),
+          ]));
+          list.appendChild(row);
+        });
+        wrap.appendChild(list);
+        wrap.appendChild(h("p", { class: "page-sub stat-note", text: "Xaridorning ismi ko'rsatilmaydi. Qabul qilsangiz, unga raqamingiz yuboriladi va u sizga qo'ng'iroq qiladi." }));
+      });
+    }
+    function reply(o, action, amount) {
+      var go2 = function () {
+        api("/api/offers/" + o.id, { json: { action: action, amount: amount } }).then(function (r) {
+          if (!r.ok) return toast(r.error || "Xatolik");
+          closeSheet(); haptic("success");
+          toast(action === "accept" ? "✅ Qabul qilindi. Xaridorga raqamingiz yuborildi." : action === "reject" ? "Rad etildi, xaridorga xabar berildi." : "🔁 Qarshi taklif yuborildi.");
+          load(); if (onChange) onChange();
+        });
+      };
+      if (action === "accept") confirmBox(fmtPrice(o.amount) + " taklifini qabul qilasizmi? Xaridorga raqamingiz yuboriladi.").then(function (ok) { if (ok) go2(); });
+      else go2();
+    }
+    function counter(o) {
+      var st = { c: "" };
+      openSheet("🔁 Qarshi taklif", [
+        h("p", { class: "page-sub", text: "Xaridor taklifi: " + fmtPrice(o.amount) + ". Qancha narxga rozisiz?" }),
+        h("div", { class: "group" }, [h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-counter", text: "Sizning narxingiz, $" }), textInput(st, "counter", { inputmode: "numeric", placeholder: "Masalan: " + fmtNum(Math.round((o.amount * 1.04) / 100) * 100), "aria-labelledby": "lbl-counter" })])]),
+        h("div", { class: "actions" }, [h("button", { type: "button", class: "btn", text: "Yuborish", onclick: function () { if (!digits(st.c)) return toast("Narxni yozing"); reply(o, "counter", digits(st.c)); } })]),
+      ]);
+    }
+    load();
+    return wrap;
   }
   // ❤️ Saqlanganlar: arzonlaganlari ajralib turadi, sotilganlar o'rniga o'xshashlari taklif qilinadi
   function screenSaved() {
@@ -1843,6 +1978,7 @@
           ]));
           app.appendChild(h("p", { class: "page-sub stat-note", text: "Ilova va bot qidiruvidagi ko'rishlar: bir odam sutkada bir marta hisoblanadi. Kanaldagi ko'rishlar post tagida alohida ko'rinadi." }));
         }
+        if (it.status === "active") app.appendChild(offersSection(id));
         if (it.status !== "active") { app.appendChild(h("p", { class: "page-sub", style: "margin-top:12px", text: it.status === "pending" ? "E'lon admin tekshiruvida. Tasdiqlangach shu yerdan boshqarasiz." : "E'lon sotilgan deb belgilangan." })); return; }
         if (it.editPending) app.appendChild(h("div", { class: "notice", style: "margin-top:12px" }, [h("span", { text: "⏳" }), h("div", null, [h("b", { text: "Tahriringiz admin tekshiruvida" }), h("span", { class: "s", text: "Tasdiqlangach kanaldagi e'lon yangilanadi." })])]));
 
@@ -3119,9 +3255,16 @@
   try { startParam = String((tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || new URLSearchParams(location.search).get("tgWebAppStartParam") || ""); } catch (e) {}
   if (!/^[a-z0-9_]{1,40}$/i.test(startParam)) startParam = "";
   var startApplied = false;
+  var pendingOfferAd = null;
   function startRoute(p) {
     var m = /^ad_(\d+)$/.exec(p);
     if (m) return "/ad/" + m[1];
+    // Kanal postidagi «💬 Narx taklif» — e'lon ochiladi va taklif oynasi o'zi chiqadi
+    m = /^of_(\d+)$/.exec(p);
+    if (m) { pendingOfferAd = Number(m[1]); return "/ad/" + m[1]; }
+    if (p === "alerts") return "/my?tab=alerts";
+    // Kanaldagi haftalik hisobotdan: «🔥 Arzon e'lonlar»
+    if (p === "deal") { market.f.deal = true; market.loaded = false; return "/"; }
     return { "new": "/new", evaluate: "/evaluate", my: "/my", services: "/services", credit: "/credit", admin: "/admin", admin_queue: "/admin/queue" }[p] || null;
   }
   function boot() {

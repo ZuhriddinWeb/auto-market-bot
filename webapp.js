@@ -13,6 +13,7 @@
 //                         POST /api/my/ads/:id/{sold,price,edit,vip,up}
 //   Saqlanganlar          GET  /api/favorites, POST /api/favorites/:id
 //   Obunalar              GET/POST /api/alerts, DELETE /api/alerts/:id
+//   Narx takliflari       POST /api/offers, POST /api/offers/:id (accept|reject|counter|agree|decline), GET /api/offers?adId=
 //   Xizmatlar             POST /api/evaluate, GET /api/referral, POST /api/dealer,
 //                         GET/POST /api/salon-ad
 //   Rasmlar               GET  /api/photo/:adId/:idx  (imzolangan havola, bot tokeni oshkor qilinmaydi)
@@ -433,6 +434,18 @@ function startWebApp(deps) {
       }
     }
     const showViews = viewStats ? views : V && views >= V.minShow() && views > 0 ? views : null;
+    // 💬 Narx taklifi: xaridorga — tugma/holat, egasiga — javob kutayotganlar soni
+    let offer = null;
+    if (deps.offers) {
+      try {
+        if (Number(ad.userId) === user.id) offer = { pending: (await deps.offers.pendingCounts([Number(ad.id)])).get(Number(ad.id)) || 0 };
+        else if (!isOwner) {
+          const mine = await deps.offers.forBuyer(ad.id, user.id);
+          const can = deps.offers.allowedFor(ad, user.id);
+          if (can || mine) offer = { can, mine };
+        }
+      } catch (e) {}
+    }
     sendJson(res, 200, {
       ok: true,
       ad: {
@@ -449,6 +462,7 @@ function startWebApp(deps) {
         saves: Number(saves.cnt), isOwner: !!isOwner,
         sellerAds,
         views: showViews, viewStats,
+        offer,
         market, // { count, avg, min, max } yoki null
       },
       similar,
@@ -763,7 +777,8 @@ function startWebApp(deps) {
         sv.forEach(x => savesMap.set(Number(x.adId), Number(x.c)));
       } catch (e) {}
     }
-    const statsOf = (r) => r.status === "pending" ? null : { views: Number(r.views) || 0, today: today.get(Number(r.id)) || 0, contacts: Number(r.contacts) || 0, saves: savesMap.get(Number(r.id)) || 0 };
+    const offersMap = deps.offers && ids.length ? await deps.offers.pendingCounts(ids) : new Map();
+    const statsOf = (r) => r.status === "pending" ? null : { views: Number(r.views) || 0, today: today.get(Number(r.id)) || 0, contacts: Number(r.contacts) || 0, saves: savesMap.get(Number(r.id)) || 0, offers: offersMap.get(Number(r.id)) || 0 };
     logLine(user, `Mening e'lonlarimni ochdi (${rows.length} ta)`, "my");
     sendJson(res, 200, {
       ok: true, freeUps: u?.free_ups || 0,
@@ -937,6 +952,37 @@ function startWebApp(deps) {
     sendJson(res, 200, { ok: true });
   }
   // 👋 Birinchi kirish: «sotib olaman» / «sotaman»
+  // 💬 Narx taklif qilish
+  async function handleOfferCreate(req, res, user) {
+    if (!deps.offers) return sendJson(res, 400, { ok: false, error: "Bu imkoniyat o'chirilgan." });
+    const body = await readJson(req);
+    const r = await once(`${user.id}:offer`, () => deps.offers.create({ adId: int(body.adId), buyer: user, amount: body.amount }));
+    if (!r.ok) return sendJson(res, 400, r);
+    sendJson(res, 200, { ok: true, id: r.id });
+  }
+  // Javob: sotuvchi — accept | reject | counter (amount); xaridor — agree | decline
+  async function handleOfferAction(req, res, user, offerId) {
+    if (!deps.offers) return sendJson(res, 400, { ok: false, error: "Bu imkoniyat o'chirilgan." });
+    const body = await readJson(req);
+    const a = String(body.action || "");
+    let r;
+    if (["accept", "reject", "counter"].includes(a)) {
+      r = await once(`${user.id}:offer`, () => deps.offers.respond({ offerId, sellerId: user.id, action: a, counter: body.amount }));
+      if (r.ok) logLine(user, `Narx taklifiga javob: #${r.ad.id} — ${a === "accept" ? "qabul qildi" : a === "reject" ? "rad etdi" : `qarshi taklif ${money(r.counter)}`}`);
+    } else if (["agree", "decline"].includes(a)) {
+      r = await once(`${user.id}:offer`, () => deps.offers.buyerRespond({ offerId, buyerId: user.id, action: a === "agree" ? "accept" : "reject" }));
+      if (r.ok) logLine(user, `Qarshi taklifga ${a === "agree" ? "rozi bo'ldi" : "rozi bo'lmadi"}: #${r.ad.id}`);
+    } else return sendJson(res, 400, { ok: false, error: "Noma'lum amal." });
+    if (!r.ok) return sendJson(res, 400, r);
+    sendJson(res, 200, { ok: true, status: r.status, counter: r.counter || null });
+  }
+  // Sotuvchiga: e'loniga kelgan takliflar
+  async function handleOfferList(req, res, user, url) {
+    const adId = int(url.searchParams.get("adId"));
+    const [[ad]] = await db.execute("SELECT id, userId, price FROM ads WHERE id = ?", [adId]);
+    if (!ad || Number(ad.userId) !== user.id || !deps.offers) return sendJson(res, 200, { ok: true, items: [], on: false });
+    sendJson(res, 200, { ok: true, items: await deps.offers.forSeller(ad.id, user.id), price: int(digits(ad.price)), on: deps.offers.isOn() });
+  }
   async function handleRole(req, res, user) {
     const body = await readJson(req);
     const role = ["buy", "sell"].includes(body.role) ? body.role : null;
@@ -1394,6 +1440,9 @@ function startWebApp(deps) {
     ["POST", /^\/api\/my\/ads\/(\d+)\/(sold|price|edit|vip|up)$/, (q, s, u, m) => handleMyAdAction(q, s, u, int(m[1]), m[2])],
     ["GET", /^\/api\/favorites$/, (q, s, u) => handleFavorites(q, s, u)],
     ["POST", /^\/api\/role$/, (q, s, u) => handleRole(q, s, u)],
+    ["POST", /^\/api\/offers$/, (q, s, u) => handleOfferCreate(q, s, u)],
+    ["GET", /^\/api\/offers$/, (q, s, u, m, url) => handleOfferList(q, s, u, url)],
+    ["POST", /^\/api\/offers\/(\d+)$/, (q, s, u, m) => handleOfferAction(q, s, u, int(m[1]))],
     ["POST", /^\/api\/prefs$/, (q, s, u) => handlePrefs(q, s, u)],
     ["POST", /^\/api\/price-hint$/, (q, s, u) => handlePriceHint(q, s, u)],
     ["POST", /^\/api\/favorites\/(\d+)$/, (q, s, u, m) => handleFavoriteToggle(q, s, u, int(m[1]))],

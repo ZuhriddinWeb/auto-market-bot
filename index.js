@@ -54,8 +54,16 @@ try {
         return `<${tag}${attrs}>${path.resolve(process.cwd(), v)}</${tag}>`;
       }
     );
+    const fontsDir = path.join(__dirname, "fonts");
+    // fonts/ papkasidagi shriftlar (Inter va boshqalar) albatta ko'rinsin
+    const withDir = fixed.includes(`<dir>${fontsDir}</dir>`) ? fixed : fixed.replace("</fontconfig>", `  <dir>${fontsDir}</dir>\n</fontconfig>`);
     const confTmp = path.join(os.tmpdir(), "avto-bot-fonts.conf");
-    fsSync.writeFileSync(confTmp, fixed);
+    fsSync.writeFileSync(confTmp, withDir);
+    process.env.FONTCONFIG_FILE = confTmp;
+  } else {
+    // fonts.conf yo'q bo'lsa — o'zimiz yozamiz (loyiha shriftlari + tizim shriftlari)
+    const confTmp = path.join(os.tmpdir(), "avto-bot-fonts.conf");
+    fsSync.writeFileSync(confTmp, `<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>\n  <dir>${path.join(__dirname, "fonts")}</dir>\n  <dir>/usr/share/fonts</dir>\n  <dir>/usr/local/share/fonts</dir>\n  <cachedir>${path.join(os.tmpdir(), "avto-fontcache")}</cachedir>\n</fontconfig>\n`);
     process.env.FONTCONFIG_FILE = confTmp;
   }
 } catch (e) { /* bo'lmasa — asl fonts.conf ishlatiladi */ }
@@ -258,6 +266,15 @@ const dbReady = (async () => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, KEY idx_user (userId)
       )
     `);
+    // 💬 Narx takliflari (xaridor → sotuvchi)
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS offers (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, adId BIGINT NOT NULL, buyerId BIGINT NOT NULL, sellerId BIGINT NOT NULL,
+        amount INT NOT NULL, counter INT NULL, status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NULL,
+        KEY idx_ad (adId), KEY idx_buyer (buyerId), KEY idx_status (status)
+      )
+    `);
     // 🛠 Texnik ishlar paytida botga yozganlar — bot yoqilganda ularga «ishlayapti» xabari boriladi
     await db.execute("CREATE TABLE IF NOT EXISTS maint_waiters (userId BIGINT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
     await db.execute(`
@@ -363,6 +380,8 @@ const dbReady = (async () => {
       "ALTER TABLE ads ADD COLUMN views INT NOT NULL DEFAULT 0",
       "ALTER TABLE ads ADD COLUMN contacts INT NOT NULL DEFAULT 0",
       "ALTER TABLE ads ADD COLUMN views_nudged TINYINT NOT NULL DEFAULT 0",
+      "ALTER TABLE ads ADD COLUMN sold_at TIMESTAMP NULL",
+      "ALTER TABLE ads ADD COLUMN post_look VARCHAR(40) NULL",
     ];
     for (const q of alterQueries) {
       try { await db.execute(q); } catch (e) {} // Устун бор бўлса, инкор қилади
@@ -796,7 +815,92 @@ const vipHeader = (ad) => (isPremiumActive(ad) ? PREMIUM_HEADER : isVipActive(ad
 // Narx oxirgi 7 kunda tushganmi (📉 belgi va kanalda eski narx ustidan chizish uchun)
 const recentDrop = (ad) => !!(ad && ad.old_price && ad.price_dropped_at && Date.now() - new Date(ad.price_dropped_at).getTime() < 7 * 86400000 && (parseInt(ad.old_price) || 0) > (parseInt(ad.price) || 0));
 // Kanal postining to'liq matni (bazadagi ma'lumotdan) — status yoqilganda / tugaganda shu bilan qayta yoziladi
+// =====================================================================
+// 🎨 KANAL POSTI KO'RINISHI (Admin → Avto-xabarlar): "0" — hozirgidek, "1" — e'lon kartochkasi, "2" — yangi matn
+// + holat belgilari: SOTILDI muhri, NARXI TUSHDI, Premium/VIP ramka (har biri alohida yoqiladi)
+// =====================================================================
+const POST_STYLES = { "0": "Hozirgidek", "1": "E'lon kartochkasi", "2": "Yangi matn" };
+function postStyle() { const v = botSettings.get("post:style"); return POST_STYLES[v] ? v : "0"; }
+const adOwnerCache = new Map(); // adId -> userId («Narx taklif» tugmasi admin e'lonlarida chiqmasligi uchun)
+const hashTag = (v) => { const t = String(v || "").replace(/[^\p{L}\p{N}_]+/gu, "_").replace(/^_+|_+$/g, ""); return t && !/^\d+$/.test(t) ? `#${t}` : ""; };
+const phoneFmt = (v) => { const d = String(v || "").replace(/\D/g, ""); return d.length === 12 ? `+${d.slice(0, 3)} ${d.slice(3, 5)} ${d.slice(5, 8)} ${d.slice(8, 10)} ${d.slice(10)}` : d ? `+${d}` : ""; };
+const isFilled = (v) => !!v && !["Ko'rsatilmagan", "Кўрсатилмаган", "Yo'q", "Йўқ", ""].includes(String(v).trim());
+const spNum = (v) => String(parseInt(String(v == null ? "" : v).replace(/\D/g, ""), 10) || 0).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+const kmSp = (v) => (/^\d[\d\s,.]*(km)?$/i.test(String(v == null ? "" : v).trim()) ? `${spNum(v)} km` : kmText(v));
+function modelTagName(ad) {
+  const m = ad.model_id && catalog.modelById(Number(ad.model_id));
+  if (m) return m.name;
+  const parts = String(ad.carDetails || "").trim().split(/\s+/);
+  return parts.length > 1 ? parts.slice(1).join(" ") : parts[0];
+}
+function postLookState(ad) {
+  const live = ad.status !== "sold";
+  return {
+    sold: !live && isAutoOn("st_sold"),
+    drop: live && recentDrop(ad) && isAutoOn("st_drop"),
+    prem: live && isAutoOn("st_premium") ? (isPremiumActive(ad) ? "premium" : isVipActive(ad) ? "vip" : null) : null,
+  };
+}
+// Rasm imzosi: rasm qayta chizilishi kerakmi (kartochka narxni ham ko'rsatadi). Hozirgi va «yangi matn» — rasmi bir xil
+const POST_LOOK_DEFAULT = "c|0|0|0|";
+function postLookSig(ad) {
+  const st = postLookState(ad), card = postStyle() === "1";
+  return `${card ? "k" : "c"}|${st.sold ? 1 : 0}|${st.drop ? 1 : 0}|${st.prem || 0}|${card ? spNum(ad.price) : ""}`.slice(0, 40);
+}
+function lookFor(ad) { return { style: postStyle(), ad, state: postLookState(ad) }; }
+async function savePostLook(ad) { await db.execute("UPDATE ads SET post_look = ? WHERE id = ?", [postLookSig(ad), ad.id]).catch(() => {}); }
+async function dealerBadgeOf(ad) {
+  try {
+    const [[d]] = await db.execute("SELECT is_dealer, dealer_name, dealer_paused FROM users WHERE id = ?", [ad.userId]);
+    if (d && Number(d.is_dealer) === 1 && Number(d.dealer_paused) !== 1 && d.dealer_name) return `✅ <b>Ishonchli sotuvchi: ${escapeHtml(d.dealer_name)}</b>\n\n`;
+  } catch (e) {}
+  return "";
+}
+// Yangi matn (1 — kartochka bilan qisqa, 2 — bo'limlarga ajratilgan)
+async function buildChannelCaptionNew(ad, style) {
+  const head = vipHeader(ad) + (await dealerBadgeOf(ad)) + (ad.is_hot ? `🔥 <b>QAYNOQ NARX!</b>\n\n` : "");
+  const car = escapeHtml(ad.carDetails || ""), price = spNum(ad.price);
+  const drop = recentDrop(ad);
+  let mk = null;
+  try { const c = await market.compareAd(ad); if (c && c.confident && !drop) mk = c; } catch (e) {}
+  const km = escapeHtml(kmSp(ad.probeg)), tr = escapeHtml(ad.transmission || ""), fuel = escapeHtml(ad.fuel || "");
+  const extra = [];
+  if (isFilled(ad.history)) extra.push(`🛠 Tarixi: ${escapeHtml(ad.history)}`);
+  if (isFilled(ad.barter)) extra.push(`🔄 Barter: ${escapeHtml(ad.barter)}`);
+  if (isFilled(ad.nasiya)) extra.push(`💳 Nasiya: ${escapeHtml(ad.nasiya)}`);
+  if (ad.dealer_offer) extra.push(`🎁 <b>Maxsus taklif:</b> ${escapeHtml(ad.dealer_offer)}`);
+  const g = market.transGroup(ad.transmission);
+  const tags = [hashTag(modelTagName(ad)), hashTag(ad.region), g ? (g === "A" ? "#Avtomat" : "#Mexanika") : ""].filter(Boolean).join(" ");
+  const phone = phoneFmt(ad.phone);
+  const invite = inviteLink();
+  let c;
+  if (style === "1") {
+    c = head + (drop
+      ? `<b>${car}, ${escapeHtml(ad.year)}</b>\n💰 <s>${spNum(ad.old_price)}$</s> <b>${price}$</b> 📉 −${spNum((parseInt(ad.old_price) || 0) - (parseInt(ad.price) || 0))}$\n`
+      : `<b>${car}, ${escapeHtml(ad.year)} · ${price}$</b>\n`);
+    if (mk) c += mk.kind === "cheap" ? `🔥 Bozor narxidan <b>${Math.abs(mk.diff)}% arzon</b> <i>(${mk.count} ta o'xshash e'lon)</i>\n` : mk.kind === "market" ? `👍 Bozor narxida <i>(${mk.count} ta o'xshash e'lon)</i>\n` : "";
+    c += `\n🛣 ${km} · ⚙️ ${tr} · ⛽ ${fuel}\n🎨 ${escapeHtml(ad.color || "—")} · 💎 ${escapeHtml(ad.paint || "—")}\n`;
+    if (extra.length) c += `<blockquote expandable>${extra.join("\n")}</blockquote>`;
+    c += `📞 <code>${phone}</code>\n${tags}${tags ? " · " : ""}🆔 ${ad.id}\n\n⚠️ <i>Mashinani ko'rmasdan oldindan pul o'tkazmang.</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+  } else {
+    const line = "━━━━━━━━━━━━━━";
+    c = head + `🚗 <b>${car.toUpperCase()} · ${escapeHtml(ad.year)}</b>\n`;
+    c += drop ? `💰 <s>${spNum(ad.old_price)} $</s> <b>${price} $</b> 📉\n` : `💰 <b>${price} $</b>${mk && mk.kind === "cheap" ? `   🔥 <i>bozordan ${Math.abs(mk.diff)}% arzon</i>` : mk && mk.kind === "market" ? "   👍 <i>bozor narxida</i>" : ""}\n`;
+    c += `${line}\n🛣 Yurgan: <b>${km}</b>\n⚙️ Karobka: <b>${tr}</b>\n⛽ Yoqilg'i: <b>${fuel}</b>\n🎨 Rangi: <b>${escapeHtml(ad.color || "—")}</b> · 💎 Kraska: <b>${escapeHtml(ad.paint || "—")}</b>\n`;
+    if (extra.length) c += extra.join("\n") + "\n";
+    c += `${line}\n📞 <code>${phone}</code>\n📍 ${tags}${tags ? " · " : ""}🆔 ${ad.id}\n⚠️ <i>Oldindan to'lov qilmang!</i> 👉 <a href="${invite}">Obuna bo'lish</a>`;
+  }
+  // Telegram: rasm izohi ≤ 1024 belgi — sig'masa, qo'shimcha ma'lumotni qisqartiramiz
+  if (captionVisibleLength(c) > 1000 && extra.length) {
+    const cut = (t) => t.replace(/(🛠 Tarixi: )([^\n<]{40})[^\n<]*/, "$1$2…").replace(/(🎁 <b>Maxsus taklif:<\/b> )([^\n<]{40})[^\n<]*/, "$1$2…");
+    c = cut(c);
+  }
+  return addPriceVoteLine(c);
+}
 async function buildChannelCaption(ad) {
+  if (ad && ad.id) adOwnerCache.set(Number(ad.id), Number(ad.userId));
+  const style = postStyle();
+  if (style !== "0") return buildChannelCaptionNew(ad, style);
   let dealerBadge = "";
   try {
     const [[d]] = await db.execute("SELECT is_dealer, dealer_name, dealer_paused FROM users WHERE id = ?", [ad.userId]);
@@ -1278,6 +1382,24 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
+// 💬 Qarshi taklif narxi (sotuvchi «🔁 Qarshi taklif» ni bosgandan keyin yozadi)
+bot.use(async (ctx, next) => {
+  const w = ctx.from && ctx.message && typeof ctx.message.text === "string" ? offerCounterWait.get(ctx.from.id) : null;
+  if (!w) return next();
+  const t = ctx.message.text.trim();
+  if (Date.now() > w.until) { offerCounterWait.delete(ctx.from.id); return next(); }
+  if (/^\/cancel/i.test(t)) { offerCounterWait.delete(ctx.from.id); return ctx.reply("Qarshi taklif bekor qilindi. Taklif hali ochiq — tugmalardan foydalanishingiz mumkin."); }
+  if (!/^[\d\s.,$]+$/.test(t)) { offerCounterWait.delete(ctx.from.id); return next(); }
+  const r = await offers.respond({ offerId: w.offerId, sellerId: ctx.from.id, action: "counter", counter: t });
+  if (!r.ok) {
+    if (/allaqachon|topilmadi|muddati|faol emas/.test(r.error)) offerCounterWait.delete(ctx.from.id);
+    return ctx.reply(`❗️ ${r.error}${offerCounterWait.has(ctx.from.id) ? "\nQayta yozing yoki /cancel." : ""}`);
+  }
+  offerCounterWait.delete(ctx.from.id);
+  logUserAction(ctx.from, `💬 Qarshi taklif: #${r.ad.id} — ${formatNum(r.counter)}$`);
+  return ctx.reply(`🔁 Qarshi taklifingiz (<b>${formatNum(r.counter)}$</b>) xaridorga yuborildi. Rozi bo'lsa, bot sizga xabar beradi.`, { parse_mode: "HTML" });
+});
+
 // 3. ЖАРАЁНЛАРНИ УЛАШ
 bot.use(conversations());
 
@@ -1373,8 +1495,10 @@ async function deleteMsgs(ctx, msgIds) {
     }
   }, 1500); 
 }
-// Watermark kesh
-let cachedWatermarkText = null; 
+// 📊 Diagrammalar va rasm belgilari (charts.js)
+const CHART_LIB = require("./charts");
+const POSTCARD = require("./postcard");
+const CHANNEL_USER = String(process.env.CHANNEL_ID || "").replace("@", "") || "engarzonidamoshina";
 
 // Telegram'dan fayl yuklash: aloqa uzilsa (ECONNRESET, timeout, 5xx) 3 martagacha qayta urinadi
 const RETRY_CODES = new Set(["ECONNRESET", "ETIMEDOUT", "ECONNABORTED", "EAI_AGAIN", "ENOTFOUND", "EPIPE", "ECONNREFUSED", "ERR_SOCKET_CONNECTION_TIMEOUT"]);
@@ -1393,7 +1517,75 @@ async function downloadBuffer(url, tries = 3) {
   }
   throw lastErr;
 }
-async function createCollage(photoUrls, badgeInfo = null) {
+// Holat bo'yicha lentalar va ramka
+function statusDecor(st) {
+  const C = POSTCARD.COLORS, rib = [];
+  if (st.prem === "premium") rib.push({ text: "★ PREMIUM", bg: C.gold });
+  else if (st.prem === "vip") rib.push({ text: "★ VIP", bg: C.vip });
+  if (st.drop) rib.push({ text: "▼ NARXI TUSHDI", bg: C.drop });
+  return { sold: !!st.sold, ribbons: rib, frame: st.prem === "premium" ? C.gold : st.prem === "vip" ? C.vip : null };
+}
+// 🪪 «E'lon kartochkasi»: tepada rasmlar (ko'pi bilan 4 ta), pastda oq panel — nomi, narxi, bozor belgisi, viloyat raqami
+async function createCardImage(buffers, badgeInfo, look) {
+  const ad = look.ad, st = look.state || {};
+  const slots = POSTCARD.cardSlots(Math.min(buffers.length, 4));
+  const composites = await Promise.all(slots.map(async (sl, i) => {
+    let img = sharp(buffers[i]).resize(sl.width, sl.height, { fit: "cover" });
+    if (st.sold) img = img.grayscale().modulate({ brightness: 0.85 });
+    return { input: await img.toBuffer(), left: sl.left, top: sl.top };
+  }));
+  const price = parseInt(String(ad.price).replace(/\D/g, ""), 10) || 0, old = parseInt(String(ad.old_price || "").replace(/\D/g, ""), 10) || 0;
+  let badge = null;
+  if (st.sold) {
+    const sp = parseInt(String(ad.sold_price || "").replace(/\D/g, ""), 10) || 0;
+    const days = Math.max(1, Math.ceil(((ad.sold_at ? new Date(ad.sold_at) : new Date()) - new Date(ad.created_at || Date.now())) / 86400000));
+    badge = { text: sp ? `SOTILDI: ${spNum(sp)}$` : `${days} KUNDA SOTILDI`, tone: "sold" };
+  } else if (st.drop && old > price) badge = { text: `−${spNum(old - price)}$ ARZONLADI`, tone: "drop" };
+  else if (badgeInfo && badgeInfo.text) badge = { text: badgeInfo.text, tone: String(badgeInfo.color).toLowerCase() === "#27ae60" ? "cheap" : "market" };
+  const dec = statusDecor(st);
+  const svg = POSTCARD.cardOverlaySvg({
+    title: ad.carDetails || "", specs: [ad.year, kmSp(ad.probeg), ad.transmission, ad.fuel].filter((x) => x && x !== "—").join(" · "),
+    price: `${spNum(price)}$`, oldPrice: st.drop && old > price ? `${spNum(old)}$` : null, badge, region: ad.region,
+    extra: buffers.length > 4 ? buffers.length - 4 : 0, sold: dec.sold, ribbons: dec.ribbons, frame: dec.frame, channel: CHANNEL_USER,
+  });
+  composites.push({ input: Buffer.from(svg), left: 0, top: 0 });
+  const out = path.join(__dirname, `collage_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.jpg`);
+  await sharp({ create: { width: POSTCARD.CARD.W, height: POSTCARD.CARD.H, channels: 3, background: "#ffffff" } }).composite(composites).jpeg({ quality: 88 }).toFile(out);
+  return out;
+}
+// E'lon rasmi (hozirgi sozlamalar bo'yicha): rasmlar Telegram dan olinadi
+async function adPhotoUrls(ad) {
+  const ids = String(ad.photoId || "").split(",").filter(Boolean);
+  return Promise.all(ids.map(async (id) => { const f = await bot.api.getFile(id); return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${f.file_path}`; }));
+}
+async function renderAdImage(ad) {
+  if (ad && ad.id) adOwnerCache.set(Number(ad.id), Number(ad.userId));
+  const look = lookFor(ad);
+  const badgeInfo = look.state.sold ? null : await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year, ad).catch(() => null);
+  return createCollage(await adPhotoUrls(ad), badgeInfo, look);
+}
+// Kanaldagi postni yangilash: matn (+ kerak bo'lsa rasm) hozirgi ko'rinishda
+async function updateChannelPost(ad, { media = false, caption = null } = {}) {
+  if (!ad || !ad.channelMsgId) return false;
+  const cap = caption || (await buildChannelCaption(ad));
+  const markup = ad.status === "sold" ? null : AD_CHANNEL_MARKUP(ad.id, ad.channelMsgId);
+  let file = null;
+  if (media) {
+    // Rasm chizilmasa (masalan, Telegram dan yuklanmasa) — hech bo'lmasa matn yangilanadi
+    try { file = await renderAdImage(ad); } catch (e) { console.error(`E'lon rasmini chizib bo'lmadi (#${ad.id}):`, e.message); }
+  }
+  if (file) {
+    try {
+      await bot.api.editMessageMedia(CHANNEL_ID, Number(ad.channelMsgId), { type: "photo", media: new InputFile(file), caption: cap, parse_mode: "HTML" }, markup ? { reply_markup: markup } : {});
+    } finally { fs.unlink(file, () => {}); }
+    await savePostLook(ad);
+  } else {
+    await bot.api.editMessageCaption(CHANNEL_ID, Number(ad.channelMsgId), { caption: cap, parse_mode: "HTML", ...(markup ? { reply_markup: markup } : {}) });
+  }
+  return true;
+}
+const needsMedia = (ad) => postLookSig(ad) !== (ad.post_look || POST_LOOK_DEFAULT);
+async function createCollage(photoUrls, badgeInfo = null, look = null) {
   // Bitta rasm yuklanmasa ham kollaj qolganlaridan yasaladi (hammasi yuklanmasa — xato)
   const results = await Promise.allSettled(photoUrls.map((url) => downloadBuffer(url)));
   const buffers = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
@@ -1401,6 +1593,8 @@ async function createCollage(photoUrls, badgeInfo = null) {
   if (failedN) console.error(`Kollaj: ${failedN} ta rasm yuklanmadi (${results.find((r) => r.status === "rejected").reason.code || "xato"}), qolganlaridan yasaldi.`);
   if (!buffers.length) throw results.find((r) => r.status === "rejected").reason;
 
+  if (look && look.style === "1" && look.ad) return createCardImage(buffers, badgeInfo, look);
+  const st = (look && look.state) || {};
   const layoutParams = [];
   const canvasWidth = 1200;
   let canvasHeight = 0;
@@ -1424,48 +1618,19 @@ async function createCollage(photoUrls, badgeInfo = null) {
   const composites = await Promise.all(
     buffers.map(async (buf, i) => {
       const param = layoutParams[i];
-      const resized = await sharp(buf).resize(param.width, param.height, { fit: "cover" }).toBuffer();
+      let img = sharp(buf).resize(param.width, param.height, { fit: "cover" });
+      if (st.sold) img = img.grayscale().modulate({ brightness: 0.85 });
+      const resized = await img.toBuffer();
       return { input: resized, top: param.top, left: param.left };
     })
   );
 
-  const rectHeight = 120;
-  const rectY = Math.floor((canvasHeight / 2) - (rectHeight / 2));
-  const blackBandSvg = `<svg width="${canvasWidth}" height="${canvasHeight}"><rect x="0" y="${rectY}" width="${canvasWidth}" height="${rectHeight}" fill="rgba(0, 0, 0, 0.5)" /></svg>`;
-
-  composites.push({ input: Buffer.from(blackBandSvg), top: 0, left: 0 });
-
-  if (!cachedWatermarkText) {
-    try {
-      const url = `https://placehold.co/${canvasWidth}x${rectHeight}/transparent/ffffff/png?text=%40engarzonidamoshina&font=Montserrat`;
-      const response = await axios.get(url, { responseType: "arraybuffer" });
-      cachedWatermarkText = Buffer.from(response.data);
-    } catch (error) {
-      console.error("Watermark xatolik:", error.message);
-    }
-  }
-
-  if (cachedWatermarkText) {
-    composites.push({ input: cachedWatermarkText, top: rectY, left: 0 });
-  }
-    // ================= NARX LENTASI (BURCHAKKA) =================
-  if (badgeInfo && badgeInfo.text) {
-    const FONT = "DejaVu Sans, Arial, sans-serif";
-    // Matn uzunligiga qarab lenta kengligini hisoblaymiz (har harf ~22px)
-    const textLen = badgeInfo.text.length;
-    const bandWidth = Math.min(textLen * 22 + 60, canvasWidth); // juda uzun bo'lmasligi uchun cheklaymiz
-    const bandHeight = 70;
-    const bandTop = 30; // yuqoridan 30px past
-
-    const badgeSvg = `
-      <svg width="${canvasWidth}" height="${canvasHeight}" xmlns="http://www.w3.org/2000/svg">
-        <rect x="${canvasWidth - bandWidth}" y="${bandTop}" width="${bandWidth}" height="${bandHeight}" fill="${badgeInfo.color}" rx="8" ry="8"/>
-        <text x="${canvasWidth - bandWidth / 2}" y="${bandTop + bandHeight / 2 + 12}" font-family="${FONT}" font-size="34" font-weight="bold" fill="#ffffff" text-anchor="middle">${badgeInfo.text}</text>
-      </svg>`;
-
-    composites.push({ input: Buffer.from(badgeSvg), top: 0, left: 0 });
-  }
-  // ===========================================================
+  // 🏷 «AvtoBozor» belgisi va kanal manzili — pastki lentada (mashinani to'smaydi). Avto-xabarlar → «Rasmdagi belgi»
+  if (isAutoOn("wm_logo")) composites.push({ input: Buffer.from(CHART_LIB.brandStripSvg(canvasWidth, canvasHeight, CHANNEL_USER)), top: 0, left: 0 });
+  // Narx belgisi (o'ng yuqori burchak): «BOZORDAN N% ARZON» / «BOZOR NARXIDA»
+  if (badgeInfo && badgeInfo.text && !st.sold) composites.push({ input: Buffer.from(CHART_LIB.priceBadgeSvg(canvasWidth, canvasHeight, badgeInfo)), top: 0, left: 0 });
+  // Holat belgilari: SOTILDI muhri, «NARXI TUSHDI» / «PREMIUM» lentalari, ramka
+  if (st.sold || st.drop || st.prem) composites.push({ input: Buffer.from(POSTCARD.classicOverlaySvg(canvasWidth, canvasHeight, statusDecor(st))), top: 0, left: 0 });
   const collagePath = path.join(__dirname, `collage_${Date.now()}.jpg`);
   
   await sharp({
@@ -1553,73 +1718,8 @@ async function createPriceChart(title, labels, values) {
 // ==============================================================
 // 📊 HAFTALIK GRAFIK POST (Eng ommabop moshina bo'yicha)
 // ==============================================================
-async function sendPriceChartPost() {
-  try {
-    // Bu hafta eng ko'p e'lon qo'yilgan modelni topamiz
-    const [topRows] = await db.execute(`
-      SELECT carDetails, COUNT(*) as cnt FROM ads
-      WHERE status IN ('active','sold') AND created_at >= NOW() - INTERVAL 7 DAY
-      GROUP BY carDetails ORDER BY cnt DESC LIMIT 1
-    `);
-    if (topRows.length === 0) return;
-
-    const topCar = topRows[0].carDetails;
-    const parts = topCar.trim().split(" ");
-    const modelKey = parts.length > 1 ? parts.slice(1).join(" ") : topCar;
-
-    const labels = [];
-    const values = [];
-
-    // Oxirgi 4 haftaning har biri uchun o'rtacha narxni olamiz
-    for (let w = 3; w >= 0; w--) {
-      const [[row]] = await db.execute(`
-        SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice FROM ads
-        WHERE carDetails LIKE ? AND status IN ('active','sold')
-          AND created_at >= NOW() - INTERVAL ? DAY
-          AND created_at <  NOW() - INTERVAL ? DAY
-      `, [`%${modelKey}%`, (w + 1) * 7, w * 7]);
-
-      if (row.avgPrice) {
-        labels.push(w === 0 ? "Bu hafta" : `${w} hafta oldin`);
-        values.push(Math.round(row.avgPrice));
-      }
-    }
-
-    // Grafik uchun kamida 2 ta nuqta kerak
-    if (values.length < 2) {
-      console.log("📭 Grafik uchun narx tarixi yetarli emas.");
-      return;
-    }
-
-    const chartPath = await createPriceChart(topCar, labels, values);
-
-    const first = values[0];
-    const last = values[values.length - 1];
-    const diff = last - first;
-    let trend = "barqaror turibdi ⚖️";
-    if (diff > 0) trend = `<b>${diff.toLocaleString("en-US")}$ ga oshdi 📈</b>`;
-    else if (diff < 0) trend = `<b>${Math.abs(diff).toLocaleString("en-US")}$ ga tushdi 📉</b>`;
-
-    const caption =
-      `📊 <b>${topCar.toUpperCase()} — NARX DINAMIKASI</b>\n\n` +
-      `Oxirgi haftalarda ${topCar} ning o'rtacha bozor narxi ${trend}\n\n` +
-      `<i>Ma'lumot kanalimizdagi real e'lonlar asosida hisoblandi.</i>\n\n` +
-      `👉 O'z moshinangiz narxini bilish uchun: @arzonida_bot`;
-
-    const kb = new InlineKeyboard()
-      .url("🧮 Moshinamni baholash", "https://t.me/arzonida_bot").row()
-      .url("➕ Tekin e'lon berish", "https://t.me/arzonida_bot");
-
-    await bot.api.sendPhoto(CHANNEL_ID, new InputFile(chartPath), {
-      caption, parse_mode: "HTML", reply_markup: kb
-    });
-
-    if (fs.existsSync(chartPath)) fs.unlinkSync(chartPath);
-    console.log("✅ Narx grafigi posti yuborildi!");
-  } catch (err) {
-    console.error("Grafik post xatosi:", err);
-  }
-}
+// 📈 «Narx grafigi» — endi «Narx dinamikasi» (charts.js): bitta model, 8 hafta, mediana + ko'pchilik oralig'i
+async function sendPriceChartPost() { return publishChartPost("weekly_chart"); }
 // Raqamlarni vergul (yoki probel) bilan ajratib beruvchi funksiya
 // Probeg matni: raqam bo'lsa "85,000 km", "Salon" bo'lsa "Salon (0 km)", boshqa variant ("Noma'lum") — o'zi
 function kmText(v) {
@@ -1653,6 +1753,7 @@ function formatNum(value) {
 // Belgi faqat ishonchli bo'lsa (kamida 5 ta o'xshash e'lon) chiqadi.
 // ==============================================================
 const market = require("./market").createMarket({ db, catalog });
+const charts = CHART_LIB.createCharts({ db, market, catalog, sharp, channel: CHANNEL_USER });
 const adForMarket = (carDetails, priceRaw, year, ad = {}) => ({ ...ad, carDetails: carDetails || ad.carDetails, price: priceRaw, year: year || ad.year });
 async function getPriceBadge(carDetails, priceRaw, year = null, ad = {}) {
   try {
@@ -1941,6 +2042,16 @@ async function flushNotifyQueue() {
   finally { queueFlushing = false; }
 }
 setInterval(flushNotifyQueue, 10 * 60 * 1000).unref();
+// 💬 Narx taklif qilish (offers.js)
+const offers = require("./offers").createOffers({
+  db, deliverNotice, market, ADMIN_ID, formatNum, escapeHtml, InlineKeyboard,
+  isOn: () => isAutoOn("offers"),
+  adLink: (ad) => (WEBAPP_URL ? miniAppLink(`ad_${ad.id}`) : ad.channelMsgId ? `https://t.me/${String(CHANNEL_ID).replace("@", "")}/${ad.channelMsgId}` : null),
+  onLog: (u, t) => logUserAction(u, `📱 ${t}`),
+});
+setInterval(() => offers.expire(), 30 * 60 * 1000).unref();
+// Sotuvchi «🔁 Qarshi taklif» ni bosgach — keyingi yozgan raqamini kutamiz (15 daqiqa)
+const offerCounterWait = new Map(); // userId -> { offerId, until }
 // Yangi e'lon kanalga chiqqanda — mos obunachilarga
 async function notifyAlertsForAd(ad, channelMsgId) {
   try {
@@ -2046,6 +2157,7 @@ function channelShareLink(msgId) {
 // «↗️ Ulashish» va «👤 Admin» sukut bo'yicha o'chiq (Telegram'da har bir post yonida o'zining ↪ tugmasi bor).
 // msgId — kanal xabarining ID si (ulashish havolasi uchun kerak).
 const AD_CHANNEL_MARKUP = (adId, msgId = null) => {
+  if (postStyle() !== "0") return adChannelMarkupNew(adId, msgId);
   const kb = new InlineKeyboard();
   kb.url("❤️ Saqlash", `https://t.me/${BOT_LINK_USERNAME}?start=fav_${adId}`);
   if (isAutoOn("btn_sell")) kb.url("➕ E'lon berish", `https://t.me/${BOT_LINK_USERNAME}`);
@@ -2058,6 +2170,24 @@ const AD_CHANNEL_MARKUP = (adId, msgId = null) => {
   return kb;
 };
 
+// Kartochka va «yangi matn» ko'rinishidagi tugmalar
+function adChannelMarkupNew(adId, msgId) {
+  const kb = new InlineKeyboard();
+  const owner = adOwnerCache.get(Number(adId));
+  const r1 = [];
+  if (APP_IN_CHANNEL && isAutoOn("btn_app")) r1.push(["📱 Batafsil va rasmlar", miniAppLink(`ad_${adId}`)]);
+  if (APP_IN_CHANNEL && isAutoOn("btn_offer") && isAutoOn("offers") && owner !== ADMIN_ID) r1.push(["💬 Narx taklif", miniAppLink(`of_${adId}`)]);
+  if (r1.length) { r1.forEach(([t, u]) => kb.url(t, u)); kb.row(); }
+  kb.url("❤️ Saqlash", `https://t.me/${BOT_LINK_USERNAME}?start=fav_${adId}`);
+  if (isAutoOn("btn_similar")) kb.url("🔔 O'xshashi chiqsa", `https://t.me/${BOT_LINK_USERNAME}?start=sim_${adId}`);
+  kb.row();
+  const r3 = [];
+  if (isAutoOn("btn_sell")) r3.push(["➕ Bepul e'lon berish", `https://t.me/${BOT_LINK_USERNAME}`]);
+  if (msgId && isAutoOn("share_btn")) r3.push(["↗️ Ulashish", channelShareLink(msgId)]);
+  if (isAutoOn("btn_admin")) r3.push(["👤 Admin", "https://t.me/uzdev75"]);
+  if (r3.length) { r3.forEach(([t, u]) => kb.url(t, u)); kb.row(); }
+  return kb;
+}
 // Yangi post kanalga tushgach (xabar ID si endi ma'lum) — «↗️ Yaqinlarga ulashish» tugmasini qo'shamiz
 async function addShareButton(adId, msgId) {
   if (!msgId || !isAutoOn("share_btn")) return;
@@ -2159,9 +2289,14 @@ async function changeAdPrice({ adId, userId, newPrice }) {
     `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: <s>${formatNum(ad.price)} $</s> <b>${formatNum(newPrice)}$ 📉</b>\n☎️ +${ad.phone}\n🚩 #${String(ad.region).replace(/\s+/g, "_")}\n\n` +
     `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`);
   const channelMarkup = AD_CHANNEL_MARKUP(ad.id, ad.channelMsgId);
+  // Kanal posti: kartochkada narx rasmning o'zida; «Narxi tushdi» belgisi yoqilgan bo'lsa — rasm ham yangilanadi
+  const droppedNow = (parseInt(newPrice) || 0) < (parseInt(ad.price) || 0);
+  const adAfter = { ...ad, price: String(newPrice), old_price: droppedNow ? (recentDrop(ad) ? ad.old_price : ad.price) : null, price_dropped_at: droppedNow ? new Date() : null };
+  const priceMedia = postStyle() === "1" || needsMedia(adAfter);
 
   try {
-    await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, reply_markup: channelMarkup, parse_mode: "HTML" });
+    if (postStyle() === "0" && !priceMedia) await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, reply_markup: channelMarkup, parse_mode: "HTML" });
+    else await updateChannelPost(adAfter, { media: priceMedia });
   } catch (e) {
     console.error("Narx: kanaldagi xabarni yangilab bo'lmadi:", e.message);
     return { ok: false, error: "❌ Kanaldagi xabarni yangilab bo'lmadi. Ehtimol eski xabar kanaldan o'chirilgan bo'lishi mumkin." };
@@ -2596,16 +2731,25 @@ const AUTO_POSTS = [
   { key: "sellcall13", group: "kanal", btn: "E'lon bering · 13:00", title: "📣 «E'lon bering» posti", when: "har kuni 13:00", run: () => sendSellCallPost() },
   { key: "sellcall19", group: "kanal", btn: "E'lon bering · 19:00", title: "📣 «E'lon bering» posti", when: "har kuni 19:00", run: () => sendSellCallPost() },
   { key: "top3", group: "kanal", btn: "Eng arzon TOP-3 · 20:00", title: "🚗 Eng arzon TOP-3", when: "har kuni 20:00", run: () => sendDailyTop3() },
-  { key: "weekly_analytics", group: "kanal", btn: "Haftalik analitika", title: "📊 Haftalik analitika", when: "yakshanba 10:00", run: () => sendWeeklyAnalytics() },
-  { key: "weekly_topsearch", group: "kanal", btn: "Top qidiruvlar", title: "🔎 Eng ko'p qidirilganlar", when: "yakshanba 10:00", run: () => sendTopSearched() },
-  { key: "weekly_chart", group: "kanal", btn: "Narx grafigi", title: "📈 Narx grafigi", when: "yakshanba 10:00", run: () => sendPriceChartPost() },
+  { key: "weekly_analytics", group: "kanal", btn: "Haftalik hisobot", title: "📊 Haftalik bozor hisoboti + «Bozor indeksi» rasmi", when: "yakshanba 10:00", run: () => publishChartPost("weekly_analytics"), preview: true },
+  { key: "weekly_chart", group: "kanal", btn: "Narx dinamikasi", title: "📈 Narx dinamikasi (8 hafta, har hafta boshqa model)", when: "yakshanba 15:00", run: () => publishChartPost("weekly_chart"), preview: true },
+  { key: "weekly_topsearch", group: "kanal", btn: "Top qidiruvlar", title: "🔎 Eng ko'p qidirilganlar", when: "yakshanba 18:00", run: () => sendTopSearched() },
+  { key: "weekly_numbers", group: "kanal", btn: "Hafta raqamlarda", title: "🔢 Hafta raqamlarda", when: "shanba 17:00", run: () => publishChartPost("weekly_numbers"), preview: true },
+  { key: "monthly_years", group: "kanal", btn: "Yil bo'yicha narx", title: "📅 Yil bo'yicha narx (har oy boshqa model)", when: "har oy 1-kuni 11:00", run: () => publishChartPost("monthly_years"), preview: true },
   { key: "hot_price", group: "voqea", btn: "Qaynoq narx", title: "🔥 «Qaynoq narx» posti", when: "e'lon narxi tushganda" },
   { key: "sold_congrats", group: "voqea", btn: "Sotildi tabrigi", title: "🎉 «Yana bitta moshina sotildi»", when: "e'lon sotilganda" },
   { key: "remind_new", group: "sotuvchi", btn: "Yangi e'lonni ko'tarish", title: "🆕 Yangi e'lonni ko'tarish taklifi", when: "12:00, e'lonning 1–3-kuni" },
   { key: "remind_price5", group: "sotuvchi", btn: "Narx maslahati (5-kun)", title: "💡 Narxni tushirish maslahati", when: "12:00, 5-kuni" },
   { key: "remind_up7", group: "sotuvchi", btn: "UP taklifi (7-kun)", title: "🔔 Tepaga ko'tarish (UP) taklifi", when: "12:00, 7-kuni" },
   { key: "views_nudge", group: "sotuvchi", btn: "Kam ko'rilgan e'lon eslatmasi", title: "👀 «E'loningizni N kishi ko'rdi — ko'taring»", when: "10:00–20:00, e'lon 3 kunda kam ko'rilsa (bir marta)" },
+  { key: "offers", group: "sotuvchi", btn: "Narx taklif qilish", title: "💬 «Narx taklif qilish» (xaridor → sotuvchi)", when: "ilovadagi e'lon sahifasida; admin e'lonlarida chiqmaydi" },
   { key: "reaction_notify", group: "sotuvchi", btn: "Kanaldagi baho natijasi", title: "📊 «N kishi 🔥 arzon / 🤔 qimmat dedi»", when: "3, 10, 25… kishi baho berganda" },
+  { key: "st_sold", group: "post", btn: "SOTILDI muhri", title: "🔴 Sotilganda rasmga «SOTILDI» muhri (rasm kulrang)", when: "admin sotildi deb belgilaganda" },
+  { key: "st_drop", group: "post", btn: "Narxi tushdi belgisi", title: "📉 Narxi tushganda rasm yangilanadi (eski narx chiziladi)", when: "sotuvchi narxni tushirganda" },
+  { key: "st_premium", group: "post", btn: "Premium/VIP ramka", title: "⭐ Premium — oltin, VIP — binafsha ramka va belgi", when: "status yoqilganda / tugaganda" },
+  { key: "btn_offer", group: "post", btn: "«Narx taklif» tugmasi", title: "💬 «Narx taklif» tugmasi", when: "kartochka va yangi matn ko'rinishida" },
+  { key: "btn_similar", group: "post", btn: "«O'xshashi chiqsa» tugmasi", title: "🔔 «O'xshashi chiqsa» tugmasi (1 bosishda obuna)", when: "kartochka va yangi matn ko'rinishida" },
+  { key: "wm_logo", group: "post", btn: "Rasmdagi AvtoBozor belgisi", title: "🏷 Rasm pastida «AvtoBozor» belgisi va kanal manzili", when: "yangi e'lon rasmlarida" },
   { key: "price_vote", group: "post", btn: "«Narxga baho bering» qatori", title: "👇 «Narxga baho bering: 🔥 · 👍 · 🤔»", when: "yangi va tahrirlangan e'lon matnida" },
   { key: "btn_sell", group: "post", btn: "«E'lon berish» tugmasi", title: "➕ «E'lon berish» tugmasi", when: "e'lon ostida, «Saqlash» yonida" },
   { key: "btn_app", group: "post", btn: "«Ilovada ochish» tugmasi", title: "📱 «Ilovada ochish» tugmasi", when: "2-qator, ixtiyoriy" },
@@ -2625,17 +2769,23 @@ function autoPostsView() {
     text += `\n⚠️ <b>Kanalda ${channelVoteWarning} reaksiyasi yoqilmagan!</b> Kanal → ✏️ Tahrirlash → Reaksiyalar bo'limida yoqing, aks holda odamlar baho bera olmaydi.\n`;
   }
   const kb = new InlineKeyboard();
+  // 🎨 E'lon posti ko'rinishi
+  const ps = postStyle();
+  text += `\n🎨 <b>E'lon posti ko'rinishi:</b> ${POST_STYLES[ps]}\n<i>Yangi e'lonlar shu ko'rinishda chiqadi. Kanaldagi faol e'lonlarni ham o'tkazish — «🔄 Faol e'lonlarga qo'llash».</i>\n`;
+  for (const k of Object.keys(POST_STYLES)) kb.text(`${k === ps ? "✅ " : ""}${POST_STYLES[k]}`, `ps_set:${k}`);
+  kb.row().text("👁 Namuna", "ps_prev").text(postRestyleJob ? "⏹ To'xtatish" : "🔄 Faol e'lonlarga qo'llash", postRestyleJob ? "ps_stop" : "ps_bulk").row();
   for (const [g, title] of AUTO_GROUPS) {
     text += `\n${title}\n`;
     for (const p of AUTO_POSTS.filter((x) => x.group === g)) {
       const on = isAutoOn(p.key);
       text += `${on ? "✅" : "⛔️"} ${p.title} — <i>${p.when}</i>\n`;
       kb.text(`${on ? "✅" : "⛔️"} ${p.btn}`, `ap_t:${p.key}`);
+      if (p.preview) kb.text("👁", `ap_prev:${p.key}`);
       if (p.run) kb.text("▶️ Hozir", `ap_run:${p.key}`);
       kb.row();
     }
   }
-  text += "\n<i>▶️ Hozir — postni darhol kanalga yuborib ko'rish (o'chirilgan bo'lsa ham).</i>" +
+  text += "\n<i>👁 — kanalga yubormasdan oldin o'zingiz ko'rib chiqasiz. ▶️ Hozir — postni darhol kanalga yuborish (o'chirilgan bo'lsa ham).</i>" +
     "\n<i>📝 E'lon tugmalarini o'zgartirgach, kanaldagi eski e'lonlarga ham qo'llash: /tugmalar</i>";
   kb.text("⛔️ Hammasini o'chirish", "ap_all:0").text("✅ Hammasini yoqish", "ap_all:1").row()
     .text("🔙 Orqaga", "admin_back");
@@ -2645,6 +2795,70 @@ async function showAutoPosts(ctx) {
   const { text, kb } = autoPostsView();
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
 }
+// 🎨 Ko'rinishni tanlash, namuna va faol e'lonlarga qo'llash
+let postRestyleJob = null, postRestyleStop = false;
+bot.callbackQuery(/^ps_set:([012])$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  try { await setBotSetting("post:style", ctx.match[1]); }
+  catch (e) { return ctx.answerCallbackQuery({ text: "Saqlab bo'lmadi, qayta urinib ko'ring.", show_alert: true }).catch(() => {}); }
+  await ctx.answerCallbackQuery({ text: `🎨 ${POST_STYLES[ctx.match[1]]} — yangi e'lonlar shu ko'rinishda chiqadi` }).catch(() => {});
+  await showAutoPosts(ctx);
+});
+bot.callbackQuery("ps_prev", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery({ text: "⏳ Tayyorlanmoqda..." }).catch(() => {});
+  const [[ad]] = await db.execute("SELECT * FROM ads WHERE status = 'active' AND photoId IS NOT NULL AND photoId <> '' ORDER BY id DESC LIMIT 1");
+  if (!ad) return ctx.reply("Namuna uchun faol e'lon yo'q.");
+  let file;
+  try {
+    file = await renderAdImage(ad);
+    const caption = await buildChannelCaption(ad);
+    await ctx.reply(`👁 <b>Namuna: «${POST_STYLES[postStyle()]}»</b> — oxirgi e'lon (#${ad.id}) shu ko'rinishda chiqadi. Kanalga hech narsa yuborilmadi.`, { parse_mode: "HTML" });
+    await ctx.replyWithPhoto(new InputFile(file), { caption, parse_mode: "HTML", reply_markup: AD_CHANNEL_MARKUP(ad.id, ad.channelMsgId) });
+  } catch (e) {
+    console.error("Namuna:", e);
+    await ctx.reply("❌ Namunani tayyorlab bo'lmadi: " + (e.description || e.message));
+  } finally { if (file) fs.unlink(file, () => {}); }
+});
+bot.callbackQuery("ps_stop", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  postRestyleStop = true;
+  await ctx.answerCallbackQuery({ text: "⏹ To'xtatilmoqda..." }).catch(() => {});
+});
+bot.callbackQuery("ps_bulk", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  if (postRestyleJob) return ctx.answerCallbackQuery({ text: "⏳ Hozir yangilanmoqda" }).catch(() => {});
+  const [ads] = await db.execute("SELECT * FROM ads WHERE status = 'active' AND channelMsgId IS NOT NULL ORDER BY id DESC");
+  if (!ads.length) return ctx.answerCallbackQuery({ text: "Kanalda faol e'lon yo'q", show_alert: true }).catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  const nMedia = ads.filter(needsMedia).length;
+  const minutes = Math.max(1, Math.ceil((nMedia * 3000 + (ads.length - nMedia) * CHANNEL_EDIT_DELAY_MS) / 60000));
+  const st = await ctx.reply(`⏳ <b>${ads.length} ta</b> faol e'lon «${POST_STYLES[postStyle()]}» ko'rinishiga o'tkazilmoqda (${nMedia} tasining rasmi qayta chiziladi, ~${minutes} daqiqa).\nTo'xtatish: Avto-xabarlar → ⏹`, { parse_mode: "HTML" });
+  postRestyleStop = false;
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  postRestyleJob = (async () => {
+    let ok = 0, failed = 0, i = 0;
+    for (const ad of ads) {
+      if (postRestyleStop) break;
+      i++;
+      const media = needsMedia(ad);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { await updateChannelPost(ad, { media }); ok++; break; }
+        catch (e) {
+          const desc = e.description || e.message || "";
+          if (/not modified/i.test(desc)) { ok++; if (media) await savePostLook(ad); break; }
+          if (e.error_code === 429 && attempt < 2) { await pause(((e.parameters && e.parameters.retry_after) || 5) * 1000 + 500); continue; }
+          failed++; console.error(`Ko'rinish (#${ad.id}):`, desc); break;
+        }
+      }
+      if (i % 10 === 0) await bot.api.editMessageText(st.chat.id, st.message_id, `⏳ ${i}/${ads.length} ta e'lon yangilandi...`).catch(() => {});
+      await pause(media ? 3000 : CHANNEL_EDIT_DELAY_MS);
+    }
+    await bot.api.sendMessage(ADMIN_ID,
+      `${postRestyleStop ? "⏹ <b>To'xtatildi.</b>" : "✅ <b>Tayyor!</b>"} ${ok} ta e'lon «${POST_STYLES[postStyle()]}» ko'rinishiga o'tkazildi.` +
+      (failed ? `\n⚠️ ${failed} tasida bo'lmadi (kanaldan o'chirilgan bo'lishi mumkin).` : ""), { parse_mode: "HTML" }).catch(() => {});
+  })().catch((e) => console.error("Ko'rinishni qo'llashda xato:", e.message)).finally(() => { postRestyleJob = null; postRestyleStop = false; });
+});
 bot.callbackQuery("admin_autoposts", async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
   await ctx.answerCallbackQuery().catch(() => {});
@@ -2668,6 +2882,17 @@ bot.callbackQuery(/^ap_all:([01])$/, async (ctx) => {
   catch (e) { return ctx.answerCallbackQuery({ text: "Saqlab bo'lmadi, qayta urinib ko'ring.", show_alert: true }).catch(() => {}); }
   await ctx.answerCallbackQuery({ text: on ? "✅ Hammasi yoqildi" : "⛔️ Hammasi o'chirildi" }).catch(() => {});
   await showAutoPosts(ctx);
+});
+bot.callbackQuery(/^ap_prev:(\w+)$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  const p = AUTO_POSTS.find((x) => x.key === ctx.match[1] && x.preview && CHART_POSTS[x.key]);
+  if (!p) return ctx.answerCallbackQuery({ text: "Topilmadi" }).catch(() => {});
+  await ctx.answerCallbackQuery({ text: "⏳ Tayyorlanmoqda..." }).catch(() => {});
+  await previewChartPost(ctx, p.key, 0);
+});
+bot.command("hisobot", async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  await previewWeeklyReport(ctx);
 });
 bot.callbackQuery(/^ap_run:(\w+)$/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
@@ -3619,8 +3844,9 @@ const CHANNEL_EDIT_DELAY_MS = Number(process.env.CHANNEL_EDIT_DELAY_MS) || 1500;
 bot.command(["tugmalar", "ilova_tugmalari"], async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   if (channelButtonsJob) return ctx.reply("⏳ Tugmalar hozir yangilanmoqda, tugashini kuting.");
-  const [ads] = await db.execute("SELECT id, channelMsgId FROM ads WHERE status = 'active' AND channelMsgId IS NOT NULL ORDER BY id DESC");
+  const [ads] = await db.execute("SELECT id, userId, channelMsgId FROM ads WHERE status = 'active' AND channelMsgId IS NOT NULL ORDER BY id DESC");
   if (!ads.length) return ctx.reply("Kanalda faol e'lon yo'q.");
+  ads.forEach((a) => adOwnerCache.set(Number(a.id), Number(a.userId)));
   const minutes = Math.max(1, Math.ceil((ads.length * CHANNEL_EDIT_DELAY_MS) / 60000));
   await ctx.reply(`⏳ <b>${ads.length} ta</b> faol e'lonning tugmalari yangilanmoqda (~${minutes} daqiqa). Tugagach xabar beraman.`, { parse_mode: "HTML" });
 
@@ -3748,13 +3974,8 @@ bot.command("up", async (ctx) => {
           return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
         })
       );
-      const collagePath = await createCollage(photoUrls);
-
-      const caption = addPriceVoteLine(vipHeader(ad) +
-        `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
-        `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
-        `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: ${ad.price}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
-        `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`);
+      const collagePath = await createCollage(photoUrls, null, lookFor(ad));
+      const caption = await buildChannelCaption(ad);
 
       const sentMsg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
         caption: caption,
@@ -5578,29 +5799,10 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
       })
     );
         const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year, ad);
-    const collagePath = await createCollage(photoUrls, badgeInfo);
+    const collagePath = await createCollage(photoUrls, badgeInfo, lookFor({ ...ad, status: "active" }));
 
-    let caption =dealerBadge +
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
-      `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
-      `⛽ Yoqilg'i: ${ad.fuel}\n`;
-
-    if (ad.history && ad.history !== "Ko'rsatilmagan") {
-      caption += `🛠 Tarixi: ${ad.history}\n`;
-    }
-if (ad.barter && ad.barter !== "Yo'q") {
-      caption += `🔄 Barter: ${ad.barter}\n`;
-    }
-    if (ad.nasiya && ad.nasiya !== "Yo'q") {
-      caption += `💳 Nasiya (bo'lib to'lash): ${ad.nasiya}\n`;
-    }
-    if (ad.dealer_offer) {
-      caption += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
-    }
-        const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year, ad);
-    caption += `💰 Narxi: ${formatNum(ad.price)}$${badge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
-      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
-    caption = addPriceVoteLine(caption); // 👇 Narxga baho bering: 🔥 · 👍 · 🤔
+    // Matn — hozirgi ko'rinish sozlamasi bo'yicha (Avto-xabarlar → «E'lon posti ko'rinishi»)
+    let caption = await buildChannelCaption({ ...ad, status: "active" });
 
     const channelMarkup = AD_CHANNEL_MARKUP(ad.id); // ilova tugmasi ham shu yerda
       // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
@@ -5612,6 +5814,7 @@ if (ad.barter && ad.barter !== "Yo'q") {
 
       console.log(`✅ YANGI E'LON KANALGA TUSHDI! Kanal: ${CHANNEL_ID}, Xabar ID: ${msg.message_id}`);
       await addShareButton(ad.id, msg.message_id); // ↗️ ulashish tugmasi uchun post ID si kerak edi
+      await savePostLook({ ...ad, status: "active" });
 
       let vidMsg = null; // Video uchun maxsus o'zgaruvchi
       if (ad.videoId) {
@@ -5690,31 +5893,10 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
       })
     );
         const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year, ad);
-    const collagePath = await createCollage(photoUrls, badgeInfo);
+    const collagePath = await createCollage(photoUrls, badgeInfo, lookFor({ ...ad, status: "active" }));
 
     // ================= MATN TEPASIGA QAYNOQ NARX QO'SHILDI =================
-    let caption =dealerBadge +
-      `🔥 <b>QAYNOQ NARX!</b>\n\n` +
-      `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
-      `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
-      `⛽ Yoqilg'i: ${ad.fuel}\n`;
-
-    if (ad.history && ad.history !== "Ko'rsatilmagan") {
-      caption += `🛠 Tarixi: ${ad.history}\n`;
-    }
-    if (ad.barter && ad.barter !== "Yo'q") {
-      caption += `🔄 Barter: ${ad.barter}\n`;
-    }
-    if (ad.nasiya && ad.nasiya !== "Yo'q") {
-      caption += `💳 Nasiya (bo'lib to'lash): ${ad.nasiya}\n`;
-    }
-    if (ad.dealer_offer) {
-      caption += `\n🎁 <b>MAXSUS TAKLIF:</b>\n${ad.dealer_offer}\n`;
-    }
-        const badge = await getPriceBadge(ad.carDetails, ad.price, ad.year, ad);
-    caption += `💰 Narxi: ${formatNum(ad.price)}$${badge}\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n` +
-      `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
-    caption = addPriceVoteLine(caption); // 👇 Narxga baho bering: 🔥 · 👍 · 🤔
+    let caption = await buildChannelCaption({ ...ad, status: "active", is_hot: 1 });
     // ==============================================================================
 
     const channelMarkup = AD_CHANNEL_MARKUP(ad.id); // ilova tugmasi ham shu yerda
@@ -5726,6 +5908,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
         caption: caption, reply_markup: channelMarkup, parse_mode: "HTML",
       });
       await addShareButton(ad.id, msg.message_id); // ↗️ ulashish tugmasi uchun post ID si kerak edi
+      await savePostLook({ ...ad, status: "active" });
 
       // 2. Asosiy kanalga video yuborish (vidMsg o'zgaruvchisi ochildi)
       let vidMsg = null;
@@ -5954,8 +6137,11 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
          ? `💰 <b>SOTILDI!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Sotildi: ${formatNum(ad.sold_price)} $</b>\n\n❌ <b>E'lon yopildi.</b>`
          : `💰 <b>SOTILDI!</b>\n\n<s>${ad.carDetails}</s>\n💰 <b>Narxi: ${formatNum(ad.price)} $</b>\n\n❌ <b>E'lon yopildi.</b>`;
         
-        // 1. Asosiy kanalni yangilash
-        await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, parse_mode: "HTML" });
+        // 1. Asosiy kanalni yangilash («SOTILDI» muhri yoqilgan bo'lsa — rasm ham)
+        if (isAutoOn("st_sold")) {
+          await updateChannelPost({ ...ad, status: "sold", sold_at: new Date() }, { media: true, caption: newCaption })
+            .catch(async (e) => { console.error("SOTILDI rasmi:", e.description || e.message); await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, parse_mode: "HTML" }); });
+        } else await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, parse_mode: "HTML" });
         
         // ================= YANGI: 2-KANALDAGI E'LONNI HAM YANGILASH =================
         try {
@@ -5971,7 +6157,7 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
         }
         // ============================================================================
         
-        await db.execute("UPDATE ads SET status='sold' WHERE id=?", [adId]);
+        await db.execute("UPDATE ads SET status='sold', sold_at=NOW() WHERE id=?", [adId]);
         await ctx.editMessageText("✅ <b>Kanalda sotildi deb belgilandi!</b>", { parse_mode: "HTML" });
         await bot.api.sendMessage(ad.userId, `🎉 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz kanalda "SOTILDI" deb belgilandi.`, { parse_mode: "HTML" });
 
@@ -6107,6 +6293,35 @@ bot.on("chat_member", async (ctx) => {
       }
   }
 });
+async function subscribeSimilar(ctx, adId) {
+  try {
+    const [[ad]] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+    if (!ad) return ctx.reply("E'lon topilmadi.");
+    const name = modelTagName(ad) || ad.carDetails;
+    const [[dup]] = await db.execute("SELECT id FROM alerts WHERE userId = ? AND ((model_id IS NOT NULL AND model_id = ?) OR query = ?) LIMIT 1", [ctx.from.id, ad.model_id || 0, ad.carDetails]);
+    if (dup) return ctx.reply(`🔔 Siz <b>${escapeHtml(name)}</b> ga allaqachon obunasiz — yangisi chiqishi bilan xabar beraman.`, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("❌ Obunani bekor qilish", `sim_del:${dup.id}`) });
+    const [[cnt]] = await db.execute("SELECT COUNT(*) AS c FROM alerts WHERE userId = ?", [ctx.from.id]);
+    if (Number(cnt.c) >= 20) return ctx.reply("Ko'pi bilan 20 ta obuna bo'lishi mumkin. Keraksizlarini ilovada o'chiring.");
+    const price = parseInt(String(ad.price).replace(/\D/g, ""), 10) || 0;
+    const maxPrice = price ? Math.round((price * 1.15) / 100) * 100 : 999999;
+    const year = parseInt(ad.year, 10), minYear = year > 1950 ? year - 2 : null;
+    const g = market.transGroup(ad.transmission);
+    const m = ad.model_id && catalog.modelById(Number(ad.model_id));
+    const [ins] = await db.execute("INSERT INTO alerts (userId, query, maxPrice, model_id, brand_id, min_year, trans_group, region, notify_drop) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [ctx.from.id, ad.carDetails, maxPrice, ad.model_id || null, m && m.brand ? m.brand.id : null, minYear, g, null, 1]);
+    const cond = [maxPrice < 999999 ? `${formatNum(maxPrice)}$ gacha` : null, minYear ? `${minYear}-yil va yangi` : null, g ? (g === "A" ? "avtomat" : "mexanika") : null].filter(Boolean).join(" · ");
+    const kb = new InlineKeyboard();
+    if (WEBAPP_URL) kb.url("⚙️ Shartlarni o'zgartirish", miniAppLink("alerts"));
+    kb.text("❌ Bekor qilish", `sim_del:${ins.insertId}`);
+    await ctx.reply(`🔔 <b>Obuna bo'ldingiz!</b>\n\n🚗 <b>${escapeHtml(name)}</b> kanalga chiqishi bilan darhol xabar beraman.\n${cond ? `Shartlar: ${cond}\n` : ""}<i>Narxi tushgan e'lonlar haqida ham aytaman.</i>`, { parse_mode: "HTML", reply_markup: kb });
+    logUserAction(ctx.from, `🔔 Kanal postidan obuna: #${ad.id} ${ad.carDetails}`);
+  } catch (e) { console.error("O'xshashi obunasi:", e.message); await ctx.reply("❌ Obuna bo'lib bo'lmadi, keyinroq urinib ko'ring."); }
+}
+bot.callbackQuery(/^sim_del:(\d+)$/, async (ctx) => {
+  await db.execute("DELETE FROM alerts WHERE id = ? AND userId = ?", [Number(ctx.match[1]), ctx.from.id]).catch(() => {});
+  await ctx.answerCallbackQuery({ text: "Obuna bekor qilindi" }).catch(() => {});
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+});
 bot.command("start", async (ctx) => {
   let isNewUser = false;
   // Foydalanuvchini avtomatik tarzda users bazasiga qo'shish yoki yangilash
@@ -6133,6 +6348,8 @@ bot.command("start", async (ctx) => {
           } catch(e) {}
       }
   }
+  // 🔔 «O'xshashi chiqsa» — kanal postidan bitta bosishda obuna
+  if (payload && payload.startsWith("sim_")) await subscribeSimilar(ctx, parseInt(payload.slice(4), 10));
   // 2. REFERAL (Taklif) logikasi
   if (isNewUser && payload && payload.startsWith("ref_")) {
       const referrerId = parseInt(payload.split("_")[1]);
@@ -6330,6 +6547,42 @@ bot.callbackQuery(/^unfav:(\d+)$/, async (ctx) => {
   await db.execute("DELETE FROM favorites WHERE userId = ? AND adId = ?", [ctx.from.id, ctx.match[1]]).catch(() => {});
   await ctx.answerCallbackQuery({ text: "🔕 Bu mashina bo'yicha xabar kelmaydi (saqlanganlardan olindi)." }).catch(() => {});
   await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+});
+// 💬 Narx taklifi: sotuvchi javobi
+const OFFER_DONE = { accepted: "✅ <b>Siz qabul qildingiz.</b> Xaridorga raqamingiz yuborildi — u sizga qo'ng'iroq qiladi.", rejected: "❌ <b>Siz rad etdingiz.</b> Xaridorga xabar berildi." };
+bot.callbackQuery(/^of_(a|r):(\d+)$/, async (ctx) => {
+  const r = await offers.respond({ offerId: Number(ctx.match[2]), sellerId: ctx.from.id, action: ctx.match[1] === "a" ? "accept" : "reject" });
+  if (!r.ok) {
+    await ctx.answerCallbackQuery({ text: r.error, show_alert: true }).catch(() => {});
+    if (/allaqachon|muddati|faol emas/.test(r.error)) await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+    return;
+  }
+  await ctx.answerCallbackQuery({ text: r.status === "accepted" ? "✅ Qabul qilindi" : "Rad etildi" }).catch(() => {});
+  const old = ctx.callbackQuery.message?.text ? escapeHtml(ctx.callbackQuery.message.text.split("\n\n").slice(0, 2).join("\n\n")) : "";
+  await ctx.editMessageText(`${old}\n\n${OFFER_DONE[r.status]}`, { parse_mode: "HTML" }).catch(() => ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {}));
+  logUserAction(ctx.from, `💬 Narx taklifini ${r.status === "accepted" ? "qabul qildi" : "rad etdi"}: #${r.ad.id} — ${formatNum(r.offer.amount)}$`);
+});
+bot.callbackQuery(/^of_c:(\d+)$/, async (ctx) => {
+  const o = await offers.get(Number(ctx.match[1]));
+  if (!o || Number(o.sellerId) !== ctx.from.id) return ctx.answerCallbackQuery({ text: "Taklif topilmadi.", show_alert: true }).catch(() => {});
+  if (o.status !== "pending") return ctx.answerCallbackQuery({ text: "Bu taklifga allaqachon javob berilgan.", show_alert: true }).catch(() => {});
+  const [[ad]] = await db.execute("SELECT price FROM ads WHERE id = ?", [o.adId]);
+  offerCounterWait.set(ctx.from.id, { offerId: o.id, until: Date.now() + 15 * 60 * 1000 });
+  await ctx.answerCallbackQuery().catch(() => {});
+  await ctx.reply(`🔁 <b>Qancha narxga rozisiz?</b>\n\nXaridor taklifi: ${formatNum(o.amount)}$\nSizning narxingiz: ${formatNum(ad ? ad.price : 0)}$\n\nFaqat raqam yozing, masalan: <code>${formatNum(Math.round((o.amount + (parseInt(String(ad && ad.price).replace(/\D/g, ""), 10) || o.amount)) / 2 / 100) * 100)}</code>\nBekor qilish: /cancel`, { parse_mode: "HTML" });
+});
+// Xaridor javobi (qarshi taklifga)
+bot.callbackQuery(/^ofb_(a|r):(\d+)$/, async (ctx) => {
+  const r = await offers.buyerRespond({ offerId: Number(ctx.match[2]), buyerId: ctx.from.id, action: ctx.match[1] === "a" ? "accept" : "reject" });
+  if (!r.ok) {
+    await ctx.answerCallbackQuery({ text: r.error, show_alert: true }).catch(() => {});
+    if (/allaqachon|muddati|faol emas/.test(r.error)) await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+    return;
+  }
+  await ctx.answerCallbackQuery({ text: r.status === "accepted" ? "✅ Kelishildi" : "Rad etildi" }).catch(() => {});
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+  if (r.status === "rejected") await ctx.reply("Mayli. Boshqa narx taklif qilishingiz yoki sotuvchiga to'g'ridan-to'g'ri qo'ng'iroq qilishingiz mumkin.").catch(() => {});
+  logUserAction(ctx.from, `💬 Qarshi taklifga ${r.status === "accepted" ? "rozi bo'ldi" : "rozi bo'lmadi"}: #${r.ad.id} — ${formatNum(r.offer.counter)}$`);
 });
 // 📊 Statistika kartasi (widget) — faqat e'lon egasiga
 bot.callbackQuery(/^stat_w:(\d+)$/, async (ctx) => {
@@ -6729,7 +6982,9 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
       return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
     })
   );
-  const collagePath = await createCollage(photoUrls);
+  const merged = { ...oldAd, ...editData, id: oldAd.id, userId: oldAd.userId, status: "active" };
+  const editBadge = postStyle() === "1" ? await getPriceBadgeForImage(merged.carDetails, merged.price, merged.year, merged).catch(() => null) : null;
+  const collagePath = await createCollage(photoUrls, editBadge, lookFor(merged));
 
   let newCaption = vipHeader(oldAd) +
     `🆔 ID: ${oldAd.id}\n🚗 Moshina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${kmText(editData.probeg)}\n` +
@@ -6748,6 +7003,7 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
   newCaption += `💰 Narxi: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n` +
     `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
   newCaption = addPriceVoteLine(newCaption); // 👇 Narxga baho bering: 🔥 · 👍 · 🤔
+  if (postStyle() !== "0") newCaption = await buildChannelCaption(merged);
 
   const channelMarkup = AD_CHANNEL_MARKUP(oldAd.id, oldAd.channelMsgId); // ilova va ulashish tugmalari ham shu yerda
     // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
@@ -6760,6 +7016,7 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
         caption: newCaption,
         parse_mode: "HTML"
     }, { reply_markup: channelMarkup });
+    await savePostLook(merged);
     
     if (editData.videoId) {
       try {
@@ -6925,10 +7182,13 @@ bot.on("message:photo", async (ctx, next) => {
 // Kanal postini (to'liq matn bilan) qayta yozish — statuslar sarlavhasi ham shu yerda qo'shiladi
 async function refreshChannelCaption(ad) {
   if (!ad || !ad.channelMsgId) return;
-  const caption = await buildChannelCaption(ad);
-  await bot.api.editMessageCaption(CHANNEL_ID, Number(ad.channelMsgId), {
-    caption, parse_mode: "HTML", reply_markup: AD_CHANNEL_MARKUP(ad.id, ad.channelMsgId),
-  }).catch((e) => console.error("Kanal matnini yangilab bo'lmadi:", e.description || e.message));
+  if (ad.post_look === undefined) { try { const [[r]] = await db.execute("SELECT post_look FROM ads WHERE id = ?", [ad.id]); ad.post_look = r ? r.post_look : null; } catch (e) {} }
+  const media = needsMedia(ad); // masalan, Premium/VIP ramka qo'yilishi yoki olinishi kerak
+  try { await updateChannelPost(ad, { media }); }
+  catch (e) {
+    console.error("Kanal postini yangilab bo'lmadi:", e.description || e.message);
+    if (media) await updateChannelPost(ad, { media: false }).catch(() => {});
+  }
 }
 // E'lonni kanalda yangi post qilib ko'tarish (TOP va VIP uchun). VIP bo'lsa qayta qadaladi.
 async function bumpAdInChannel(ad) {
@@ -7079,89 +7339,207 @@ bot.callbackQuery(/^keep_ad:(\d+)/, async (ctx) => {
 // =====================================================================
 // 📊 ҲАФТАЛИК БОЗОР АНАЛИТИКАСИ (ЯКШАНБА КУНЛАРИ УЧУН)
 // =====================================================================
-async function sendWeeklyAnalytics() {
-  try {
-    // 1. Bu hafta eng ko'p qo'yilgan moshinani topamiz (Faqat faol va sotilganlar)
-    const [topCarRows] = await db.execute(`
-      SELECT carDetails, COUNT(*) as count 
-      FROM ads 
-      WHERE status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 7 DAY 
-      GROUP BY carDetails 
-      ORDER BY count DESC 
-      LIMIT 1
-    `);
-    
-    // 2. Bu hafta jami nechta yangi e'lon tushdi
-    const [[totalAdsRows]] = await db.execute(`
-      SELECT COUNT(*) as count 
-      FROM ads 
-      WHERE status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 7 DAY
-    `);
-
-    let priceTrendText = "";
-    if (topCarRows.length > 0) {
-        const topCar = topCarRows[0].carDetails;
-        
-        // Bu haftagi o'rtacha narx
-        const [[thisWeek]] = await db.execute(`
-            SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice 
-            FROM ads 
-            WHERE carDetails = ? AND status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 7 DAY
-        `, [topCar]);
-        
-        // O'tgan haftagi o'rtacha narx
-        const [[lastWeek]] = await db.execute(`
-            SELECT AVG(CAST(price AS UNSIGNED)) as avgPrice 
-            FROM ads 
-            WHERE carDetails = ? AND status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 14 DAY AND created_at < NOW() - INTERVAL 7 DAY
-        `, [topCar]);
-
-
-        const currAvg = Math.round(thisWeek.avgPrice || 0);
-        const lastAvg = Math.round(lastWeek.avgPrice || 0);
-
-        if (currAvg > 0 && lastAvg > 0) {
-            const diff = currAvg - lastAvg;
-            const percent = Math.round(Math.abs(diff) / lastAvg * 100);
-            
-            if (diff > 0) {
-                priceTrendText = `📈 <b>${topCar}</b> o'rtacha bozor narxi o'tgan haftaga nisbatan <b>${percent}% ga oshdi.</b>`;
-            } else if (diff < 0) {
-                priceTrendText = `📉 <b>${topCar}</b> o'rtacha bozor narxi o'tgan haftaga nisbatan <b>${percent}% ga tushdi.</b>`;
-            } else {
-                priceTrendText = `⚖️ <b>${topCar}</b> o'rtacha bozor narxi barqaror qoldi (${currAvg}$).`;
-            }
-        } else if (currAvg > 0) {
-             priceTrendText = `💰 <b>${topCar}</b> ning bu haftagi o'rtacha bozor narxi: <b>${currAvg}$</b>`;
-        }
-    }
-
-    const topCarName = topCarRows.length > 0 ? topCarRows[0].carDetails : "Hali ma'lumot yo'q";
-    const topCarCount = topCarRows.length > 0 ? topCarRows[0].count : 0;
-    const totalAds = totalAdsRows ? totalAdsRows.count : 0;
-
-    // Agar bu hafta hech qanday e'lon tushmagan bo'lsa, xabar yubormaydi
-    if (totalAds === 0) return; 
-
-    const text = 
-      `📊 <b>HAFTALIK AVTO-BOZOR ANALITIKASI</b>\n\n` +
-      `<i>O'tgan 7 kun ichida bozorimizdagi holat:</i>\n\n` +
-      `📦 <b>Yangi e'lonlar soni:</b> ${totalAds} ta\n` +
-      `🏆 <b>Eng ko'p sotuvga qo'yilgan moshina:</b> ${topCarName} (${topCarCount} ta)\n\n` +
-      `${priceTrendText}\n\n` +
-      `👉 O'zingizga mos moshinani izlash yoki tekin e'lon berish uchun botimizga kiring: @arzonida_bot`;
-
-    const kb = new InlineKeyboard()
-      .url("🔍 Mashina qidirish", "https://t.me/arzonida_bot")
-      .url("📢 Kanalga qo'shilish", "https://t.me/engarzonidamoshina");
-
-    // Kanalga avtomatik yuborish
-    await bot.api.sendMessage(CHANNEL_ID, text, { parse_mode: "HTML", reply_markup: kb });
-
-  } catch (err) {
-      console.error("Haftalik analitika xatosi:", err);
-  }
+// =====================================================================
+// 📊 HAFTALIK BOZOR HISOBOTI (yakshanba 10:00, Avto-xabarlar → «Haftalik analitika»)
+// Narxlar oddiy o'rtacha emas: market.js dagi bozor narxi (shu model + eng ko'p uchraydigan yil, mediana).
+// Narx o'zgarishi: oxirgi 7 kun e'lonlari va undan oldingi 4 hafta e'lonlari, bitta yilga keltirilib solishtiriladi.
+// Ma'lumot kam bo'lsa — o'sha qator ko'rsatilmaydi (taxminiy raqam yozmaymiz).
+// =====================================================================
+const UZ_MONTHS = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avgust", "sentyabr", "oktyabr", "noyabr", "dekabr"];
+function weekRangeLabel(now = new Date()) {
+  const tz = (d) => new Date(d.getTime() + 5 * 3600 * 1000); // Toshkent
+  const a = tz(new Date(now.getTime() - 6 * 864e5)), b = tz(now);
+  return a.getUTCMonth() === b.getUTCMonth()
+    ? `${a.getUTCDate()}–${b.getUTCDate()}-${UZ_MONTHS[b.getUTCMonth()]}`
+    : `${a.getUTCDate()}-${UZ_MONTHS[a.getUTCMonth()]} – ${b.getUTCDate()}-${UZ_MONTHS[b.getUTCMonth()]}`;
 }
+const medianOf = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+async function buildWeeklyReport() {
+  const num = (sql, p = []) => db.execute(sql, p).then(([[r]]) => Number(r && r.c) || 0).catch(() => 0);
+  const [week, prev, drops, sold] = await Promise.all([
+    num("SELECT COUNT(*) AS c FROM ads WHERE status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 7 DAY"),
+    num("SELECT COUNT(*) AS c FROM ads WHERE status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 14 DAY AND created_at < NOW() - INTERVAL 7 DAY"),
+    num("SELECT COUNT(*) AS c FROM ads WHERE status = 'active' AND price_dropped_at >= NOW() - INTERVAL 7 DAY"),
+    num("SELECT COUNT(*) AS c FROM ads WHERE status = 'sold' AND sold_at >= NOW() - INTERVAL 7 DAY"),
+  ]);
+  if (!week) return null;
+  const chg = prev ? Math.round(((week - prev) / prev) * 100) : null;
+  let text = `📊 <b>HAFTALIK BOZOR HISOBOTI</b>\n<i>${weekRangeLabel()} · @${String(CHANNEL_ID).replace("@", "")}</i>\n\n`;
+  text += `📦 Yangi e'lonlar: <b>${formatNum(week)} ta</b>${chg !== null && Math.abs(chg) >= 3 ? ` (o'tgan haftadan ${chg > 0 ? "↑" : "↓"}${Math.abs(chg)}%)` : ""}\n`;
+  if (drops) text += `📉 Narxini tushirganlar: <b>${drops} ta</b>\n`;
+  if (sold) text += `🤝 Sotildi deb belgilandi: <b>${sold} ta</b>\n`;
+  const headText = text;
+  let modelsText = "", dealsText = "";
+
+  // 🏆 Bozordagi eng ko'p modellar
+  try {
+    const [top] = await db.execute("SELECT model_id, COUNT(*) AS c FROM ads WHERE status = 'active' AND model_id IS NOT NULL GROUP BY model_id ORDER BY c DESC LIMIT 5");
+    const lines = [];
+    if (top.length) {
+      const ids = top.map((r) => Number(r.model_id));
+      const [hist] = await db.execute(`SELECT model_id, year, price, transmission, status, created_at FROM ads WHERE model_id IN (${ids.map(() => "?").join(",")}) AND status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 35 DAY`, ids);
+      for (const r of top) {
+        const mid = Number(r.model_id), m = catalog.modelById(mid);
+        if (!m) continue;
+        const name = `${m.brandName || (m.brand && m.brand.name) || ""} ${m.name}`.trim();
+        const rows = hist.filter((x) => Number(x.model_id) === mid);
+        const yc = new Map();
+        rows.filter((x) => x.status === "active").forEach((x) => { const y = parseInt(x.year, 10); if (y > 1950) yc.set(y, (yc.get(y) || 0) + 1); });
+        const year = [...yc.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+        let line = `${lines.length + 1}. <b>${escapeHtml(name)}</b> — ${r.c} ta e'lon`;
+        if (year) {
+          const mp = await market.marketPrice({ modelId: mid, model: m.name, year });
+          if (mp.ok && mp.confident) {
+            line += `\n      ${year}-yil: ~<b>${formatNum(mp.median)}$</b>`;
+            // Narx o'zgarishi (bir yilga va bir karobkaga keltirilgan)
+            const info = await market.modelInfo(mid, m.name);
+            const norm = (x) => {
+              const y = parseInt(x.year, 10), p = parseInt(String(x.price).replace(/\D/g, ""), 10) || 0;
+              if (!y || p < 300 || p > 500000) return 0;
+              let v = p * Math.pow(1 + info.rate, year - y);
+              if (market.transGroup(x.transmission) === "M") v *= info.ratio;
+              return v;
+            };
+            const nowT = Date.now();
+            const recent = rows.filter((x) => nowT - new Date(x.created_at).getTime() <= 7 * 864e5).map(norm).filter(Boolean);
+            const base = rows.filter((x) => nowT - new Date(x.created_at).getTime() > 7 * 864e5).map(norm).filter(Boolean);
+            if (recent.length >= 5 && base.length >= 8) {
+              const med = medianOf(recent.concat(base));
+              const trim = (a) => a.filter((v) => v >= med * 0.5 && v <= med * 2);
+              const R = medianOf(trim(recent)), B = medianOf(trim(base));
+              const d = B ? Math.round(((R - B) / B) * 100) : 0;
+              line += Math.abs(d) >= 2 ? ` · ${d > 0 ? "📈 +" : "📉 −"}${Math.abs(d)}%` : " · ⚖️ barqaror";
+            }
+          }
+        }
+        lines.push(line);
+      }
+    }
+    if (lines.length) { modelsText = `\n🏆 <b>Bozorda eng ko'p modellar</b>\n${lines.join("\n")}\n`; text += modelsText; }
+  } catch (e) { console.error("Hisobot (modellar):", e.message); }
+
+  // 🔥 Haftaning eng yaxshi takliflari (bozor narxidan eng ko'p arzon)
+  try {
+    const [fresh] = await db.execute("SELECT * FROM ads WHERE status = 'active' AND channelMsgId IS NOT NULL AND created_at >= NOW() - INTERVAL 7 DAY ORDER BY id DESC LIMIT 300");
+    const deals = [];
+    for (const ad of fresh) {
+      const c = await market.compareAd(ad).catch(() => null);
+      if (c && c.confident && c.kind === "cheap" && c.diff <= -7) deals.push({ ad, d: Math.abs(c.diff) });
+    }
+    deals.sort((a, b) => b.d - a.d);
+    const ch = String(CHANNEL_ID).replace("@", "");
+    const medals = ["🥇", "🥈", "🥉"];
+    const picked = deals.slice(0, 3);
+    if (picked.length) {
+      dealsText = `\n🔥 <b>Haftaning eng yaxshi takliflari</b>\n`;
+      picked.forEach(({ ad, d }, i) => {
+        dealsText += `${medals[i]} <a href="https://t.me/${ch}/${ad.channelMsgId}">${escapeHtml(ad.carDetails)}${ad.year ? `, ${ad.year}` : ""}</a> — <b>${formatNum(ad.price)}$</b> (bozordan ${d}% arzon)\n`;
+      });
+      text += dealsText;
+    }
+  } catch (e) { console.error("Hisobot (takliflar):", e.message); }
+
+  text += `\n<i>Narxlar — kanaldagi real e'lonlar medianasi (shu model va yil bo'yicha). O'zgarish — oldingi 4 haftaga nisbatan.</i>`;
+  const kb = new InlineKeyboard();
+  if (WEBAPP_URL) kb.url("🔥 Arzon e'lonlar", miniAppLink("deal")).url("🧮 Narxini bilish", miniAppLink("evaluate")).row();
+  kb.url("➕ Bepul e'lon berish", `https://t.me/${BOT_LINK_USERNAME}`);
+  return { text, kb, headText, modelsText, dealsText };
+}
+// =====================================================================
+// 📊 KANALGA DIAGRAMMALI POSTLAR (charts.js) — hammasi Avto-xabarlarda yoqiladi/o'chiriladi,
+// 👁 bilan oldindan ko'riladi, «🔄 Boshqa model» bilan model almashtiriladi, «📤» bilan kanalga chiqadi.
+// =====================================================================
+const BOT_URL = () => `https://t.me/${BOT_LINK_USERNAME}`;
+const chartKb = (deal = true) => {
+  const kb = new InlineKeyboard();
+  if (WEBAPP_URL) { if (deal) kb.url("🔥 Arzon e'lonlar", miniAppLink("deal")); kb.url("🧮 Narxini bilish", miniAppLink("evaluate")).row(); }
+  return kb.url("➕ Bepul e'lon berish", BOT_URL());
+};
+const fitCaption = (parts) => { // Telegram rasm izohi ≤ 1024 belgi: sig'maganini oxiridan tashlaymiz
+  const p = parts.filter(Boolean);
+  while (p.length > 1 && p.join("").length > 1000) p.splice(p.length - 2, 1);
+  return p.join("").slice(0, 1024);
+};
+// Haftalik hisobot: «Bozor indeksi» rasmi + izoh (rasm chiqmasa — oldingidek matn)
+async function buildWeeklyPost() {
+  const r = await buildWeeklyReport();
+  if (!r) return null;
+  const idx = await charts.buildIndex().catch((e) => { console.error("Bozor indeksi:", e.message); return null; });
+  if (!idx) return { text: r.text, kb: r.kb };
+  const caption = fitCaption([r.headText, r.dealsText, `\n📈 <i>Rasmda — bozorda eng ko'p ${idx.items.length} model narxi va 8 haftalik o'zgarishi (mediana).</i>`]);
+  return { png: idx.png, caption, kb: r.kb };
+}
+async function buildDynamicsPost(off = 0) {
+  const d = await charts.buildDynamics(off);
+  if (!d) return null;
+  const ch = Math.abs(d.change) < 1 ? "barqaror" : `8 haftada ${d.change < 0 ? "▼" : "▲"}${String(Math.abs(d.change)).replace(".", ",")}%`;
+  return { png: d.png, offset: d.offset, label: d.name, kb: chartKb(false),
+    caption: `📈 <b>${escapeHtml(d.name)} — narx dinamikasi</b>\n${d.year}-yil, ${d.trans}: hozir ~<b>${formatNum(d.price)}$</b> (${ch})\n\n<i>Har hafta: shu model e'lonlari medianasi, ${d.year}-yilga keltirilgan. Soya — e'lonlarning ko'pchiligi.</i>\n\n👉 O'z mashinangiz narxini bilish: @${BOT_LINK_USERNAME}` };
+}
+async function buildYearsPost(off = 0) {
+  const y = await charts.buildYears(off);
+  if (!y) return null;
+  return { png: y.png, offset: y.offset, label: y.name, kb: chartKb(false),
+    caption: `📅 <b>${escapeHtml(y.name)}: yil bo'yicha bozor narxi</b>\n\nSaqlab qo'ying 📌 — mashinangiz taxminan qancha turishini bilasiz.\n<i>Aniq narx kraska, yurgan masofasi va holatiga qarab farq qiladi.</i>\n\n👉 Aniq baho: @${BOT_LINK_USERNAME}` };
+}
+async function buildWeekNumbersPost() {
+  const w = await charts.buildWeekNumbers();
+  if (!w) return null;
+  const chg = w.chg !== null && Math.abs(w.chg) >= 3 ? ` (o'tgan haftadan ${w.chg > 0 ? "↑" : "↓"}${Math.abs(w.chg)}%)` : "";
+  return { png: w.png, kb: chartKb(true),
+    caption: `📊 <b>Hafta raqamlarda</b> · ${charts.rangeLabel()}\n\n📦 ${formatNum(w.n)} ta yangi e'lon${chg}\n🤝 ${w.sold} ta sotildi\n📉 ${w.drops} ta e'lon narxi tushdi\n\n👉 Mashinangizni bepul joylang: @${BOT_LINK_USERNAME}` };
+}
+const CHART_POSTS = {
+  weekly_analytics: { build: () => buildWeeklyPost(), when: "har yakshanba 10:00" },
+  weekly_chart: { build: (o) => buildDynamicsPost(o), rotate: true, when: "har yakshanba 15:00, har hafta boshqa model" },
+  weekly_numbers: { build: () => buildWeekNumbersPost(), when: "har shanba 17:00" },
+  monthly_years: { build: (o) => buildYearsPost(o), rotate: true, when: "har oyning 1-kuni 11:00, har oy boshqa model" },
+};
+async function sendPostToChannel(p) {
+  if (p.png) await bot.api.sendPhoto(CHANNEL_ID, new InputFile(p.png, "avtobozor.png"), { caption: p.caption, parse_mode: "HTML", reply_markup: p.kb });
+  else await bot.api.sendMessage(CHANNEL_ID, p.text, { parse_mode: "HTML", reply_markup: p.kb, disable_web_page_preview: true });
+}
+async function publishChartPost(key, off = 0) {
+  try {
+    const p = await CHART_POSTS[key].build(off);
+    if (!p) { console.log(`📭 ${key}: ma'lumot yetarli emas — post chiqmadi.`); return false; }
+    await sendPostToChannel(p);
+    console.log(`✅ ${key} kanalga yuborildi${p.label ? ` (${p.label})` : ""}`);
+    return true;
+  } catch (e) { console.error(`${key} postida xato:`, e); return false; }
+}
+async function sendWeeklyAnalytics() { return publishChartPost("weekly_analytics"); }
+// 👁 Admin: kanalga chiqishidan oldin ko'rib chiqish
+async function previewChartPost(ctx, key, off = 0) {
+  const def = CHART_POSTS[key];
+  const p = await def.build(off).catch((e) => { console.error(e); return null; });
+  if (!p) return ctx.reply("📭 Hozircha ma'lumot yetarli emas — bu post chiqmaydi (kanalga hech narsa yuborilmaydi).");
+  const kb = new InlineKeyboard();
+  if (def.rotate) kb.text("🔄 Boshqa model", `ch_prev:${key}:${(p.offset || 0) + 1}`);
+  kb.text("📤 Kanalga yuborish", `ch_send:${key}:${p.offset || 0}`);
+  await ctx.reply(`👁 <b>Ko'rib chiqish</b> — kanalga hali yuborilmadi.\n<i>Avtomatik: ${def.when} (Avto-xabarlarda yoqilgan bo'lsa).${p.label ? `\nModel: ${escapeHtml(p.label)}` : ""}</i>`, { parse_mode: "HTML" });
+  if (p.png) await ctx.replyWithPhoto(new InputFile(p.png, "avtobozor.png"), { caption: p.caption, parse_mode: "HTML", reply_markup: kb });
+  else await ctx.reply(p.text, { parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb });
+}
+async function previewWeeklyReport(ctx) { return previewChartPost(ctx, "weekly_analytics"); }
+bot.callbackQuery(/^ch_prev:(\w+):(\d+)$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID || !CHART_POSTS[ctx.match[1]]) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery({ text: "⏳ Tayyorlanmoqda..." }).catch(() => {});
+  await previewChartPost(ctx, ctx.match[1], Number(ctx.match[2]));
+});
+const chartSending = new Set();
+bot.callbackQuery(/^ch_send:(\w+):(\d+)$/, async (ctx) => {
+  const key = ctx.match[1];
+  if (ctx.from.id !== ADMIN_ID || !CHART_POSTS[key]) return ctx.answerCallbackQuery().catch(() => {});
+  if (chartSending.has(key)) return ctx.answerCallbackQuery({ text: "⏳ Yuborilmoqda..." }).catch(() => {});
+  chartSending.add(key);
+  try {
+    await ctx.answerCallbackQuery({ text: "⏳ Kanalga yuborilmoqda..." }).catch(() => {});
+    const ok = await publishChartPost(key, Number(ctx.match[2]));
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+    await ctx.reply(ok ? "✅ Kanalga yuborildi." : "📭 Ma'lumot yetarli bo'lmadi — post chiqmadi.");
+  } finally { chartSending.delete(key); }
+});
 // =====================================================================
 // 🔎 HAFTALIK "ENG KO'P QIDIRILGAN 5 TA MOSHINA" REYTINGI
 // =====================================================================
@@ -7580,7 +7958,7 @@ bot.callbackQuery(/^reject_bump:(\d+)/, async (ctx) => {
 // =====================================================================
 // ⏰ UMUMIY TAYMER: HAR 30 MINUTDA VAQTNI TEKSHIRIB TURADI
 // =====================================================================
-let lastAnalyticsDate = null;
+let lastAnalyticsDate = null, lastChartDate = null, lastTopSearchDate = null, lastNumbersDate = null, lastYearsDate = null;
 let lastTop3Date = null; // Nomini to'g'rilab qo'ydik
 let lastAutoCleanDate = null;
 let lastSellCall13 = null;
@@ -7595,14 +7973,29 @@ function runScheduledPosts(now = new Date()) {
     const dayString = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tashkent', weekday: 'long' }).format(now);
     const isSunday = dayString === 'Sunday';
 
-    // 1. HAFTALIK ANALITIKA (Yakshanba kuni roppa-rosa soat 05:xx da)
-    if (isSunday && uzbHour === 10) {
-        if (lastAnalyticsDate !== uzbDateStr) {
-            lastAnalyticsDate = uzbDateStr;
-            if (isAutoOn("weekly_analytics")) sendWeeklyAnalytics();
-            if (isAutoOn("weekly_topsearch")) sendTopSearched();
-            if (isAutoOn("weekly_chart")) sendPriceChartPost();
-        }
+    // 1. HAFTALIK POSTLAR (yakshanba): 10:00 hisobot + «Bozor indeksi», 15:00 «Narx dinamikasi», 18:00 top qidiruvlar
+    if (isSunday && uzbHour === 10 && lastAnalyticsDate !== uzbDateStr) {
+        lastAnalyticsDate = uzbDateStr;
+        if (isAutoOn("weekly_analytics")) publishChartPost("weekly_analytics");
+    }
+    if (isSunday && uzbHour === 15 && lastChartDate !== uzbDateStr) {
+        lastChartDate = uzbDateStr;
+        if (isAutoOn("weekly_chart")) publishChartPost("weekly_chart");
+    }
+    if (isSunday && uzbHour === 18 && lastTopSearchDate !== uzbDateStr) {
+        lastTopSearchDate = uzbDateStr;
+        if (isAutoOn("weekly_topsearch")) sendTopSearched();
+    }
+    // 🔢 Shanba 17:00 — «Hafta raqamlarda»
+    if (dayString === "Saturday" && uzbHour === 17 && lastNumbersDate !== uzbDateStr) {
+        lastNumbersDate = uzbDateStr;
+        if (isAutoOn("weekly_numbers")) publishChartPost("weekly_numbers");
+    }
+    // 📅 Har oyning 1-kuni 11:00 — «Yil bo'yicha narx»
+    const uzbDay = parseInt(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tashkent", day: "numeric" }).format(now), 10);
+    if (uzbDay === 1 && uzbHour === 11 && lastYearsDate !== uzbDateStr) {
+        lastYearsDate = uzbDateStr;
+        if (isAutoOn("monthly_years")) publishChartPost("monthly_years");
     }
 
     // 2. KUNLIK ENG ARZON TOP-3 POST (Har kuni kechqurun roppa-rosa soat 20:xx da)
@@ -7738,7 +8131,7 @@ setInterval(checkVipExpiry, 10 * 60 * 1000).unref();
 setTimeout(checkVipExpiry, 60 * 1000).unref();
 
 setInterval(() => runScheduledPosts(new Date()), 60 * 1000 * 30);
-module.exports = { nudgeLowViewAds, loadBotSettings, alertMatchesAd, notifyAlertsForAd, flushNotifyQueue, deliverNotice, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
+module.exports = { postStyle, buildChannelCaption, renderAdImage, updateChannelPost, refreshChannelCaption, AD_CHANNEL_MARKUP_FN: (...a) => AD_CHANNEL_MARKUP(...a), offers, offerCounterWait, buildWeeklyReport, sendWeeklyAnalytics, CHART_POSTS, publishChartPost, charts, nudgeLowViewAds, loadBotSettings, alertMatchesAd, notifyAlertsForAd, flushNotifyQueue, deliverNotice, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
 
 // ==============================================================
 // 🧯 JAVOBSIZ TUGMALAR (eng oxirida turishi shart — boshqa handlerlardan keyin)
@@ -7931,6 +8324,7 @@ dbReady.finally(async () => {
       getPrice, getVipDays, PROMOS, PROMO_KINDS, promoDays, paidAdsOn, paidSalonOn, getSalonCredits, SALON_PLANS, salonAppDays, salonPlacement, SALON_PLAN_DESC,
       // 🖥 Admin paneli (ilovada)
       views: { record: recordAdHit, today: todayViews, minShow: viewsMinShow },
+      offers,
       maintenance: { info: maintenanceInfo, set: setMaintenance, remember: maintRemember, text: MAINT_PLAIN },
       admin: { runAdminAction, runAdminText, runAdminCommand, cancelAdminInput, rejectAdWithReason, startBroadcast, broadcastStatus, adminAwaiting, adminBlobs, queueDone, isVipActive, fmtTash },
     });
