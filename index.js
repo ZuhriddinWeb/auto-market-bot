@@ -833,7 +833,7 @@ const isCardStyle = (st) => CARD_STYLES.has(st);
 function postStyle() { const v = botSettings.get("post:style"); return POST_STYLES[v] ? v : "0"; }
 const adOwnerCache = new Map(); // adId -> userId («Narx taklif» tugmasi admin e'lonlarida chiqmasligi uchun)
 const hashTag = (v) => { const t = String(v || "").replace(/[^\p{L}\p{N}_]+/gu, "_").replace(/^_+|_+$/g, ""); return t && !/^\d+$/.test(t) ? `#${t}` : ""; };
-const phoneFmt = (v) => { const d = String(v || "").replace(/\D/g, ""); return d.length === 12 ? `+${d.slice(0, 3)} ${d.slice(3, 5)} ${d.slice(5, 8)} ${d.slice(8, 10)} ${d.slice(10)}` : d ? `+${d}` : ""; };
+const phoneFmt = (v) => { const d = String(v || "").replace(/\D/g, ""); return d.length === 12 ? `+${d.slice(0, 3)}\u00a0${d.slice(3, 5)}\u00a0${d.slice(5, 8)}\u00a0${d.slice(8, 10)}\u00a0${d.slice(10)}` : d ? `+${d}` : ""; };
 const isFilled = (v) => !!v && !["Ko'rsatilmagan", "Кўрсатилмаган", "Yo'q", "Йўқ", ""].includes(String(v).trim());
 const spNum = (v) => String(parseInt(String(v == null ? "" : v).replace(/\D/g, ""), 10) || 0).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 const kmSp = (v) => (/^\d[\d\s,.]*(km)?$/i.test(String(v == null ? "" : v).trim()) ? `${spNum(v)} km` : kmText(v));
@@ -885,6 +885,8 @@ async function buildChannelCaptionNew(ad, style) {
   const invite = inviteLink();
   let c;
   const idPart = ad.id ? `${tags ? " · " : ""}🆔 ${ad.id}` : "";
+  // Telefon, teglar va ID — har biri alohida qatorda (tor ekranda raqam bo'linib ketmasin)
+  const idLine = ad.id ? `🆔 ID: ${ad.id}` : "";
   if (style === "3" || style === "4") {
     // 📋 Jadval: ma'lumotlar bir xil kenglikdagi harflarda — ustunlar tekis turadi
     const rows = [["Yili", ad.year], ["Yurgan", kmSp(ad.probeg)], ["Karobka", ad.transmission], ["Yoqilg'i", ad.fuel], ["Rangi", ad.color], ["Kraska", ad.paint], ["Viloyat", ad.region]]
@@ -899,7 +901,7 @@ async function buildChannelCaptionNew(ad, style) {
     if (mk) c += mk.kind === "cheap" ? `🔥 Bozor narxidan <b>${Math.abs(mk.diff)}% arzon</b> <i>(${mk.count} ta o'xshash e'lon)</i>\n` : mk.kind === "market" ? `👍 Bozor narxida <i>(${mk.count} ta o'xshash e'lon)</i>\n` : "";
     c += `<pre>${escapeHtml(table)}</pre>`;
     if (extra.length) c += `<blockquote expandable>${extra.join("\n")}</blockquote>`;
-    c += `📞 <code>${phone}</code>\n${tags}${idPart}\n\n⚠️ <i>Moshina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+    c += `📞 <code>${phone}</code>\n${tags ? tags + "\n" : ""}${idLine}\n\n⚠️ <i>Moshina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   } else if (style === "1") {
     c = head + (drop
       ? `<b>${car}, ${escapeHtml(ad.year)}</b>\n💰 <s>${spNum(ad.old_price)}$</s> <b>${price}$</b> 📉 −${spNum((parseInt(ad.old_price) || 0) - (parseInt(ad.price) || 0))}$\n`
@@ -907,14 +909,14 @@ async function buildChannelCaptionNew(ad, style) {
     if (mk) c += mk.kind === "cheap" ? `🔥 Bozor narxidan <b>${Math.abs(mk.diff)}% arzon</b> <i>(${mk.count} ta o'xshash e'lon)</i>\n` : mk.kind === "market" ? `👍 Bozor narxida <i>(${mk.count} ta o'xshash e'lon)</i>\n` : "";
     c += `\n🛣 ${km} · ⚙️ ${tr} · ⛽ ${fuel}\n🎨 ${escapeHtml(ad.color || "—")} · 💎 ${escapeHtml(ad.paint || "—")}\n`;
     if (extra.length) c += `<blockquote expandable>${extra.join("\n")}</blockquote>`;
-    c += `📞 <code>${phone}</code>\n${tags}${idPart}\n\n⚠️ <i>Moshina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+    c += `📞 <code>${phone}</code>\n${tags ? tags + "\n" : ""}${idLine}\n\n⚠️ <i>Moshina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   } else {
     const line = "━━━━━━━━━━━━━━";
     c = head + `🚗 <b>${car.toUpperCase()} · ${escapeHtml(ad.year)}</b>\n`;
     c += drop ? `💰 <s>${spNum(ad.old_price)} $</s> <b>${price} $</b> 📉\n` : `💰 <b>${price} $</b>${mk && mk.kind === "cheap" ? `   🔥 <i>bozordan ${Math.abs(mk.diff)}% arzon</i>` : mk && mk.kind === "market" ? "   👍 <i>bozor narxida</i>" : ""}\n`;
     c += `${line}\n🛣 Yurgan: <b>${km}</b>\n⚙️ Karobka: <b>${tr}</b>\n⛽ Yoqilg'i: <b>${fuel}</b>\n🎨 Rangi: <b>${escapeHtml(ad.color || "—")}</b> · 💎 Kraska: <b>${escapeHtml(ad.paint || "—")}</b>\n`;
     if (extra.length) c += extra.join("\n") + "\n";
-    c += `${line}\n📞 <code>${phone}</code>\n📍 ${tags}${idPart}\n⚠️ <i>Moshina savdosiga admin javobgar emas. Oldindan to'lov qilmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+    c += `${line}\n📞 <code>${phone}</code>\n${tags ? "📍 " + tags + "\n" : ""}${idLine}\n⚠️ <i>Moshina savdosiga admin javobgar emas. Oldindan to'lov qilmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   }
   // Telegram: rasm izohi ≤ 1024 belgi — sig'masa, qo'shimcha ma'lumotni qisqartiramiz
   if (captionVisibleLength(c) > 1000 && extra.length) {
