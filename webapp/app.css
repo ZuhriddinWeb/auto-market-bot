@@ -898,3 +898,15 @@ button.offer-box { cursor: pointer; }
 .offer-row.counter .or-st { color: var(--brand); font-weight: 600; }
 .offer-row .or-act { display: flex; gap: 6px; margin-top: 10px; }
 .offer-row .or-act .btn { flex: 1; padding: 0 8px; font-size: 13px; }
+
+/* 🎨 Kanalga post yaratish */
+.pm-prev { min-height: 80px; transition: opacity .2s; }
+.pm-prev.busy { opacity: .55; }
+.pm-bubble { background: var(--surface); border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 1px var(--line); max-width: 420px; }
+.pm-bubble img { display: block; width: 100%; }
+.pm-bubble .bot-text { padding: 10px 12px; }
+.pm-kb { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 4px; max-width: 420px; }
+.pm-kb span { background: var(--surface-2); border-radius: 10px; padding: 9px 6px; text-align: center; font-size: 13px; font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-actions { margin-top: 14px; }
+.pm-when { display: flex; gap: 8px; align-items: center; }
+.pm-when .input { flex: 1; min-width: 0; }

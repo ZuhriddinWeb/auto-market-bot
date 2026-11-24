@@ -1370,6 +1370,63 @@ function startWebApp(deps) {
       freeUps: Number(u.free_ups) || 0, referrals: Number(u.referral_count) || 0, contest: Number(u.contest_score) || 0,
     }, ads: ads.map(a => card(a, badges, favs)), payments: pays.map(p => ({ title: ((PROMOS || {})[p.kind] || { title: "VIP" }).title, amount: Number(p.amount) || 0, status: p.status, at: p.created_at })) });
   }
+  // 🎨 Post konstruktori (ilova): ko'rish, yuborish yoki rejalashtirish
+  function pmRecord(body, user) {
+    const P = deps.postMaker.PM;
+    const b = body || {};
+    const tpl = P.TEMPLATES[b.tpl] ? b.tpl : "news";
+    const spec = {
+      tpl, color: P.THEMES[b.color] ? b.color : "blue", tag: sanitizeText(b.tag, 18),
+      title: String(b.title || "").replace(/\r/g, "").split("\n").slice(0, 2).map((x) => sanitizeText(x, 60)).join("\n"),
+      subtitle: sanitizeText(b.subtitle, 160), body: String(b.body || "").replace(/\r/g, "").slice(0, 600),
+      items: P.parseItems(String(b.items || "").slice(0, 900)),
+      icon: P.ICONS.includes(b.icon) ? b.icon : "info",
+      presets: Array.isArray(b.presets) ? b.presets.filter((k) => ["sell", "app", "channel", "deal"].includes(k)) : [],
+      buttons: P.parseButtonLines(b.buttons),
+      footer: b.footerOff ? { off: true } : { title: sanitizeText(b.footerTitle, 40) || undefined, btn: sanitizeText(b.footerBtn, 24) || undefined },
+    };
+    let photoId = null;
+    if (b.photo) { const u = takeUpload(b.photo, user.id, "photo"); if (!u) return { error: "Rasm topilmadi, qayta yuklang." }; photoId = u.fileId; }
+    return { rec: { spec, caption: P.liteToHtml(b.caption), photoId, pin: !!b.pin } };
+  }
+  async function handleAdminPostPreview(req, res, user) {
+    if (!needAdmin(res, user)) return;
+    if (!deps.postMaker) return sendJson(res, 400, { ok: false, error: "Bu imkoniyat mavjud emas." });
+    const r = pmRecord(await readJson(req), user);
+    if (r.error) return sendJson(res, 400, { ok: false, error: r.error });
+    const err = deps.postMaker.check(r.rec);
+    try {
+      const img = await deps.postMaker.image(r.rec);
+      sendJson(res, 200, { ok: true, image: img ? "data:image/jpeg;base64," + img.toString("base64") : null, caption: r.rec.caption, warning: err });
+    } catch (e) { sendJson(res, 400, { ok: false, error: e.message }); }
+  }
+  async function handleAdminPostSend(req, res, user) {
+    if (!needAdmin(res, user)) return;
+    if (!deps.postMaker) return sendJson(res, 400, { ok: false, error: "Bu imkoniyat mavjud emas." });
+    const body = await readJson(req);
+    const r = pmRecord(body, user);
+    if (r.error) return sendJson(res, 400, { ok: false, error: r.error });
+    const out = await once(`${user.id}:post`, async () => {
+      try {
+        if (body.when) {
+          const at = deps.postMaker.parseWhen(body.when);
+          if (!at) return { ok: false, error: "Vaqtni «18:30» yoki «25.11 09:00» ko'rinishida yozing." };
+          return deps.postMaker.schedule(r.rec, at);
+        }
+        return await deps.postMaker.publish(r.rec);
+      } catch (e) { return { ok: false, error: e.description || e.message }; }
+    });
+    if (out.ok) logLine(user, body.when ? "🎨 Kanal posti rejalashtirildi (ilovadan)" : "🎨 Kanalga post chiqardi (ilovadan)", null, 0);
+    sendJson(res, out.ok ? 200 : 400, out);
+  }
+  async function handleAdminPostList(req, res, user) {
+    if (!needAdmin(res, user)) return;
+    sendJson(res, 200, { ok: true, items: deps.postMaker ? await deps.postMaker.list() : [] });
+  }
+  async function handleAdminPostCancel(req, res, user, id) {
+    if (!needAdmin(res, user)) return;
+    sendJson(res, 200, { ok: !!(deps.postMaker && (await deps.postMaker.cancel(id))) });
+  }
   async function handleAdminBroadcast(req, res, user) {
     if (!needAdmin(res, user)) return;
     const body = await readJson(req);
@@ -1459,6 +1516,10 @@ function startWebApp(deps) {
     // 🖥 Admin paneli
     ["GET", /^\/api\/admin\/summary$/, (q, s, u) => handleAdminSummary(q, s, u)],
     ["POST", /^\/api\/admin\/maintenance$/, (q, s, u) => handleAdminMaintenance(q, s, u)],
+    ["POST", /^\/api\/admin\/post\/preview$/, (q, s, u) => handleAdminPostPreview(q, s, u)],
+    ["POST", /^\/api\/admin\/post\/send$/, (q, s, u) => handleAdminPostSend(q, s, u)],
+    ["GET", /^\/api\/admin\/post\/list$/, (q, s, u) => handleAdminPostList(q, s, u)],
+    ["POST", /^\/api\/admin\/post\/(\d+)\/cancel$/, (q, s, u, m) => handleAdminPostCancel(q, s, u, int(m[1]))],
     ["GET", /^\/api\/admin\/queue$/, (q, s, u) => handleAdminQueue(q, s, u)],
     ["POST", /^\/api\/admin\/action$/, (q, s, u) => handleAdminAction(q, s, u)],
     ["POST", /^\/api\/admin\/text$/, (q, s, u) => handleAdminText(q, s, u)],

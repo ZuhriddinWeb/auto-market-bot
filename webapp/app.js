@@ -2527,6 +2527,7 @@
     { title: "Boshqaruv", items: [
       { t: "Foydalanuvchilar", s: "Qidirish, bloklash, xabar yozish", icon: "user", color: "#007aff", path: "/admin/users" },
       { t: "Rassilka", s: "Barcha foydalanuvchilarga xabar", icon: "send", color: "#2aabee", path: "/admin/broadcast" },
+      { t: "Kanalga post yaratish", s: "Chiroyli rasmli post, hozir yoki belgilangan vaqtda", icon: "edit", color: "#af52de", path: "/admin/post" },
       { t: "Avtosalonlar", s: "Ro'yxat, to'xtatish, paket postlari", icon: "building", color: "#af52de", data: "admin_dealers" },
       { t: "Salon reklamalari", s: "Faollar, ilovadan olish, o'chirish", icon: "megaphone", color: "#ff2d55", data: "admin_salon_ads" },
       { t: "Statuslar", s: "VIP, TOP, Shoshilinch, Premium — hisobot", icon: "star", color: "#ffb300", data: "admin_vip" },
@@ -3104,6 +3105,127 @@
     return function () { alive = false; if (poll) clearInterval(poll); };
   }
 
+  // ---------- 🎨 Kanalga post yaratish ----------
+  function screenAdminPost() {
+    if (!me || !me.isAdmin) { replaceTo("/"); return; }
+    var alive = true, photo = null, timer = null;
+    var S = { tpl: "news", color: "blue", tag: "", title: "", subtitle: "", items: "", body: "", icon: "info", caption: "", buttons: "", presets: ["sell", "app"], pin: false, footerOff: false, footerTitle: "", footerBtn: "", when: "" };
+    var TPLS = [{ id: "news", name: "📣 Yangilik" }, { id: "promo", name: "🏷 Aksiya" }, { id: "notice", name: "⚠️ E'lon" }, { id: "own", name: "🖼 O'z rasmim" }, { id: "text", name: "📝 Faqat matn" }];
+    var COLORS = [{ id: "blue", name: "🔵 Ko'k" }, { id: "green", name: "🟢 Yashil" }, { id: "orange", name: "🟠 To'q sariq" }, { id: "dark", name: "⚫ Qora" }];
+    var ICONS = [{ id: "info", name: "ℹ️" }, { id: "alert", name: "⚠️" }, { id: "shield", name: "🛡" }, { id: "bell", name: "🔔" }, { id: "gift", name: "🎁" }, { id: "star", name: "⭐" }, { id: "fire", name: "🔥" }, { id: "car", name: "🚗" }];
+    var PRESETS = [{ id: "sell", name: "🚗 E'lon berish" }, { id: "app", name: "📱 Ilova" }, { id: "channel", name: "📢 Obuna" }, { id: "deal", name: "🔥 Arzonlar" }];
+    app.appendChild(h("h1", { class: "page", text: "Kanalga post" }));
+    app.appendChild(h("p", { class: "page-sub", text: "Shablonni tanlang, matnni yozing — bot chiroyli rasm yasaydi. Hozir yoki belgilangan vaqtda kanalga chiqadi." }));
+    var form = h("div"), preview = h("div", { class: "pm-prev" }), listBox = h("div");
+    app.appendChild(form);
+    app.appendChild(h("p", { class: "group-title", text: "Ko'rinishi" }));
+    app.appendChild(preview);
+    var actions = h("div", { class: "pm-actions" });
+    app.appendChild(actions);
+    app.appendChild(listBox);
+    var photoInput = h("input", { type: "file", accept: "image/*", class: "file-input", "aria-label": "Rasm" });
+    photoInput.addEventListener("change", function () {
+      var f = photoInput.files && photoInput.files[0]; if (!f) return;
+      photo = { url: URL.createObjectURL(f), status: "loading" }; draw();
+      var mine = photo;
+      compressImage(f).then(function (b) { return upload("photo", b); }).then(function (r) {
+        if (photo !== mine) return;
+        if (!r.ok) { toast(r.error || "Rasmni yuklab bo'lmadi"); photo = null; } else { photo.token = r.token; photo.status = "ok"; }
+        draw(); schedule();
+      });
+    });
+    function fld(label, el, help) { return h("div", { class: "field" }, [h("span", { class: "label", text: label }), el, help ? h("p", { class: "help", text: help }) : null]); }
+    function draw() {
+      form.innerHTML = "";
+      var t = S.tpl, rich = t === "news" || t === "promo" || t === "notice";
+      form.appendChild(h("div", { class: "group" }, [
+        fld("Shablon", chipGroup(null, function () { return TPLS; }, function (x) { return x.id === S.tpl; }, function (x) { S.tpl = x.id; draw(); schedule(true); }, { ariaLabel: "Shablon" })),
+        rich ? fld("Rang", chipGroup(null, function () { return COLORS; }, function (x) { return x.id === S.color; }, function (x) { S.color = x.id; schedule(true); }, { ariaLabel: "Rang" })) : null,
+      ]));
+      var g = [];
+      if (t === "promo" || t === "own") {
+        var pb = h("div", { class: "a-photo-pick" });
+        if (photo && photo.url) pb.appendChild(h("div", { class: "a-ph-sel" }, [h("img", { src: photo.url, alt: "" }), photo.status === "loading" ? h("span", { text: "Yuklanmoqda..." }) : null,
+          h("button", { type: "button", class: "lb-x", "aria-label": "Olib tashlash", text: "✕", onclick: function () { photo = null; draw(); schedule(); } })]));
+        else pb.appendChild(h("label", { class: "add-tile a-add" }, [photoInput, icon("camera"), "Rasm tanlash"]));
+        g.push(fld("Fon rasmi", pb));
+      }
+      if (rich) {
+        g.push(fld("Yorliq (o'ng tepada)", textInput(S, "tag", { maxlength: 18, placeholder: t === "promo" ? "Aksiya" : t === "notice" ? "E'lon" : "Yangilik" }, schedule)));
+        g.push(fld("Sarlavha", textArea(S, "title", { rows: 2, maxlength: 120, placeholder: "E'lonlar endi\nyanada qulay" }, schedule), "2-qatorga yozilgani rangli bo'ladi"));
+      }
+      if (t === "news" || t === "promo") g.push(fld("Qisqa izoh", textInput(S, "subtitle", { maxlength: 160, placeholder: "Sarlavha ostidagi 1–2 jumla" }, schedule)));
+      if (t === "news") g.push(fld("Punktlar (6 tagacha)", textArea(S, "items", { rows: 6, placeholder: "🔥 Sarlavha — qisqa izoh\n🔔 Ikkinchi punkt — izoh" }, schedule), "Har qatorga bittadan. Emoji rasmda chiziqli belgiga aylanadi"));
+      if (t === "notice") {
+        g.push(fld("Belgi", chipGroup(null, function () { return ICONS; }, function (x) { return x.id === S.icon; }, function (x) { S.icon = x.id; schedule(); }, { ariaLabel: "Belgi" })));
+        g.push(fld("Matn", textArea(S, "body", { rows: 4, maxlength: 600, placeholder: "Asosiy matn — rasmda chiqadi" }, schedule)));
+      }
+      if (rich) {
+        g.push(h("div", { class: "field" }, [switchRow({ v: !S.footerOff }, "v", "Pastki panel", "«E'lon berish — bepul» va tugma ko'rinishidagi blok", function (v) { S.footerOff = !v; draw(); schedule(); })]));
+        if (!S.footerOff) g.push(h("div", { class: "field row2" }, [textInput(S, "footerTitle", { maxlength: 40, placeholder: "E'lon berish — bepul", "aria-label": "Panel matni" }, schedule), textInput(S, "footerBtn", { maxlength: 24, placeholder: "Hoziroq sinang →", "aria-label": "Panel tugmasi" }, schedule)]));
+      }
+      if (g.length) form.appendChild(h("div", { class: "group", style: "margin-top:12px" }, g));
+      form.appendChild(h("div", { class: "group", style: "margin-top:12px" }, [
+        fld(t === "text" ? "Post matni" : "Rasm ostidagi matn", textArea(S, "caption", { rows: 6, maxlength: 4000, placeholder: "**qalin**, __kursiv__, [havola](https://...)" }, schedule), t === "text" ? "4000 belgigacha" : "1024 belgigacha. **qalin**, __kursiv__, ~~chizilgan~~, [matn](https://...)"),
+        fld("Tugmalar", chipGroup(null, function () { return PRESETS; }, function (x) { return S.presets.indexOf(x.id) >= 0; }, function (x) { var i = S.presets.indexOf(x.id); if (i >= 0) S.presets.splice(i, 1); else S.presets.push(x.id); schedule(); }, { ariaLabel: "Tugmalar" })),
+        fld("O'z tugmalaringiz", textArea(S, "buttons", { rows: 2, placeholder: "Avtosalonimiz | https://t.me/misol" }, schedule), "Har qatorga bittadan: Matn | havola"),
+        h("div", { class: "field" }, [switchRow(S, "pin", "📌 Kanal tepasiga qadash", null, null)]),
+      ]));
+    }
+    function payload() { return Object.assign({}, S, { photo: photo && photo.token }); }
+    function schedule(now) { clearTimeout(timer); timer = setTimeout(doPreview, now ? 50 : 1100); }
+    function doPreview() {
+      if (!alive) return;
+      if (photo && photo.status === "loading") return;
+      if ((S.tpl === "promo" || S.tpl === "own") && !(photo && photo.token)) { preview.innerHTML = ""; preview.appendChild(h("p", { class: "help", text: "Avval rasm tanlang." })); return; }
+      preview.classList.add("busy");
+      api("/api/admin/post/preview", { json: payload() }).then(function (r) {
+        if (!alive) return;
+        preview.classList.remove("busy"); preview.innerHTML = "";
+        if (!r.ok) { preview.appendChild(h("p", { class: "help", text: r.error || "Ko'rinishni tayyorlab bo'lmadi" })); return; }
+        var bub = h("div", { class: "pm-bubble" });
+        if (r.image) bub.appendChild(h("img", { src: r.image, alt: "Post rasmi" }));
+        if (r.caption) bub.appendChild(safeHtml(r.caption));
+        preview.appendChild(bub);
+        var btns = S.presets.map(function (k) { return PRESETS.filter(function (p) { return p.id === k; })[0].name; })
+          .concat(S.buttons.split("\n").map(function (l) { return (/^(.{1,40}?)\s*[|—–-]\s*https?:\/\//.exec(l.trim()) || [])[1]; }).filter(Boolean));
+        if (btns.length) preview.appendChild(h("div", { class: "pm-kb" }, btns.map(function (b) { return h("span", { text: b }); })));
+        if (r.warning) preview.appendChild(h("p", { class: "help", style: "color:var(--danger)", text: "⚠️ " + r.warning }));
+      });
+    }
+    var whenInp = textInput(S, "when", { placeholder: "18:30 yoki 25.11 09:00", "aria-label": "Vaqt" });
+    function send(withTime) {
+      if (photo && photo.status === "loading") return toast("Rasm yuklanmoqda, kuting");
+      if (withTime && !S.when.trim()) return toast("Vaqtni yozing: 18:30 yoki 25.11 09:00");
+      var go2 = function () {
+        api("/api/admin/post/send", { json: Object.assign(payload(), { when: withTime ? S.when.trim() : "" }) }).then(function (r) {
+          if (!r.ok) return toast(r.error || "Xato");
+          haptic("success");
+          toast(withTime ? "⏰ Rejalashtirildi: " + fmtDateTime(r.runAt) : "✅ Post kanalga chiqdi");
+          loadList();
+        });
+      };
+      if (withTime) go2(); else confirmBox("Post hozir kanalga chiqsinmi?", go2);
+    }
+    actions.appendChild(h("button", { type: "button", class: "btn", text: "📤 Hozir yuborish", onclick: function () { send(false); } }));
+    actions.appendChild(h("div", { class: "group", style: "margin-top:12px" }, [h("div", { class: "field" }, [h("span", { class: "label", text: "⏰ Belgilangan vaqtda (Toshkent)" }), h("div", { class: "pm-when" }, [whenInp, h("button", { type: "button", class: "btn sm", text: "Rejalashtirish", onclick: function () { send(true); } })])])]));
+    function loadList() {
+      api("/api/admin/post/list").then(function (r) {
+        if (!alive) return;
+        listBox.innerHTML = "";
+        if (!r.ok || !r.items.length) return;
+        listBox.appendChild(h("p", { class: "group-title", text: "🗓 Rejadagi postlar" }));
+        listBox.appendChild(h("div", { class: "list" }, r.items.map(function (p) {
+          return listItem({ icon: "clock", color: "#af52de", title: p.title || "Post", sub: fmtDateTime(p.runAt), chev: false, end: "Bekor", onclick: function () {
+            confirmBox("Bu post bekor qilinsinmi?", function () { api("/api/admin/post/" + p.id + "/cancel", { json: {} }).then(function () { toast("Bekor qilindi"); loadList(); }); });
+          } });
+        })));
+      });
+    }
+    draw(); schedule(true); loadList();
+    return function () { alive = false; clearTimeout(timer); };
+  }
+
   // ---------- Buyruqlar ----------
   var ADMIN_COMMANDS = [
     { c: "/up ", t: "E'lonni kanalda ko'tarish", hint: "/up 735" },
@@ -3210,6 +3332,7 @@
     [/^\/admin\/users$/, screenAdminUsers, { parent: "/admin" }],
     [/^\/admin\/user\/(\d+)$/, screenAdminUser, { parent: "/admin/users" }],
     [/^\/admin\/broadcast$/, screenAdminBroadcast, { parent: "/admin" }],
+    [/^\/admin\/post$/, screenAdminPost, { parent: "/admin" }],
     [/^\/admin\/cmd$/, screenAdminCmd, { parent: "/admin" }],
   ];
   var cleanup = null, currentTab = null;

@@ -266,6 +266,14 @@ const dbReady = (async () => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, KEY idx_user (userId)
       )
     `);
+    // 🎨 Post konstruktori: rejalashtirilgan / yuborilgan kanal postlari
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS channel_posts (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY, data MEDIUMTEXT NOT NULL, status VARCHAR(16) NOT NULL DEFAULT 'scheduled',
+        run_at DATETIME NULL, msg_id BIGINT NULL, error VARCHAR(255) NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_status (status, run_at)
+      )
+    `);
     // 💬 Narx takliflari (xaridor → sotuvchi)
     await db.execute(`
       CREATE TABLE IF NOT EXISTS offers (
@@ -819,7 +827,9 @@ const recentDrop = (ad) => !!(ad && ad.old_price && ad.price_dropped_at && Date.
 // 🎨 KANAL POSTI KO'RINISHI (Admin → Avto-xabarlar): "0" — hozirgidek, "1" — e'lon kartochkasi, "2" — yangi matn
 // + holat belgilari: SOTILDI muhri, NARXI TUSHDI, Premium/VIP ramka (har biri alohida yoqiladi)
 // =====================================================================
-const POST_STYLES = { "0": "Hozirgidek", "1": "E'lon kartochkasi", "2": "Yangi matn" };
+const POST_STYLES = { "0": "Hozirgidek", "1": "E'lon kartochkasi", "2": "Yangi matn", "3": "Jadval (ramkali)", "4": "Jadval (yengil)" };
+const CARD_STYLES = new Set(["1", "3", "4"]); // rasmi «e'lon kartochkasi» bo'lgan ko'rinishlar
+const isCardStyle = (st) => CARD_STYLES.has(st);
 function postStyle() { const v = botSettings.get("post:style"); return POST_STYLES[v] ? v : "0"; }
 const adOwnerCache = new Map(); // adId -> userId («Narx taklif» tugmasi admin e'lonlarida chiqmasligi uchun)
 const hashTag = (v) => { const t = String(v || "").replace(/[^\p{L}\p{N}_]+/gu, "_").replace(/^_+|_+$/g, ""); return t && !/^\d+$/.test(t) ? `#${t}` : ""; };
@@ -844,7 +854,7 @@ function postLookState(ad) {
 // Rasm imzosi: rasm qayta chizilishi kerakmi (kartochka narxni ham ko'rsatadi). Hozirgi va «yangi matn» — rasmi bir xil
 const POST_LOOK_DEFAULT = "c|0|0|0|";
 function postLookSig(ad) {
-  const st = postLookState(ad), card = postStyle() === "1";
+  const st = postLookState(ad), card = isCardStyle(postStyle());
   return `${card ? "k" : "c"}|${st.sold ? 1 : 0}|${st.drop ? 1 : 0}|${st.prem || 0}|${card ? spNum(ad.price) : ""}`.slice(0, 40);
 }
 function lookFor(ad) { return { style: postStyle(), ad, state: postLookState(ad) }; }
@@ -874,21 +884,37 @@ async function buildChannelCaptionNew(ad, style) {
   const phone = phoneFmt(ad.phone);
   const invite = inviteLink();
   let c;
-  if (style === "1") {
+  const idPart = ad.id ? `${tags ? " · " : ""}🆔 ${ad.id}` : "";
+  if (style === "3" || style === "4") {
+    // 📋 Jadval: ma'lumotlar bir xil kenglikdagi harflarda — ustunlar tekis turadi
+    const rows = [["Yili", ad.year], ["Yurgan", kmSp(ad.probeg)], ["Karobka", ad.transmission], ["Yoqilg'i", ad.fuel], ["Rangi", ad.color], ["Kraska", ad.paint], ["Viloyat", ad.region]]
+      .filter((r) => r[1] && String(r[1]).trim() && r[1] !== "—").map((r) => [r[0], String(r[1]).trim().slice(0, 18)]);
+    const w1 = Math.max(...rows.map((r) => r[0].length)), w2 = Math.max(...rows.map((r) => r[1].length));
+    const table = style === "3"
+      ? [`┌${"─".repeat(w1 + 2)}┬${"─".repeat(w2 + 2)}┐`, ...rows.map((r) => `│ ${r[0].padEnd(w1)} │ ${r[1].padEnd(w2)} │`), `└${"─".repeat(w1 + 2)}┴${"─".repeat(w2 + 2)}┘`].join("\n")
+      : rows.map((r) => `${(r[0] + " ").padEnd(w1 + 2, "·")} ${r[1]}`).join("\n");
+    c = head + (drop
+      ? `<b>${car}, ${escapeHtml(ad.year)}</b>\n💰 <s>${spNum(ad.old_price)}$</s> <b>${price}$</b> 📉 −${spNum((parseInt(ad.old_price) || 0) - (parseInt(ad.price) || 0))}$\n`
+      : `<b>${car}, ${escapeHtml(ad.year)} · ${price}$</b>\n`);
+    if (mk) c += mk.kind === "cheap" ? `🔥 Bozor narxidan <b>${Math.abs(mk.diff)}% arzon</b> <i>(${mk.count} ta o'xshash e'lon)</i>\n` : mk.kind === "market" ? `👍 Bozor narxida <i>(${mk.count} ta o'xshash e'lon)</i>\n` : "";
+    c += `<pre>${escapeHtml(table)}</pre>`;
+    if (extra.length) c += `<blockquote expandable>${extra.join("\n")}</blockquote>`;
+    c += `📞 <code>${phone}</code>\n${tags}${idPart}\n\n⚠️ <i>Moshina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+  } else if (style === "1") {
     c = head + (drop
       ? `<b>${car}, ${escapeHtml(ad.year)}</b>\n💰 <s>${spNum(ad.old_price)}$</s> <b>${price}$</b> 📉 −${spNum((parseInt(ad.old_price) || 0) - (parseInt(ad.price) || 0))}$\n`
       : `<b>${car}, ${escapeHtml(ad.year)} · ${price}$</b>\n`);
     if (mk) c += mk.kind === "cheap" ? `🔥 Bozor narxidan <b>${Math.abs(mk.diff)}% arzon</b> <i>(${mk.count} ta o'xshash e'lon)</i>\n` : mk.kind === "market" ? `👍 Bozor narxida <i>(${mk.count} ta o'xshash e'lon)</i>\n` : "";
     c += `\n🛣 ${km} · ⚙️ ${tr} · ⛽ ${fuel}\n🎨 ${escapeHtml(ad.color || "—")} · 💎 ${escapeHtml(ad.paint || "—")}\n`;
     if (extra.length) c += `<blockquote expandable>${extra.join("\n")}</blockquote>`;
-    c += `📞 <code>${phone}</code>\n${tags}${tags ? " · " : ""}🆔 ${ad.id}\n\n⚠️ <i>Moshina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+    c += `📞 <code>${phone}</code>\n${tags}${idPart}\n\n⚠️ <i>Moshina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   } else {
     const line = "━━━━━━━━━━━━━━";
     c = head + `🚗 <b>${car.toUpperCase()} · ${escapeHtml(ad.year)}</b>\n`;
     c += drop ? `💰 <s>${spNum(ad.old_price)} $</s> <b>${price} $</b> 📉\n` : `💰 <b>${price} $</b>${mk && mk.kind === "cheap" ? `   🔥 <i>bozordan ${Math.abs(mk.diff)}% arzon</i>` : mk && mk.kind === "market" ? "   👍 <i>bozor narxida</i>" : ""}\n`;
     c += `${line}\n🛣 Yurgan: <b>${km}</b>\n⚙️ Karobka: <b>${tr}</b>\n⛽ Yoqilg'i: <b>${fuel}</b>\n🎨 Rangi: <b>${escapeHtml(ad.color || "—")}</b> · 💎 Kraska: <b>${escapeHtml(ad.paint || "—")}</b>\n`;
     if (extra.length) c += extra.join("\n") + "\n";
-    c += `${line}\n📞 <code>${phone}</code>\n📍 ${tags}${tags ? " · " : ""}🆔 ${ad.id}\n⚠️ <i>Moshina savdosiga admin javobgar emas. Oldindan to'lov qilmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+    c += `${line}\n📞 <code>${phone}</code>\n📍 ${tags}${idPart}\n⚠️ <i>Moshina savdosiga admin javobgar emas. Oldindan to'lov qilmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   }
   // Telegram: rasm izohi ≤ 1024 belgi — sig'masa, qo'shimcha ma'lumotni qisqartiramiz
   if (captionVisibleLength(c) > 1000 && extra.length) {
@@ -1400,6 +1426,9 @@ bot.use(async (ctx, next) => {
   return ctx.reply(`🔁 Qarshi taklifingiz (<b>${formatNum(r.counter)}$</b>) xaridorga yuborildi. Rozi bo'lsa, bot sizga xabar beradi.`, { parse_mode: "HTML" });
 });
 
+// 🎨 Post konstruktori: admin yozgan matn/rasm
+bot.use((ctx, next) => pmInputMw(ctx, next));
+
 // 3. ЖАРАЁНЛАРНИ УЛАШ
 bot.use(conversations());
 
@@ -1585,6 +1614,22 @@ async function updateChannelPost(ad, { media = false, caption = null } = {}) {
   return true;
 }
 const needsMedia = (ad) => postLookSig(ad) !== (ad.post_look || POST_LOOK_DEFAULT);
+// 🛡 Admin tekshiruvi va sotuvchining «oldindan ko'rish»ida ham rasm kanaldagi ko'rinishda bo'lsin
+// (Avto-xabarlar → «Tekshiruvda ham yangi ko'rinish»). a — e'lon (bazadagi yoki bot jarayonidagi)
+function previewAdLike(a, extra = {}) {
+  return {
+    id: a.id || 0, userId: a.userId || 0, carDetails: a.carDetails || (a.brand ? catalog.carName(a.brand, a.model) : ""),
+    model_id: a.model_id || null, year: a.year, probeg: a.probeg, transmission: a.transmission || a.trans, fuel: a.fuel,
+    price: a.price, region: a.region, paint: a.paint, color: a.color, phone: a.phone, history: a.history, barter: a.barter, nasiya: a.nasiya,
+    dealer_offer: a.dealer_offer, created_at: new Date(), status: "active", ...extra,
+  };
+}
+async function previewCollage(photoUrls, a, extra = {}) {
+  if (!isAutoOn("adm_preview") || postStyle() === "0") return createCollage(photoUrls);
+  const ad = previewAdLike(a, extra);
+  const badge = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year, ad).catch(() => null);
+  return createCollage(photoUrls, badge, { style: postStyle(), ad, state: {} });
+}
 async function createCollage(photoUrls, badgeInfo = null, look = null) {
   // Bitta rasm yuklanmasa ham kollaj qolganlaridan yasaladi (hammasi yuklanmasa — xato)
   const results = await Promise.allSettled(photoUrls.map((url) => downloadBuffer(url)));
@@ -1593,7 +1638,7 @@ async function createCollage(photoUrls, badgeInfo = null, look = null) {
   if (failedN) console.error(`Kollaj: ${failedN} ta rasm yuklanmadi (${results.find((r) => r.status === "rejected").reason.code || "xato"}), qolganlaridan yasaldi.`);
   if (!buffers.length) throw results.find((r) => r.status === "rejected").reason;
 
-  if (look && look.style === "1" && look.ad) return createCardImage(buffers, badgeInfo, look);
+  if (look && isCardStyle(look.style) && look.ad) return createCardImage(buffers, badgeInfo, look);
   const st = (look && look.state) || {};
   const layoutParams = [];
   const canvasWidth = 1200;
@@ -1959,7 +2004,7 @@ async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot", recei
 
   // Kollaj yasalmasa (Telegram'dan yuklab bo'lmasa) — birinchi rasm file_id bilan yuboriladi, e'lon yo'qolmaydi
   let adminCollage = null;
-  try { adminCollage = await createCollage(await getPhotoUrls(ad.photos)); }
+  try { adminCollage = await previewCollage(await getPhotoUrls(ad.photos), ad, { id: adId, userId, carDetails: fullCarName }); }
   catch (e) { console.error("Admin uchun kollaj yasalmadi, birinchi rasm yuboriladi:", e.code || e.message); }
   try {
     const adminMsg = await bot.api.sendPhoto(ADMIN_ID, adminCollage ? new InputFile(adminCollage) : ad.photos[0], {
@@ -2292,7 +2337,7 @@ async function changeAdPrice({ adId, userId, newPrice }) {
   // Kanal posti: kartochkada narx rasmning o'zida; «Narxi tushdi» belgisi yoqilgan bo'lsa — rasm ham yangilanadi
   const droppedNow = (parseInt(newPrice) || 0) < (parseInt(ad.price) || 0);
   const adAfter = { ...ad, price: String(newPrice), old_price: droppedNow ? (recentDrop(ad) ? ad.old_price : ad.price) : null, price_dropped_at: droppedNow ? new Date() : null };
-  const priceMedia = postStyle() === "1" || needsMedia(adAfter);
+  const priceMedia = isCardStyle(postStyle()) || needsMedia(adAfter);
 
   try {
     if (postStyle() === "0" && !priceMedia) await bot.api.editMessageCaption(CHANNEL_ID, ad.channelMsgId, { caption: newCaption, reply_markup: channelMarkup, parse_mode: "HTML" });
@@ -2395,7 +2440,7 @@ async function submitAdEditToAdmin({ adId, ad, userId, firstName, source = "bot"
 
   // Kollaj yasalmasa (Telegram'dan yuklab bo'lmasa) — birinchi rasm file_id bilan yuboriladi, e'lon yo'qolmaydi
   let adminCollage = null;
-  try { adminCollage = await createCollage(await getPhotoUrls(ad.photos)); }
+  try { adminCollage = await previewCollage(await getPhotoUrls(ad.photos), ad, { id: own.ad.id, userId, carDetails: fullCarName }); }
   catch (e) { console.error("Admin uchun kollaj yasalmadi, birinchi rasm yuboriladi:", e.code || e.message); }
   try {
     let adminCaption = `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 <b>Eski ID: ${own.ad.id}</b>\n\n${caption}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a>${countText}${urgentTextEdit}${sourceText}`;
@@ -2651,6 +2696,7 @@ const adminMenu = new InlineKeyboard()
   .text("🔎 Top qidiruvlar", "admin_topsearch")
   .text("📊 Narx grafigi", "admin_chart").row()
   .text("🔔 7-kunlik UP xabar jo'natish", "admin_send_7day").row()
+  .text("🎨 Kanalga post yaratish", "pm_new").row()
   .text("⏰ Avto-xabarlar (yoqish / o'chirish)", "admin_autoposts").row()
   .text("📏 E'lon limiti (foydalanuvchilar)", "admin_adlimit").row()
   .text("💰 Narxlar va to'lovlar", "admin_prices").row()
@@ -2749,6 +2795,7 @@ const AUTO_POSTS = [
   { key: "st_premium", group: "post", btn: "Premium/VIP ramka", title: "⭐ Premium — oltin, VIP — binafsha ramka va belgi", when: "status yoqilganda / tugaganda" },
   { key: "btn_offer", group: "post", btn: "«Narx taklif» tugmasi", title: "💬 «Narx taklif» tugmasi", when: "kartochka va yangi matn ko'rinishida" },
   { key: "btn_similar", group: "post", btn: "«O'xshashi chiqsa» tugmasi", title: "🔔 «O'xshashi chiqsa» tugmasi (1 bosishda obuna)", when: "kartochka va yangi matn ko'rinishida" },
+  { key: "adm_preview", group: "post", btn: "Tekshiruvda ham yangi ko'rinish", title: "🛡 Admin tekshiruvida va sotuvchining «oldindan ko'rish»ida ham rasm kanaldagidek", when: "kartochka / yangi matn tanlanganda" },
   { key: "wm_logo", group: "post", btn: "Rasmdagi AvtoBozor belgisi", title: "🏷 Rasm pastida «AvtoBozor» belgisi va kanal manzili", when: "yangi e'lon rasmlarida" },
   { key: "price_vote", group: "post", btn: "«Narxga baho bering» qatori", title: "👇 «Narxga baho bering: 🔥 · 👍 · 🤔»", when: "yangi va tahrirlangan e'lon matnida" },
   { key: "btn_sell", group: "post", btn: "«E'lon berish» tugmasi", title: "➕ «E'lon berish» tugmasi", when: "e'lon ostida, «Saqlash» yonida" },
@@ -2772,7 +2819,7 @@ function autoPostsView() {
   // 🎨 E'lon posti ko'rinishi
   const ps = postStyle();
   text += `\n🎨 <b>E'lon posti ko'rinishi:</b> ${POST_STYLES[ps]}\n<i>Yangi e'lonlar shu ko'rinishda chiqadi. Kanaldagi faol e'lonlarni ham o'tkazish — «🔄 Faol e'lonlarga qo'llash».</i>\n`;
-  for (const k of Object.keys(POST_STYLES)) kb.text(`${k === ps ? "✅ " : ""}${POST_STYLES[k]}`, `ps_set:${k}`);
+  Object.keys(POST_STYLES).forEach((k, i) => { kb.text(`${k === ps ? "✅ " : ""}${POST_STYLES[k]}`, `ps_set:${k}`); if (i === 2) kb.row(); });
   kb.row().text("👁 Namuna", "ps_prev").text(postRestyleJob ? "⏹ To'xtatish" : "🔄 Faol e'lonlarga qo'llash", postRestyleJob ? "ps_stop" : "ps_bulk").row();
   for (const [g, title] of AUTO_GROUPS) {
     text += `\n${title}\n`;
@@ -2795,9 +2842,271 @@ async function showAutoPosts(ctx) {
   const { text, kb } = autoPostsView();
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
 }
+// =====================================================================
+// 🎨 POST KONSTRUKTORI — admin bot yoki ilovadan kanalga chiroyli rasmli post yaratadi (postmaker.js)
+// Bot: Admin → «🎨 Kanalga post yaratish» yoki /post. Ilova: Admin → «Post yaratish».
+// Shablon → rang → sarlavha → ... → post matni → tugmalar → ko'rish → hozir yoki belgilangan vaqtda yuborish.
+// =====================================================================
+const PM = require("./postmaker");
+const pmLinks = () => ({ bot: `https://t.me/${BOT_LINK_USERNAME}`, app: WEBAPP_URL ? miniAppLink("") : null, channel: inviteLink(), deal: WEBAPP_URL ? miniAppLink("deal") : null });
+const pmKeyboard = (spec) => { const kb = new InlineKeyboard(); for (const row of PM.buildButtons(spec, pmLinks())) { row.forEach(([t, u]) => kb.url(t, u)); kb.row(); } return kb; };
+async function pmImage(rec) {
+  const spec = { ...(rec.spec || {}), bot: BOT_LINK_USERNAME };
+  if (spec.tpl === "text") return null;
+  let photo = null;
+  if (rec.photoId) { const f = await bot.api.getFile(rec.photoId); photo = await downloadBuffer(`https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${f.file_path}`); }
+  if ((spec.tpl === "promo" || spec.tpl === "own") && !photo) throw new Error("Bu shablon uchun rasm kerak");
+  return PM.renderPost(sharp, spec, photo);
+}
+function pmCheck(rec) {
+  const len = captionVisibleLength(rec.caption || "");
+  if (rec.spec.tpl === "text") { if (!len) return "Post matnini yozing."; if (len > 4000) return "Matn juda uzun (4000 belgigacha)."; }
+  else if (len > 1024) return `Rasm ostidagi matn ${len} belgi — Telegram 1024 tagacha ruxsat beradi. Qisqartiring.`;
+  if (["news", "promo", "notice"].includes(rec.spec.tpl) && !String(rec.spec.title || "").trim()) return "Sarlavhani yozing.";
+  return null;
+}
+async function pmPublish(rec) {
+  const err = pmCheck(rec); if (err) return { ok: false, error: err };
+  const img = await pmImage(rec);
+  const opt = { parse_mode: "HTML", reply_markup: pmKeyboard(rec.spec) };
+  const msg = img
+    ? await bot.api.sendPhoto(CHANNEL_ID, new InputFile(img, "post.jpg"), { ...opt, caption: rec.caption || undefined })
+    : await bot.api.sendMessage(CHANNEL_ID, rec.caption, { ...opt, link_preview_options: { is_disabled: true } });
+  if (rec.pin) await bot.api.pinChatMessage(CHANNEL_ID, msg.message_id, { disable_notification: true }).catch(() => {});
+  return { ok: true, msgId: msg.message_id };
+}
+async function pmSchedule(rec, runAt) {
+  const err = pmCheck(rec); if (err) return { ok: false, error: err };
+  if (!(runAt instanceof Date) || isNaN(runAt) || runAt.getTime() < Date.now() - 60000) return { ok: false, error: "Vaqt noto'g'ri yoki o'tib ketgan." };
+  const [r] = await db.execute("INSERT INTO channel_posts (data, status, run_at) VALUES (?, 'scheduled', ?)", [JSON.stringify(rec), runAt]);
+  return { ok: true, id: r.insertId, runAt };
+}
+async function pmList() {
+  const [rows] = await db.execute("SELECT id, data, run_at FROM channel_posts WHERE status = 'scheduled' ORDER BY run_at LIMIT 30");
+  return rows.map((r) => { let d = {}; try { d = JSON.parse(r.data); } catch (e) {} return { id: Number(r.id), runAt: r.run_at, title: String((d.spec && d.spec.title) || stripTags(d.caption || "")).split("\n")[0].slice(0, 60), tpl: d.spec && d.spec.tpl }; });
+}
+const stripTags = (h) => String(h || "").replace(/<[^>]*>/g, "");
+async function pmCancel(id) { const [r] = await db.execute("UPDATE channel_posts SET status = 'cancelled' WHERE id = ? AND status = 'scheduled'", [id]); return !!(r && r.affectedRows); }
+// Vaqti kelgan postlar (har daqiqa)
+let pmRunning = false;
+async function pmTick() {
+  if (pmRunning) return; pmRunning = true;
+  try {
+    const [rows] = await db.execute("SELECT * FROM channel_posts WHERE status = 'scheduled' AND run_at <= NOW() ORDER BY run_at LIMIT 5");
+    for (const r of rows) {
+      const [u] = await db.execute("UPDATE channel_posts SET status = 'sending' WHERE id = ? AND status = 'scheduled'", [r.id]);
+      if (!u || !u.affectedRows) continue;
+      try {
+        const out = await pmPublish(JSON.parse(r.data));
+        if (!out.ok) throw new Error(out.error);
+        await db.execute("UPDATE channel_posts SET status = 'sent', msg_id = ? WHERE id = ?", [out.msgId, r.id]);
+      } catch (e) {
+        await db.execute("UPDATE channel_posts SET status = 'failed', error = ? WHERE id = ?", [String(e.description || e.message).slice(0, 250), r.id]).catch(() => {});
+        bot.api.sendMessage(ADMIN_ID, `⚠️ Rejalashtirilgan post (#${r.id}) kanalga chiqmadi: ${escapeHtml(e.description || e.message)}`, { parse_mode: "HTML" }).catch(() => {});
+      }
+    }
+  } catch (e) { console.error("Post rejasi:", e.message); } finally { pmRunning = false; }
+}
+setInterval(pmTick, 60 * 1000).unref();
+// «18:30», «25.11 18:30», «25.11.2026 18:30» — Toshkent vaqti
+function pmParseWhen(t) {
+  const m = /^\s*(?:(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\s+)?(\d{1,2})[:.](\d{2})\s*$/.exec(String(t || ""));
+  if (!m) return null;
+  const now = new Date(Date.now() + 5 * 3600e3);
+  let y = m[3] ? +m[3] : now.getUTCFullYear(); if (y < 100) y += 2000;
+  const mo = m[2] ? +m[2] - 1 : now.getUTCMonth(), d = m[1] ? +m[1] : now.getUTCDate(), hh = +m[4], mm = +m[5];
+  if (hh > 23 || mm > 59 || mo > 11 || d > 31) return null;
+  let at = new Date(Date.UTC(y, mo, d, hh - 5, mm));
+  if (!m[1] && at.getTime() < Date.now()) at = new Date(at.getTime() + 864e5); // faqat soat — o'tib ketgan bo'lsa ertaga
+  return at;
+}
+const fmtWhen = (d) => fmtTash(d);
+
+// ---------- Bot ichidagi bosqichlar ----------
+let pmDraft = null; // { spec, caption, photoId, pin, step }
+const PM_STEPS = {
+  news: ["title", "subtitle", "items", "caption", "buttons"],
+  promo: ["photo", "title", "subtitle", "caption", "buttons"],
+  notice: ["title", "body", "caption", "buttons"],
+  own: ["photo", "caption", "buttons"],
+  text: ["caption", "buttons"],
+};
+const PM_ASK = {
+  photo: ["🖼 <b>Rasmni yuboring</b> (fon uchun, siqilgan rasm sifatida).", false],
+  title: ["✏️ <b>Sarlavhani yozing.</b>\nIkkinchi qatorga yozganingiz rangli bo'lib ajralib turadi. Masalan:\n<code>E'lonlar endi\nyanada qulay</code>", false],
+  subtitle: ["💬 <b>Qisqa izoh</b> (sarlavha ostidagi 1–2 jumla).", true],
+  items: ["📋 <b>Punktlar</b> — har qatorga bittadan (6 tagacha):\n<code>🔥 Sarlavha — qisqa izoh</code>\nBoshidagi emoji rasmda chiziqli belgiga aylanadi.", true],
+  body: ["📝 <b>Asosiy matn</b> (rasmda chiqadi, 2–4 jumla).", false],
+  caption: ["🧾 <b>Post matni</b> (rasm ostida chiqadi). Qalin, kursiv, havolalar saqlanadi.\nRasmli postda 1024 belgigacha.", true],
+};
+const pmCancelKb = (skip) => { const k = new InlineKeyboard(); if (skip) k.text("⏭ O'tkazib yuborish", "pm_skip"); return k.text("❌ Bekor", "pm_cancel"); };
+async function pmAsk(ctx) {
+  const step = pmDraft.step;
+  if (step === "buttons") return pmButtonsView(ctx);
+  const [q, skip] = PM_ASK[step];
+  await ctx.reply(q, { parse_mode: "HTML", reply_markup: pmCancelKb(skip || (step === "caption" && pmDraft.spec.tpl !== "text")) });
+}
+function pmNext() { const st = PM_STEPS[pmDraft.spec.tpl]; pmDraft.step = st[st.indexOf(pmDraft.step) + 1] || "buttons"; }
+async function pmButtonsView(ctx, edit = false) {
+  const sp = pmDraft.spec, pre = new Set(sp.presets || []);
+  const kb = new InlineKeyboard();
+  [["sell", "🚗 E'lon berish"], ["app", "📱 Ilova"], ["channel", "📢 Obuna"], ["deal", "🔥 Arzonlar"]].forEach(([k, t], i) => { kb.text(`${pre.has(k) ? "✅" : "▫️"} ${t}`, `pm_pre:${k}`); if (i % 2) kb.row(); });
+  kb.text("➕ O'z tugmam", "pm_btn").text(`📌 Qadash: ${pmDraft.pin ? "Ha" : "Yo'q"}`, "pm_pin").row().text("👁 Ko'rish", "pm_preview").text("❌ Bekor", "pm_cancel");
+  const own = (sp.buttons || []).map((b) => `• ${escapeHtml(b.text)} → ${escapeHtml(b.url)}`).join("\n");
+  const text = `🔘 <b>Post tugmalari</b> — keraklisini belgilang.${own ? `\n\n${own}` : ""}`;
+  if (edit) return ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb }).catch(() => {});
+  return ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+}
+async function pmPreview(ctx) {
+  const rec = { spec: pmDraft.spec, caption: pmDraft.caption || "", photoId: pmDraft.photoId, pin: !!pmDraft.pin };
+  const err = pmCheck(rec);
+  if (err) return ctx.reply("❗️ " + err);
+  try {
+    const img = await pmImage(rec);
+    if (img) await ctx.replyWithPhoto(new InputFile(img, "post.jpg"), { caption: rec.caption || undefined, parse_mode: "HTML", reply_markup: pmKeyboard(rec.spec) });
+    else await ctx.reply(rec.caption, { parse_mode: "HTML", reply_markup: pmKeyboard(rec.spec), link_preview_options: { is_disabled: true } });
+  } catch (e) { return ctx.reply("❌ Ko'rinishni tayyorlab bo'lmadi: " + escapeHtml(e.description || e.message), { parse_mode: "HTML" }); }
+  await ctx.reply(`👆 <b>Kanalda shunday chiqadi.</b>${rec.pin ? " Kanal tepasiga qadaladi." : ""}`, { parse_mode: "HTML",
+    reply_markup: new InlineKeyboard().text("📤 Hozir yuborish", "pm_send").text("⏰ Vaqtini belgilash", "pm_when").row()
+      .text("🎨 Rangni almashtirish", "pm_recolor").text("🔘 Tugmalar", "pm_btns").row().text("❌ Bekor qilish", "pm_cancel") });
+}
+const pmAdmin = (ctx) => ctx.from && ctx.from.id === ADMIN_ID;
+bot.callbackQuery("pm_new", async (ctx) => {
+  if (!pmAdmin(ctx)) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  pmDraft = { spec: { tpl: null, color: "blue", presets: ["sell", "app"], buttons: [] }, caption: "", photoId: null, pin: false, step: "tpl" };
+  const kb = new InlineKeyboard();
+  Object.entries(PM.TEMPLATES).forEach(([k, t], i) => { kb.text(t, `pm_tpl:${k}`); if (i % 2) kb.row(); });
+  kb.row().text("🗓 Rejadagi postlar", "pm_list").text("❌ Bekor", "pm_cancel");
+  await ctx.reply("🎨 <b>KANALGA POST YARATISH</b>\n\nShablonni tanlang:\n• <b>Yangilik</b> — sarlavha va punktlar (imkoniyatlar, yangiliklar)\n• <b>Aksiya</b> — o'z rasmingiz fonida katta sarlavha\n• <b>E'lon</b> — muhim ogohlantirish, qoidalar\n• <b>O'z rasmim</b> — rasmingiz o'zgarishsiz, logotip bilan\n• <b>Faqat matn</b> — rasmsiz post", { parse_mode: "HTML", reply_markup: kb });
+});
+bot.command("post", async (ctx) => { if (!pmAdmin(ctx)) return; await ctx.reply("🎨", { reply_markup: new InlineKeyboard().text("🎨 Kanalga post yaratish", "pm_new").text("🗓 Rejadagilar", "pm_list") }); });
+bot.callbackQuery(/^pm_tpl:(\w+)$/, async (ctx) => {
+  if (!pmAdmin(ctx) || !pmDraft || !PM.TEMPLATES[ctx.match[1]]) return ctx.answerCallbackQuery({ text: "Qaytadan boshlang: 🎨 Kanalga post yaratish" }).catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  pmDraft.spec.tpl = ctx.match[1];
+  if (["own", "text"].includes(pmDraft.spec.tpl)) { pmDraft.step = PM_STEPS[pmDraft.spec.tpl][0]; return pmAsk(ctx); }
+  pmDraft.step = "color";
+  const kb = new InlineKeyboard();
+  Object.entries(PM.THEMES).forEach(([k, t]) => kb.text({ blue: "🔵", green: "🟢", orange: "🟠", dark: "⚫️" }[k] + " " + t.name, `pm_col:${k}`));
+  await ctx.reply("🎨 <b>Rangni tanlang:</b>", { parse_mode: "HTML", reply_markup: kb.row().text("❌ Bekor", "pm_cancel") });
+});
+bot.callbackQuery(/^pm_col:(\w+)$/, async (ctx) => {
+  if (!pmAdmin(ctx) || !pmDraft || !PM.THEMES[ctx.match[1]]) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  pmDraft.spec.color = ctx.match[1];
+  if (pmDraft.step === "recolor") { pmDraft.step = "buttons"; return pmPreview(ctx); }
+  pmDraft.step = PM_STEPS[pmDraft.spec.tpl][0];
+  return pmAsk(ctx);
+});
+bot.callbackQuery("pm_recolor", async (ctx) => {
+  if (!pmAdmin(ctx) || !pmDraft) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  if (["own", "text"].includes(pmDraft.spec.tpl)) return ctx.reply("Bu shablonda rang yo'q.");
+  pmDraft.step = "recolor";
+  const kb = new InlineKeyboard();
+  Object.entries(PM.THEMES).forEach(([k, t]) => kb.text({ blue: "🔵", green: "🟢", orange: "🟠", dark: "⚫️" }[k] + " " + t.name, `pm_col:${k}`));
+  await ctx.reply("🎨 Yangi rang:", { reply_markup: kb });
+});
+bot.callbackQuery("pm_skip", async (ctx) => {
+  if (!pmAdmin(ctx) || !pmDraft) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  pmNext(); return pmAsk(ctx);
+});
+bot.callbackQuery("pm_cancel", async (ctx) => {
+  if (!pmAdmin(ctx)) return ctx.answerCallbackQuery().catch(() => {});
+  pmDraft = null;
+  await ctx.answerCallbackQuery({ text: "Bekor qilindi" }).catch(() => {});
+  await ctx.reply("❌ Post yaratish bekor qilindi.").catch(() => {});
+});
+bot.callbackQuery(/^pm_pre:(\w+)$/, async (ctx) => {
+  if (!pmAdmin(ctx) || !pmDraft) return ctx.answerCallbackQuery().catch(() => {});
+  const p = new Set(pmDraft.spec.presets || []); p.has(ctx.match[1]) ? p.delete(ctx.match[1]) : p.add(ctx.match[1]);
+  pmDraft.spec.presets = [...p];
+  await ctx.answerCallbackQuery().catch(() => {});
+  return pmButtonsView(ctx, true);
+});
+bot.callbackQuery("pm_pin", async (ctx) => { if (!pmAdmin(ctx) || !pmDraft) return ctx.answerCallbackQuery().catch(() => {}); pmDraft.pin = !pmDraft.pin; await ctx.answerCallbackQuery().catch(() => {}); return pmButtonsView(ctx, true); });
+bot.callbackQuery("pm_btns", async (ctx) => { if (!pmAdmin(ctx) || !pmDraft) return ctx.answerCallbackQuery().catch(() => {}); pmDraft.step = "buttons"; await ctx.answerCallbackQuery().catch(() => {}); return pmButtonsView(ctx); });
+bot.callbackQuery("pm_btn", async (ctx) => {
+  if (!pmAdmin(ctx) || !pmDraft) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  pmDraft.step = "btn";
+  await ctx.reply("➕ Tugmani shunday yozing (har qatorga bittadan, 4 tagacha):\n<code>Avtosalonimiz | https://t.me/misol</code>", { parse_mode: "HTML", reply_markup: pmCancelKb(false) });
+});
+bot.callbackQuery("pm_preview", async (ctx) => { if (!pmAdmin(ctx) || !pmDraft) return ctx.answerCallbackQuery().catch(() => {}); await ctx.answerCallbackQuery({ text: "⏳ Tayyorlanmoqda..." }).catch(() => {}); return pmPreview(ctx); });
+bot.callbackQuery("pm_send", async (ctx) => {
+  if (!pmAdmin(ctx) || !pmDraft) return ctx.answerCallbackQuery({ text: "Qoralama topilmadi" }).catch(() => {});
+  await ctx.answerCallbackQuery({ text: "⏳ Kanalga yuborilmoqda..." }).catch(() => {});
+  const rec = { spec: pmDraft.spec, caption: pmDraft.caption || "", photoId: pmDraft.photoId, pin: !!pmDraft.pin };
+  try {
+    const out = await pmPublish(rec);
+    if (!out.ok) return ctx.reply("❗️ " + out.error);
+    pmDraft = null;
+    await ctx.reply("✅ <b>Post kanalga chiqdi!</b>", { parse_mode: "HTML", reply_markup: new InlineKeyboard().url("📢 Ko'rish", `https://t.me/${CHANNEL_USER}/${out.msgId}`).text("🎨 Yana post", "pm_new") });
+    logUserAction(ctx.from, "🎨 Kanalga post yaratdi");
+  } catch (e) { await ctx.reply("❌ Yuborib bo'lmadi: " + escapeHtml(e.description || e.message), { parse_mode: "HTML" }); }
+});
+bot.callbackQuery("pm_when", async (ctx) => {
+  if (!pmAdmin(ctx) || !pmDraft) return ctx.answerCallbackQuery().catch(() => {});
+  await ctx.answerCallbackQuery().catch(() => {});
+  pmDraft.step = "when";
+  await ctx.reply("⏰ <b>Qachon chiqsin?</b> (Toshkent vaqti)\n<code>18:30</code> — bugun (o'tib ketgan bo'lsa ertaga)\n<code>25.11 09:00</code> — shu sanada", { parse_mode: "HTML", reply_markup: pmCancelKb(false) });
+});
+async function pmListView(ctx) {
+  const list = await pmList();
+  if (!list.length) return ctx.reply("🗓 Rejalashtirilgan post yo'q.");
+  const kb = new InlineKeyboard();
+  list.forEach((p) => kb.text(`❌ ${fmtWhen(p.runAt)} · ${p.title.slice(0, 24)}`, `pm_del:${p.id}`).row());
+  await ctx.reply(`🗓 <b>Rejadagi postlar (${list.length})</b>\nBekor qilish uchun bosing:`, { parse_mode: "HTML", reply_markup: kb });
+}
+bot.callbackQuery("pm_list", async (ctx) => { if (!pmAdmin(ctx)) return ctx.answerCallbackQuery().catch(() => {}); await ctx.answerCallbackQuery().catch(() => {}); return pmListView(ctx); });
+bot.callbackQuery(/^pm_del:(\d+)$/, async (ctx) => {
+  if (!pmAdmin(ctx)) return ctx.answerCallbackQuery().catch(() => {});
+  const ok = await pmCancel(Number(ctx.match[1]));
+  await ctx.answerCallbackQuery({ text: ok ? "Bekor qilindi" : "Topilmadi" }).catch(() => {});
+  return pmListView(ctx);
+});
+// Admin yozgan matn / rasm — qoralama qaysi bosqichda bo'lsa, o'shanga
+async function pmInputMw(ctx, next) {
+  if (!pmDraft || !pmAdmin(ctx) || !ctx.message || !["title", "subtitle", "items", "body", "caption", "photo", "btn", "when"].includes(pmDraft.step)) return next();
+  const m = ctx.message, text = m.text || m.caption || "";
+  if (/^\/cancel/i.test(text)) { pmDraft = null; return ctx.reply("❌ Post yaratish bekor qilindi."); }
+  if (m.text && /^\//.test(m.text)) return next();
+  const st = pmDraft.step, sp = pmDraft.spec;
+  if (st === "photo") {
+    if (!m.photo) return ctx.reply("🖼 Rasm yuboring (fayl emas, oddiy rasm).");
+    pmDraft.photoId = m.photo[m.photo.length - 1].file_id;
+  } else if (!m.text) return ctx.reply("✍️ Matn yozing.");
+  else if (st === "title") sp.title = m.text.split("\n").slice(0, 2).join("\n").slice(0, 90);
+  else if (st === "subtitle") sp.subtitle = m.text.slice(0, 160);
+  else if (st === "body") sp.body = m.text.slice(0, 600);
+  else if (st === "items") { sp.items = PM.parseItems(m.text); if (!sp.items.length) return ctx.reply("Hech bo'lmasa bitta punkt yozing yoki «⏭ O'tkazib yuborish» ni bosing."); }
+  else if (st === "caption") {
+    const html = PM.entitiesToHtml(m.text, m.entities);
+    const lim = sp.tpl === "text" ? 4000 : 1024, len = captionVisibleLength(html);
+    if (len > lim) return ctx.reply(`❗️ Matn ${len} belgi — ${lim} tagacha bo'lsin. Qisqartirib qayta yuboring.`);
+    pmDraft.caption = html;
+  } else if (st === "btn") {
+    const b = PM.parseButtonLines(m.text);
+    if (!b.length) return ctx.reply("❗️ Masalan: <code>Avtosalonimiz | https://t.me/misol</code>", { parse_mode: "HTML" });
+    sp.buttons = (sp.buttons || []).concat(b).slice(0, 4);
+    pmDraft.step = "buttons"; return pmButtonsView(ctx);
+  } else if (st === "when") {
+    const at = pmParseWhen(m.text);
+    if (!at) return ctx.reply("❗️ Masalan: <code>18:30</code> yoki <code>25.11 09:00</code>", { parse_mode: "HTML" });
+    const out = await pmSchedule({ spec: sp, caption: pmDraft.caption || "", photoId: pmDraft.photoId, pin: !!pmDraft.pin }, at);
+    if (!out.ok) return ctx.reply("❗️ " + out.error);
+    pmDraft = null;
+    return ctx.reply(`⏰ <b>Rejalashtirildi:</b> ${fmtWhen(at)} da kanalga chiqadi.`, { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("🗓 Rejadagi postlar", "pm_list").text("🎨 Yana post", "pm_new") });
+  }
+  pmNext();
+  return pmAsk(ctx);
+}
+
 // 🎨 Ko'rinishni tanlash, namuna va faol e'lonlarga qo'llash
 let postRestyleJob = null, postRestyleStop = false;
-bot.callbackQuery(/^ps_set:([012])$/, async (ctx) => {
+bot.callbackQuery(/^ps_set:([0-4])$/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
   try { await setBotSetting("post:style", ctx.match[1]); }
   catch (e) { return ctx.answerCallbackQuery({ text: "Saqlab bo'lmadi, qayta urinib ko'ring.", show_alert: true }).catch(() => {}); }
@@ -4140,7 +4449,7 @@ bot.callbackQuery("admin_pending", async (ctx) => {
   if (pendingAds.length > 0) {
       const ad = pendingAds[0];
       const photoUrls = await Promise.all(ad.photoId.split(",").map(async (id) => `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${(await bot.api.getFile(id)).file_path}`));
-      const collagePath = await createCollage(photoUrls);
+      const collagePath = await previewCollage(photoUrls, ad);
 
       let caption = `🆔 <b>ID: ${ad.id}</b>\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n`;
       if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 Tarixi: ${ad.history}\n`;
@@ -4163,7 +4472,7 @@ bot.callbackQuery("admin_pending", async (ctx) => {
   if (pendingEdits.length > 0) {
       const editData = pendingEdits[0];
       const photoUrls = await Promise.all(editData.photoId.split(",").map(async (id) => `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${(await bot.api.getFile(id)).file_path}`));
-      const collagePath = await createCollage(photoUrls);
+      const collagePath = await previewCollage(photoUrls, editData, { id: editData.oldAdId });
 
       let caption = `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 Eski ID: ${editData.oldAdId}\n🚗 Moshina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${editData.probeg} km\n💎 Kraskasi: ${editData.paint}\n🎨 Rangi: ${editData.color}\n✅ Karobka: ${editData.transmission}\n⛽ Yoqilg'i: ${editData.fuel}\n`;
       if (editData.history && editData.history !== "Ko'rsatilmagan") caption += `🛠 Tarixi: ${editData.history}\n`;
@@ -5025,8 +5334,11 @@ else if (step === "PREVIEW") {
         const fullCarName = catalog.carName(ad.brand, ad.model); // "Boshqa" so'zi qo'shilmaydi
         const priceBadge = await getPreviewPriceBadge(ad);
         const photoUrls = await getPhotoUrls(ad.photos);
-        const collagePath = await createCollage(photoUrls);
-        const caption = buildAdCaption(ad, priceBadge);
+        const collagePath = await previewCollage(photoUrls, ad, { carDetails: fullCarName });
+        // Matn ham kanaldagi shablonda (admin qaysi ko'rinishni tanlagan bo'lsa)
+        const caption = isAutoOn("adm_preview") && postStyle() !== "0"
+          ? await buildChannelCaption(previewAdLike(ad, { id: 0, userId: ctx.from.id, carDetails: fullCarName }))
+          : buildAdCaption(ad, priceBadge);
 
         const kb = new InlineKeyboard()
           .text("✅ ADMINGA YUBORISH", "submit_ad").row()
@@ -6983,7 +7295,7 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
     })
   );
   const merged = { ...oldAd, ...editData, id: oldAd.id, userId: oldAd.userId, status: "active" };
-  const editBadge = postStyle() === "1" ? await getPriceBadgeForImage(merged.carDetails, merged.price, merged.year, merged).catch(() => null) : null;
+  const editBadge = isCardStyle(postStyle()) ? await getPriceBadgeForImage(merged.carDetails, merged.price, merged.year, merged).catch(() => null) : null;
   const collagePath = await createCollage(photoUrls, editBadge, lookFor(merged));
 
   let newCaption = vipHeader(oldAd) +
@@ -8131,7 +8443,7 @@ setInterval(checkVipExpiry, 10 * 60 * 1000).unref();
 setTimeout(checkVipExpiry, 60 * 1000).unref();
 
 setInterval(() => runScheduledPosts(new Date()), 60 * 1000 * 30);
-module.exports = { postStyle, buildChannelCaption, renderAdImage, updateChannelPost, refreshChannelCaption, AD_CHANNEL_MARKUP_FN: (...a) => AD_CHANNEL_MARKUP(...a), offers, offerCounterWait, buildWeeklyReport, sendWeeklyAnalytics, CHART_POSTS, publishChartPost, charts, nudgeLowViewAds, loadBotSettings, alertMatchesAd, notifyAlertsForAd, flushNotifyQueue, deliverNotice, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
+module.exports = { pmPublish, pmTick, pmParseWhen, postStyle, buildChannelCaption, renderAdImage, updateChannelPost, refreshChannelCaption, AD_CHANNEL_MARKUP_FN: (...a) => AD_CHANNEL_MARKUP(...a), offers, offerCounterWait, buildWeeklyReport, sendWeeklyAnalytics, CHART_POSTS, publishChartPost, charts, nudgeLowViewAds, loadBotSettings, alertMatchesAd, notifyAlertsForAd, flushNotifyQueue, deliverNotice, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
 
 // ==============================================================
 // 🧯 JAVOBSIZ TUGMALAR (eng oxirida turishi shart — boshqa handlerlardan keyin)
@@ -8325,6 +8637,7 @@ dbReady.finally(async () => {
       // 🖥 Admin paneli (ilovada)
       views: { record: recordAdHit, today: todayViews, minShow: viewsMinShow },
       offers,
+      postMaker: { PM, image: pmImage, check: pmCheck, publish: pmPublish, schedule: pmSchedule, list: pmList, cancel: pmCancel, parseWhen: pmParseWhen },
       maintenance: { info: maintenanceInfo, set: setMaintenance, remember: maintRemember, text: MAINT_PLAIN },
       admin: { runAdminAction, runAdminText, runAdminCommand, cancelAdminInput, rejectAdWithReason, startBroadcast, broadcastStatus, adminAwaiting, adminBlobs, queueDone, isVipActive, fmtTash },
     });
