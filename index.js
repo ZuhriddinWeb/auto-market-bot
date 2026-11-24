@@ -2925,7 +2925,7 @@ const fmtWhen = (d) => fmtTash(d);
 // ---------- Bot ichidagi bosqichlar ----------
 let pmDraft = null; // { spec, caption, photoId, pin, step }
 const PM_STEPS = {
-  news: ["title", "subtitle", "items", "caption", "buttons"],
+  news: ["title", "subtitle", "items", "photo", "caption", "buttons"],
   promo: ["photo", "title", "subtitle", "caption", "buttons"],
   notice: ["title", "body", "caption", "buttons"],
   own: ["photo", "caption", "buttons"],
@@ -2943,7 +2943,8 @@ const pmCancelKb = (skip) => { const k = new InlineKeyboard(); if (skip) k.text(
 async function pmAsk(ctx) {
   const step = pmDraft.step;
   if (step === "buttons") return pmButtonsView(ctx);
-  const [q, skip] = PM_ASK[step];
+  let [q, skip] = PM_ASK[step];
+  if (step === "photo" && pmDraft.spec.tpl === "news") { q = "🖼 <b>Rasm (ixtiyoriy)</b> — chap tomonda qiyshiq kartochka bo'lib chiqadi, punktlar o'ngga o'tadi. Masalan, e'lon rasmi yoki ilova skrinshoti."; skip = true; }
   await ctx.reply(q, { parse_mode: "HTML", reply_markup: pmCancelKb(skip || (step === "caption" && pmDraft.spec.tpl !== "text")) });
 }
 function pmNext() { const st = PM_STEPS[pmDraft.spec.tpl]; pmDraft.step = st[st.indexOf(pmDraft.step) + 1] || "buttons"; }

@@ -3143,12 +3143,12 @@
         rich ? fld("Rang", chipGroup(null, function () { return COLORS; }, function (x) { return x.id === S.color; }, function (x) { S.color = x.id; schedule(true); }, { ariaLabel: "Rang" })) : null,
       ]));
       var g = [];
-      if (t === "promo" || t === "own") {
+      if (t === "promo" || t === "own" || t === "news") {
         var pb = h("div", { class: "a-photo-pick" });
         if (photo && photo.url) pb.appendChild(h("div", { class: "a-ph-sel" }, [h("img", { src: photo.url, alt: "" }), photo.status === "loading" ? h("span", { text: "Yuklanmoqda..." }) : null,
           h("button", { type: "button", class: "lb-x", "aria-label": "Olib tashlash", text: "✕", onclick: function () { photo = null; draw(); schedule(); } })]));
         else pb.appendChild(h("label", { class: "add-tile a-add" }, [photoInput, icon("camera"), "Rasm tanlash"]));
-        g.push(fld("Fon rasmi", pb));
+        g.push(fld(t === "news" ? "Rasm (ixtiyoriy)" : "Fon rasmi", pb, t === "news" ? "Chap tomonda qiyshiq kartochka bo'lib chiqadi, punktlar o'ngga o'tadi" : null));
       }
       if (rich) {
         g.push(fld("Yorliq (o'ng tepada)", textInput(S, "tag", { maxlength: 18, placeholder: t === "promo" ? "Aksiya" : t === "notice" ? "E'lon" : "Yangilik" }, schedule)));

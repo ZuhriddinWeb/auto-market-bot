@@ -116,7 +116,9 @@ function titleBlock(spec, th, x, y, maxW, size = 76) {
   return { svg: s, bottom: yy - sz * 1.08 + sz * 0.3 };
 }
 
-function newsSvg(spec, th) {
+// Yangilikda rasm bo'lsa: chap tomonda qiyshiq «kartochka», punktlar o'ng ustunda
+const NEWS_CARD = { x: 72, w: 430 };
+function newsSvg(spec, th, hasPhoto = false) {
   let s = bg(th) + logo(72, 64) + tagPill(W - 72, 64, spec.tag || "Yangilik", th);
   const tb = titleBlock(spec, th, 72, 222, W - 144);
   s += tb.svg;
@@ -124,14 +126,24 @@ function newsSvg(spec, th) {
   if (spec.subtitle) for (const l of wrap(spec.subtitle, W - 144, 30, 500, 2)) { y += 40; s += T(72, y, l, { size: 30, w: 500, fill: th.soft }); }
   const items = (spec.items || []).slice(0, 6);
   const footTop = spec.footer && spec.footer.off ? H - 60 : H - 214;
+  if (hasPhoto) spec._cardTop = y + 56;
+  const ix = hasPhoto ? NEWS_CARD.x + NEWS_CARD.w + 36 : 72, iw = hasPhoto ? W - 72 - ix : W - 144;
   if (items.length) {
     y += 46;
     const gap = 16, avail = footTop - y - 10, ih = Math.min(items.length <= 3 ? 150 : 118, Math.floor((avail - gap * (items.length - 1)) / items.length));
     items.forEach((it, i) => {
       const yy = y + i * (ih + gap), small = ih < 100, big = ih >= 140;
-      s += `<rect x="72" y="${yy}" width="${W - 144}" height="${ih}" rx="24" fill="#fff" fill-opacity="0.13"/>`;
-      s += `<circle cx="${72 + 50}" cy="${yy + ih / 2}" r="${small ? 26 : 30}" fill="#fff" fill-opacity="0.18"/>` + icon(it.icon, 72 + 50 - (small ? 15 : 17), yy + ih / 2 - (small ? 15 : 17), small ? 30 : 34, th.accent, 2.2);
-      const tx = 72 + 104, tw = W - 144 - 124;
+      s += `<rect x="${ix}" y="${yy}" width="${iw}" height="${ih}" rx="24" fill="#fff" fill-opacity="0.13"/>`;
+      const cxI = ix + (hasPhoto ? 40 : 50), rI = hasPhoto ? 24 : small ? 26 : 30, sI = hasPhoto ? 28 : small ? 30 : 34;
+      s += `<circle cx="${cxI}" cy="${yy + ih / 2}" r="${rI}" fill="#fff" fill-opacity="0.18"/>` + icon(it.icon, cxI - sI / 2, yy + ih / 2 - sI / 2, sI, th.accent, 2.2);
+      const tx = ix + (hasPhoto ? 80 : 104), tw = iw - (hasPhoto ? 96 : 124);
+      if (hasPhoto) {
+        const ts = it.text ? 26 : 28;
+        s += it.text
+          ? T(tx, yy + ih / 2 - 4, wrap(it.title, tw, ts, 700, 1)[0], { size: ts, w: 700 }) + T(tx, yy + ih / 2 + 26, wrap(it.text, tw, 20, 400, 1)[0], { size: 20, fill: th.soft })
+          : T(tx, yy + ih / 2 + 10, wrap(it.title, tw, ts, 700, 1)[0], { size: ts, w: 700 });
+        return;
+      }
       if (it.text && big) {
         s += T(tx, yy + ih / 2 - 8, wrap(it.title, tw, 36, 700, 1)[0], { size: 36, w: 700 }) + T(tx, yy + ih / 2 + 34, wrap(it.text, tw, 26, 400, 1)[0], { size: 26, fill: th.soft });
       } else if (it.text && !small) {
@@ -182,6 +194,7 @@ async function renderPost(sharp, spec, photo = null) {
   if (tpl === "text") return null;
   const comps = [];
   let base;
+  const newsPhoto = tpl === "news" && photo;
   if ((tpl === "promo" || tpl === "own") && photo) {
     base = sharp(photo).resize(W, H, { fit: "cover", position: "attention" });
   } else base = sharp({ create: { width: W, height: H, channels: 3, background: th.g[1] } });
@@ -189,8 +202,22 @@ async function renderPost(sharp, spec, photo = null) {
   if (tpl === "own") svg = `<rect x="${W - 330}" y="${H - 110}" width="292" height="76" rx="22" fill="#000" fill-opacity="0.45"/>${logo(W - 316, H - 100, 1)}`;
   else if (tpl === "promo") svg = promoSvg(spec, th, !!photo);
   else if (tpl === "notice") svg = noticeSvg(spec, th);
-  else svg = newsSvg(spec, th);
+  else svg = newsSvg(spec, th, !!newsPhoto);
   comps.push({ input: Buffer.from(`<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">${svg}</svg>`), left: 0, top: 0 });
+  if (newsPhoto) {
+    // Rasm: yumaloq burchakli, biroz qiyshiq, soyali kartochka (asl nisbati saqlanadi)
+    const cwid = NEWS_CARD.w, meta = await sharp(photo).metadata();
+    const ch = Math.max(240, Math.min(560, Math.round(cwid * ((meta.height || 3) / (meta.width || 4)))));
+    const mask = Buffer.from(`<svg width="${cwid}" height="${ch}"><rect width="${cwid}" height="${ch}" rx="26" fill="#fff"/></svg>`);
+    const card = await sharp(photo).resize(cwid, ch, { fit: "cover" }).composite([{ input: mask, blend: "dest-in" }]).png().toBuffer();
+    const rot = await sharp(card).rotate(-3, { background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer();
+    const rm = await sharp(rot).metadata();
+    const shadow = Buffer.from(`<svg width="${rm.width + 80}" height="${rm.height + 80}"><rect x="40" y="56" width="${rm.width}" height="${rm.height}" rx="30" fill="#000" opacity="0.35"/></svg>`);
+    const sh = await sharp(shadow).blur(18).png().toBuffer();
+    const top = Math.round(Math.min(spec._cardTop || 420, H - 230 - rm.height));
+    comps.push({ input: sh, left: NEWS_CARD.x - 40 - 8, top: top - 40 });
+    comps.push({ input: rot, left: NEWS_CARD.x - 8, top });
+  }
   const img = await base.png().toBuffer();
   return sharp(img).composite(comps).jpeg({ quality: 90 }).toBuffer();
 }
