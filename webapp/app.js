@@ -951,7 +951,7 @@
       }
       app.appendChild(h("p", { class: "sec-title", text: "Batafsil" }));
       app.appendChild(h("div", { class: "group" }, [h("div", { class: "field" }, [specs])]));
-      [["Nasiya (bo'lib to'lash)", ad.nasiya], ["Maxsus taklif", ad.dealerOffer], ["Barter", ad.barter], ["Moshina tarixi", ad.history]].forEach(function (b) {
+      [["Nasiya (bo'lib to'lash)", ad.nasiya], ["Maxsus taklif", ad.dealerOffer], ["Barter", ad.barter], ["Mashina tarixi", ad.history]].forEach(function (b) {
         if (!b[1]) return;
         app.appendChild(h("p", { class: "sec-title", text: b[0] }));
         app.appendChild(h("div", { class: "group" }, [h("div", { class: "field text-block", text: b[1] })]));
@@ -1226,7 +1226,7 @@
         4: !e.photos && !e.video && photos.length > 0 && !uploading(),
       };
       if (refs.progBar) {
-        var NAMES = { 1: "Moshina", 2: "Holati", 3: "Narx va aloqa", 4: "Rasmlar" };
+        var NAMES = { 1: "Mashina", 2: "Holati", 3: "Narx va aloqa", 4: "Rasmlar" };
         var cntDone = [1, 2, 3, 4].filter(function (k) { return done[k]; }).length;
         var next = [1, 2, 3, 4].filter(function (k) { return !done[k]; })[0];
         Array.prototype.forEach.call(refs.progBar.children, function (bar, i) { bar.className = done[i + 1] ? "d" : (i + 1 === next ? "cur" : ""); });
@@ -1251,7 +1251,7 @@
     }
     function updateSign() {
       var name = carName();
-      refs.signCar.textContent = (name || "Moshinangiz") + (S.year ? ", " + S.year : "");
+      refs.signCar.textContent = (name || "Mashinangiz") + (S.year ? ", " + S.year : "");
       refs.signCar.classList.toggle("empty-v", !name);
       var p = fmtNum(S.price);
       refs.signPrice.textContent = p ? p + " $" : "Narxi ... $";
@@ -1280,7 +1280,7 @@
     refs.progBar = h("div", { class: "pbar" }, [h("i"), h("i"), h("i"), h("i")]);
     app.appendChild(h("div", { class: "form-progress", "aria-live": "polite" }, [h("div", { class: "pl" }, [refs.progT, refs.progN]), refs.progBar]));
 
-    // --- Moshina ---
+    // --- Mashina ---
     var modelField = h("div", { class: "slot" });
     function renderModelField() {
       modelField.innerHTML = "";
@@ -1335,7 +1335,7 @@
     ]), h("p", { class: "error" })]);
     refs.f_year = yearRow;
 
-    app.appendChild(secTitle(1, "Moshina"));
+    app.appendChild(secTitle(1, "Mashina"));
     app.appendChild(h("div", { class: "group" }, [
       field(refs, "brand", "Marka", chips("brand", function () { return catalog.brands.concat([{ id: 0, name: "Boshqa marka", dashed: true }]); },
         function (b) { return S.brandId === b.id; },
@@ -1388,7 +1388,7 @@
     app.appendChild(secTitle(4, "Rasm va video"));
     app.appendChild(h("div", { class: "group" }, [
       field(refs, "photos", "Rasmlar, 1 tadan 6 tagacha", h("div", null, [refs.photoGrid, refs.photoInput]), "Birinchi rasm asosiy bo'ladi. Old, orqa, yon, salon va spidometrni suratga oling."),
-      field(refs, "video", "Video (ixtiyoriy)", h("div", null, [refs.videoBox, refs.videoInput]), "30 soniyalik obzor video bo'lsa, moshina tezroq sotiladi. 49 MB gacha."),
+      field(refs, "video", "Video (ixtiyoriy)", h("div", null, [refs.videoBox, refs.videoInput]), "30 soniyalik obzor video bo'lsa, mashina tezroq sotiladi. 49 MB gacha."),
     ]));
 
     // --- Qo'shimcha ---
@@ -1398,7 +1398,7 @@
       if (S.nasiya) nasiyaReveal.appendChild(ta("nasiyaTerms", { "aria-label": "Nasiya shartlari", "aria-labelledby": null, placeholder: "Masalan: 50% oldindan, qolgani 6 oyga. Bo'sh qoldirsangiz «shartlari kelishiladi» deb yoziladi.", maxlength: "200", rows: "2" }));
     }
     var extras = [
-      field(refs, "history", "Moshina tarixi (ixtiyoriy)", ta("history", { placeholder: "Masalan: 2 yil oldin metan o'rnatilgan, moyi har 7500 km da almashtirilgan.", maxlength: "400" })),
+      field(refs, "history", "Mashina tarixi (ixtiyoriy)", ta("history", { placeholder: "Masalan: 2 yil oldin metan o'rnatilgan, moyi har 7500 km da almashtirilgan.", maxlength: "400" })),
       field(refs, "barter", "Barter (ixtiyoriy)", inp("barter", { placeholder: "Masalan: Cobalt ga almashaman", maxlength: "150" }), "Bo'sh qoldirsangiz, faqat naqd deb yoziladi."),
       h("div", { class: "field" }, [switchRow(S, "nasiya", "Nasiyaga beraman", "Bo'lib to'lash xaridorlarni ko'paytiradi", function () { renderNasiya(); touched(); }), nasiyaReveal]),
     ];
@@ -1695,7 +1695,7 @@
         body.innerHTML = "";
         if (!r.ok) return body.appendChild(emptyState("Yuklab bo'lmadi", r.error || ""));
         if (r.freeUps > 0) body.appendChild(h("div", { class: "notice" }, [h("span", { text: "🚀" }), h("div", null, [h("b", { text: r.freeUps + " ta bepul UP bonusingiz bor" }), h("span", { class: "s", text: "Faol e'lonni oching va «Bepul UP» ni bosing — e'lon kanalda yangi qatorga chiqadi." })])]));
-        if (!r.items.length) return body.appendChild(emptyState("Hali e'loningiz yo'q", "Moshinangizni bepul joylang — minglab xaridor kutmoqda.", "E'lon berish", function () { go("/new"); }, "car"));
+        if (!r.items.length) return body.appendChild(emptyState("Hali e'loningiz yo'q", "Mashinangizni bepul joylang — minglab xaridor kutmoqda.", "E'lon berish", function () { go("/new"); }, "car"));
         body.appendChild(h("button", { type: "button", class: "btn new-ad", onclick: function () { go("/new"); } }, [icon("plus"), "Yangi e'lon berish"]));
         var list = h("div", { class: "list" });
         r.items.forEach(function (it) {
@@ -1898,7 +1898,7 @@
     api("/api/alerts").then(function (r) {
       body.innerHTML = "";
       if (!r.ok) return body.appendChild(emptyState("Yuklab bo'lmadi", r.error || ""));
-      body.appendChild(h("p", { class: "page-sub", text: "Shu moshinalardan biri kanalga chiqishi bilan bot sizga yozadi." }));
+      body.appendChild(h("p", { class: "page-sub", text: "Shu mashinalardan biri kanalga chiqishi bilan bot sizga yozadi." }));
       var pst = { quiet: me ? me.quiet !== false : true };
       body.appendChild(h("div", { class: "group" }, [h("div", { class: "field" }, [switchRow(pst, "quiet", "🌙 Kechasi bezovta qilmaslik", "22:00 – 08:00 xabarlar ertalab keladi", function (v) { if (me) me.quiet = v; api("/api/prefs", { json: { quiet: v } }); toast(v ? "Kechasi xabar kelmaydi" : "Xabarlar istalgan payt keladi"); })])]));
       if (r.items.length) {
@@ -1918,7 +1918,7 @@
         });
         body.appendChild(list);
       } else {
-        body.appendChild(emptyState("Obunalar yo'q", "Qidirayotgan moshinangizni qo'shing — bozorga chiqsa birinchi bo'lib bilasiz.", null, null, "bell"));
+        body.appendChild(emptyState("Obunalar yo'q", "Qidirayotgan mashinangizni qo'shing — bozorga chiqsa birinchi bo'lib bilasiz.", null, null, "bell"));
       }
       body.appendChild(h("div", { class: "actions" }, [h("button", { type: "button", class: "btn secondary", onclick: function () { addAlertSheet(function () { renderAlerts(body); }); } }, [icon("plus"), "Obuna qo'shish"])]));
     });
@@ -2012,7 +2012,7 @@
               toast("So'rov adminga yuborildi. Tasdiqlangach kanalda belgilanadi.");
             });
           }
-          openSheet("Moshina qanchaga sotildi?", [
+          openSheet("Mashina qanchaga sotildi?", [
             h("p", { class: "page-sub", text: "Real sotuv narxi boshqa sotuvchilarga bozor narxini bilishda yordam beradi. Aytish shart emas." }),
             h("div", { class: "group" }, [h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-soldp", text: "Sotilgan narx, $" }), textInput(st, "price", { inputmode: "numeric", placeholder: "Masalan: " + digits(it.price), "aria-labelledby": "lbl-soldp" })])]),
             h("div", { class: "actions" }, [
@@ -2126,7 +2126,7 @@
     app.appendChild(h("h1", { class: "page", text: "Xizmatlar" }));
     app.appendChild(h("p", { class: "group-title", text: "Hisob-kitob" }));
     app.appendChild(h("div", { class: "list" }, [
-      listItem({ icon: "tag", color: "#34c759", title: "Moshina narxini aniqlash", sub: "Bazadagi real e'lonlar asosida", onclick: function () { go("/evaluate"); } }),
+      listItem({ icon: "tag", color: "#34c759", title: "Mashina narxini aniqlash", sub: "Bazadagi real e'lonlar asosida", onclick: function () { go("/evaluate"); } }),
       listItem({ icon: "calc", color: "#5856d6", title: "Bo'lib to'lashni hisoblash", sub: "Oylik to'lov va ustama", onclick: function () { go("/credit"); } }),
     ]));
     app.appendChild(h("p", { class: "group-title", text: "Bonus va hamkorlik" }));
@@ -2143,7 +2143,7 @@
   function screenEvaluate() {
     var st = { brandId: null, modelId: null, text: "", year: "", trans: "" };
     var refs = {};
-    app.appendChild(h("h1", { class: "page", text: "Moshina narxini aniqlash" }));
+    app.appendChild(h("h1", { class: "page", text: "Mashina narxini aniqlash" }));
     app.appendChild(h("p", { class: "page-sub", text: "Shu model, yil va karobkadagi faol va sotilgan e'lonlar asosida bozor narxini hisoblaymiz." }));
     var TRANS = [{ id: "Avtomat", name: "Avtomat" }, { id: "Mexanika", name: "Mexanika" }, { id: "", name: "Farqi yo'q" }];
     var modelBox = h("div", { class: "slot" });
@@ -2175,14 +2175,14 @@
         resultBox.innerHTML = "";
         if (!r.ok) return toast(r.error || "Xatolik");
         if (!r.found) {
-          resultBox.appendChild(h("div", { class: "result" }, [h("b", { text: r.year + " yil " + r.title }), h("p", { class: "lbl", text: "Bazamizda bu moshina uchun hali yetarli ma'lumot yo'q. Narx holatiga qarab turlicha bo'lishi mumkin." })]));
+          resultBox.appendChild(h("div", { class: "result" }, [h("b", { text: r.year + " yil " + r.title }), h("p", { class: "lbl", text: "Bazamizda bu mashina uchun hali yetarli ma'lumot yo'q. Narx holatiga qarab turlicha bo'lishi mumkin." })]));
         } else {
           resultBox.appendChild(h("div", { class: "result" }, [
             h("div", { class: "lbl", text: r.year + " yil " + r.title + (r.transmission ? ", " + r.transmission.toLowerCase() : "") + " — bozor narxi" }),
             h("div", { class: "tag-price", text: "~" + fmtNum(r.median || r.minPrice) + " $" }),
             h("p", { class: "lbl", text: "Ko'pchiligi " + fmtNum(r.minPrice) + " – " + fmtNum(r.maxPrice) + " $ oralig'ida." }),
             h("p", { class: "lbl", text: (r.label || r.count + " ta e'lon") + "." + (r.confident === false ? " O'xshash e'lonlar kam — baho taxminiy." : "") + " Aniq narx kraska, probeg va umumiy holatga qarab o'zgaradi." }),
-            st.modelId ? h("button", { type: "button", class: "btn secondary", style: "margin-top:10px", text: "Shu moshinani sotish", onclick: function () {
+            st.modelId ? h("button", { type: "button", class: "btn secondary", style: "margin-top:10px", text: "Shu mashinani sotish", onclick: function () {
               var mm = modelById(st.modelId); go("/new?brandId=" + mm.brand.id + "&modelId=" + mm.id + "&year=" + st.year);
             } }) : null,
           ]));
@@ -2212,7 +2212,7 @@
     var monthsChips = chipGroup("lbl-months", function () { return ["6", "12", "18", "24", "36", "48", "60"].map(function (n) { return { name: n + " oy", v: n }; }); }, function (x) { return st.months === x.v; }, function (x) { st.months = x.v; monthsInput.value = x.v; calc(); });
     var monthsInput = textInput(st, "months", { inputmode: "numeric", maxlength: "3", "aria-label": "Oylar soni" }, function () { monthsChips.rerender(); calc(); });
     app.appendChild(h("div", { class: "group" }, [
-      h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-price", text: "Moshina narxi" }), h("div", { class: "input-suffix" }, [textInput(st, "price", { inputmode: "numeric", placeholder: "12000" }, calc), refs.priceSuffix])]),
+      h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-price", text: "Mashina narxi" }), h("div", { class: "input-suffix" }, [textInput(st, "price", { inputmode: "numeric", placeholder: "12000" }, calc), refs.priceSuffix])]),
       h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-down", text: "Boshlang'ich to'lov" }), h("div", { class: "input-suffix" }, [textInput(st, "down", { inputmode: "numeric", placeholder: "0" }, calc), refs.downSuffix])]),
       h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-months", text: "Muddat" }), monthsChips, h("div", { class: "reveal" }, [h("div", { class: "input-suffix" }, [monthsInput, h("span", { text: "oy" })])])]),
       h("div", { class: "field" }, [h("span", { class: "label", id: "lbl-rate", text: "Yillik foiz" }), h("div", { class: "input-suffix" }, [textInput(st, "rate", { inputmode: "decimal", placeholder: "0" }, calc), h("span", { text: "%" })]), h("p", { class: "help", text: "Sotuvchi foizsiz bersa 0 qoldiring. Bankdan olsangiz, bank foizini yozing." })]),
@@ -2227,7 +2227,7 @@
       var price = Number(digits(st.price)), down = Number(digits(st.down)), months = Number(digits(st.months));
       var rate = parseFloat(String(st.rate).replace(",", ".").replace(/[^\d.]/g, "")) || 0;
       if (!price) { out.appendChild(h("p", { class: "lbl", text: "Narx, boshlang'ich to'lov va muddatni kiriting — natija shu yerda chiqadi." })); return; }
-      if (down >= price) { out.appendChild(h("p", { class: "lbl", text: "Boshlang'ich to'lov moshina narxidan kam bo'lishi kerak." })); return; }
+      if (down >= price) { out.appendChild(h("p", { class: "lbl", text: "Boshlang'ich to'lov mashina narxidan kam bo'lishi kerak." })); return; }
       if (!months || months > 120) { out.appendChild(h("p", { class: "lbl", text: "Muddat 1 dan 120 oygacha bo'lishi kerak." })); return; }
       var loan = price - down, monthly, total;
       if (rate === 0) { monthly = loan / months; total = loan; }

@@ -641,7 +641,7 @@ function startWebApp(deps) {
       }
     } else {
       const text = sanitizeText(body.fullName, 60);
-      if (text.length < 2) return err("Moshina markasi va modelini yozing (masalan: Changan UNI-K).");
+      if (text.length < 2) return err("Mashina markasi va modelini yozing (masalan: Changan UNI-K).");
       ad.brand = "Boshqa";
       ad.model = text;
       ad.brand_id = null;
@@ -1021,7 +1021,7 @@ function startWebApp(deps) {
     if (m) { modelId = m.id; model = m.name; title = `${m.brandName} ${m.name}`; }
     else {
       const text = sanitizeText(body.text, 60);
-      if (!text) return sendJson(res, 400, { ok: false, error: "Moshina modelini tanlang yoki yozing." });
+      if (!text) return sendJson(res, 400, { ok: false, error: "Mashina modelini tanlang yoki yozing." });
       const hit = catalog.matchCarDetails(text);
       modelId = hit.modelId; model = text; title = text;
     }

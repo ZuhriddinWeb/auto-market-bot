@@ -901,7 +901,7 @@ async function buildChannelCaptionNew(ad, style) {
     if (mk) c += mk.kind === "cheap" ? `🔥 Bozor narxidan <b>${Math.abs(mk.diff)}% arzon</b> <i>(${mk.count} ta o'xshash e'lon)</i>\n` : mk.kind === "market" ? `👍 Bozor narxida <i>(${mk.count} ta o'xshash e'lon)</i>\n` : "";
     c += `<pre>${escapeHtml(table)}</pre>`;
     if (extra.length) c += `<blockquote expandable>${extra.join("\n")}</blockquote>`;
-    c += `📞 <code>${phone}</code>\n${tags ? tags + "\n" : ""}${idLine}\n\n⚠️ <i>Moshina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+    c += `📞 <code>${phone}</code>\n${tags ? tags + "\n" : ""}${idLine}\n\n⚠️ <i>Mashina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   } else if (style === "1") {
     c = head + (drop
       ? `<b>${car}, ${escapeHtml(ad.year)}</b>\n💰 <s>${spNum(ad.old_price)}$</s> <b>${price}$</b> 📉 −${spNum((parseInt(ad.old_price) || 0) - (parseInt(ad.price) || 0))}$\n`
@@ -909,14 +909,14 @@ async function buildChannelCaptionNew(ad, style) {
     if (mk) c += mk.kind === "cheap" ? `🔥 Bozor narxidan <b>${Math.abs(mk.diff)}% arzon</b> <i>(${mk.count} ta o'xshash e'lon)</i>\n` : mk.kind === "market" ? `👍 Bozor narxida <i>(${mk.count} ta o'xshash e'lon)</i>\n` : "";
     c += `\n🛣 ${km} · ⚙️ ${tr} · ⛽ ${fuel}\n🎨 ${escapeHtml(ad.color || "—")} · 💎 ${escapeHtml(ad.paint || "—")}\n`;
     if (extra.length) c += `<blockquote expandable>${extra.join("\n")}</blockquote>`;
-    c += `📞 <code>${phone}</code>\n${tags ? tags + "\n" : ""}${idLine}\n\n⚠️ <i>Moshina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+    c += `📞 <code>${phone}</code>\n${tags ? tags + "\n" : ""}${idLine}\n\n⚠️ <i>Mashina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   } else {
     const line = "━━━━━━━━━━━━━━";
     c = head + `🚗 <b>${car.toUpperCase()} · ${escapeHtml(ad.year)}</b>\n`;
     c += drop ? `💰 <s>${spNum(ad.old_price)} $</s> <b>${price} $</b> 📉\n` : `💰 <b>${price} $</b>${mk && mk.kind === "cheap" ? `   🔥 <i>bozordan ${Math.abs(mk.diff)}% arzon</i>` : mk && mk.kind === "market" ? "   👍 <i>bozor narxida</i>" : ""}\n`;
     c += `${line}\n🛣 Yurgan: <b>${km}</b>\n⚙️ Karobka: <b>${tr}</b>\n⛽ Yoqilg'i: <b>${fuel}</b>\n🎨 Rangi: <b>${escapeHtml(ad.color || "—")}</b> · 💎 Kraska: <b>${escapeHtml(ad.paint || "—")}</b>\n`;
     if (extra.length) c += extra.join("\n") + "\n";
-    c += `${line}\n📞 <code>${phone}</code>\n${tags ? "📍 " + tags + "\n" : ""}${idLine}\n⚠️ <i>Moshina savdosiga admin javobgar emas. Oldindan to'lov qilmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+    c += `${line}\n📞 <code>${phone}</code>\n${tags ? "📍 " + tags + "\n" : ""}${idLine}\n⚠️ <i>Mashina savdosiga admin javobgar emas. Oldindan to'lov qilmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   }
   // Telegram: rasm izohi ≤ 1024 belgi — sig'masa, qo'shimcha ma'lumotni qisqartiramiz
   if (captionVisibleLength(c) > 1000 && extra.length) {
@@ -935,7 +935,7 @@ async function buildChannelCaption(ad) {
     if (d && Number(d.is_dealer) === 1 && Number(d.dealer_paused) !== 1 && d.dealer_name) dealerBadge = `✅ <b>Ishonchli sotuvchi: ${d.dealer_name}</b>\n\n`;
   } catch (e) {}
   let c = vipHeader(ad) + dealerBadge + (ad.is_hot ? `🔥 <b>QAYNOQ NARX!</b>\n\n` : "") +
-    `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
+    `🆔 ID: ${ad.id}\n🚗 Mashina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
     `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n`;
   if (ad.history && ad.history !== "Ko'rsatilmagan" && ad.history !== "Кўрсатилмаган") c += `🛠 Tarixi: ${ad.history}\n`;
   if (ad.barter && ad.barter !== "Yo'q" && ad.barter !== "Йўқ") c += `🔄 Barter: ${ad.barter}\n`;
@@ -945,7 +945,7 @@ async function buildChannelCaption(ad) {
     ? `💰 Narxi: <s>${formatNum(ad.old_price)} $</s> <b>${formatNum(ad.price)}$ 📉</b>\n`
     : `💰 Narxi: ${formatNum(ad.price)}$${await getPriceBadge(ad.carDetails, ad.price, ad.year, ad)}\n`;
   c += `☎️ +${ad.phone}\n🚩 #${String(ad.region || "").replace(/\s+/g, "_")}\n\n` +
-    `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
+    `⚠️ Mashina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
   return addPriceVoteLine(c);
 }
 // E'lon kanalda qayta joylansa (UP, ko'tarish) — VIP bo'lsa yangi postni yana tepaga qadaymiz
@@ -1763,7 +1763,7 @@ async function createPriceChart(title, labels, values) {
   return chartPath;
 }
 // ==============================================================
-// 📊 HAFTALIK GRAFIK POST (Eng ommabop moshina bo'yicha)
+// 📊 HAFTALIK GRAFIK POST (Eng ommabop mashina bo'yicha)
 // ==============================================================
 // 📈 «Narx grafigi» — endi «Narx dinamikasi» (charts.js): bitta model, 8 hafta, mediana + ko'pchilik oralig'i
 async function sendPriceChartPost() { return publishChartPost("weekly_chart"); }
@@ -1888,7 +1888,7 @@ function buildAdCaption(ad, priceBadge = "") {
   let caption = "";
   if (ad.urgent) caption += `🔥 <b>QAYNOQ NARX!</b>\n\n`;
   caption +=
-    `🚗 <b>Moshina:</b> ${fullCarName}\n` +
+    `🚗 <b>Mashina:</b> ${fullCarName}\n` +
     `📅 <b>Yili:</b> ${ad.year}\n👣 <b>Probeg:</b> ${kmText(ad.probeg)}\n` +
     `💎 <b>Kraska:</b> ${ad.paint}\n🎨 <b>Rangi:</b> ${ad.color}\n` +
     `⚙️ <b>Korobka:</b> ${ad.trans}\n⛽ <b>Yoqilg'i:</b> ${ad.fuel}\n`;
@@ -2293,7 +2293,7 @@ async function requestSoldToAdmin({ adId, userId, firstName, soldPrice = null })
   await db.execute("UPDATE ads SET sold_price = ? WHERE id = ?", [price, ad.id]);
   const priceInfo = price ? `\n💰 <b>Sotuv narxi:</b> ${formatNum(price)}$` : `\n💰 <b>Sotuv narxi:</b> <i>hali aytilmadi</i>`;
   const msg = await bot.api.sendMessage(ADMIN_ID,
-    `💰 <b>SOTILDI XABARI!</b>\n\n🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${escapeHtml(ad.carDetails)}</b>${priceInfo}\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a>`,
+    `💰 <b>SOTILDI XABARI!</b>\n\n🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Mashina: ${escapeHtml(ad.carDetails)}</b>${priceInfo}\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a>`,
     { reply_markup: soldConfirmKb(ad.id), parse_mode: "HTML" }
   );
   soldRequests.set(Number(ad.id), { at: Date.now(), adminMsgId: msg.message_id });
@@ -2331,10 +2331,10 @@ async function changeAdPrice({ adId, userId, newPrice }) {
   newPrice = p.value;
 
   const newCaption = addPriceVoteLine(vipHeader(ad) +
-    `🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
+    `🆔 ID: ${ad.id}\n🚗 Mashina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n` +
     `💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n` +
     `⛽ Yoqilg'i: ${ad.fuel}\n💰 Narxi: <s>${formatNum(ad.price)} $</s> <b>${formatNum(newPrice)}$ 📉</b>\n☎️ +${ad.phone}\n🚩 #${String(ad.region).replace(/\s+/g, "_")}\n\n` +
-    `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`);
+    `⚠️ Mashina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`);
   const channelMarkup = AD_CHANNEL_MARKUP(ad.id, ad.channelMsgId);
   // Kanal posti: kartochkada narx rasmning o'zida; «Narxi tushdi» belgisi yoqilgan bo'lsa — rasm ham yangilanadi
   const droppedNow = (parseInt(newPrice) || 0) < (parseInt(ad.price) || 0);
@@ -2473,7 +2473,7 @@ async function submitVipRequest({ adId, userId, firstName, username, screenshotF
   const usernameStr = username ? `@${username}` : "yo'q";
   const adminCaption =
     `${PROMOS[kind].title} — <b>YANGI TO'LOV SO'ROVI!</b>\n\n` +
-    `🚗 <b>Moshina:</b> ${ad.carDetails}\n` +
+    `🚗 <b>Mashina:</b> ${ad.carDetails}\n` +
     `🆔 <b>E'lon ID:</b> ${ad.id}\n` +
     `💰 <b>Summa:</b> ${somFmt(getPrice(kind))} (${promoDays(kind)} kun)\n` +
     `👤 <b>Foydalanuvchi:</b> <a href="tg://user?id=${userId}">${sanitizeText(firstName, 64) || "Foydalanuvchi"}</a> (${usernameStr})\n\n` +
@@ -2516,7 +2516,7 @@ async function useFreeUp({ adId, userId }) {
 // 🧮 Baholash: shu model (±2 yil) e'lonlari va sotilganlarining o'rtacha narxi asosida oraliq
 async function estimateCarPrice({ modelId, model, year, transmission }) {
   const m = await market.marketPrice({ modelId, model, year, transmission });
-  if (!m.ok) return { ok: false, error: "Bazamizda bu moshina uchun yetarli ma'lumot yo'q." };
+  if (!m.ok) return { ok: false, error: "Bazamizda bu mashina uchun yetarli ma'lumot yo'q." };
   // Oraliq: o'xshash e'lonlarning o'rta yarmi (25–75%); juda tor bo'lsa ±4%
   let lo = m.low, hi = m.high;
   if (hi - lo < m.median * 0.06) { lo = Math.round((m.median * 0.96) / 100) * 100; hi = Math.round((m.median * 1.04) / 100) * 100; }
@@ -2634,7 +2634,7 @@ async function getReferralInfo(userId) {
   const shareMessage =
     "🚗 O'zbekistondagi eng qulay onlayn Avto-Bozor!\n\n" +
     "💸 E'lon berish mutlaqo BEPUL.\n" +
-    "🔍 O'zingiz izlagan moshinani juda oson toping.\n\n" +
+    "🔍 O'zingiz izlagan mashinani juda oson toping.\n\n" +
     "👇 Hoziroq botga kirib ko'ring:\n" +
     refLink;
   return {
@@ -2786,7 +2786,7 @@ const AUTO_POSTS = [
   { key: "weekly_numbers", group: "kanal", btn: "Hafta raqamlarda", title: "🔢 Hafta raqamlarda", when: "shanba 17:00", run: () => publishChartPost("weekly_numbers"), preview: true },
   { key: "monthly_years", group: "kanal", btn: "Yil bo'yicha narx", title: "📅 Yil bo'yicha narx (har oy boshqa model)", when: "har oy 1-kuni 11:00", run: () => publishChartPost("monthly_years"), preview: true },
   { key: "hot_price", group: "voqea", btn: "Qaynoq narx", title: "🔥 «Qaynoq narx» posti", when: "e'lon narxi tushganda" },
-  { key: "sold_congrats", group: "voqea", btn: "Sotildi tabrigi", title: "🎉 «Yana bitta moshina sotildi»", when: "e'lon sotilganda" },
+  { key: "sold_congrats", group: "voqea", btn: "Sotildi tabrigi", title: "🎉 «Yana bitta mashina sotildi»", when: "e'lon sotilganda" },
   { key: "remind_new", group: "sotuvchi", btn: "Yangi e'lonni ko'tarish", title: "🆕 Yangi e'lonni ko'tarish taklifi", when: "12:00, e'lonning 1–3-kuni" },
   { key: "remind_price5", group: "sotuvchi", btn: "Narx maslahati (5-kun)", title: "💡 Narxni tushirish maslahati", when: "12:00, 5-kuni" },
   { key: "remind_up7", group: "sotuvchi", btn: "UP taklifi (7-kun)", title: "🔔 Tepaga ko'tarish (UP) taklifi", when: "12:00, 7-kuni" },
@@ -4412,7 +4412,7 @@ bot.callbackQuery("admin_stats", async (ctx) => {
 
         `❤️ <b>XARIDORLAR QIZIQISHI:</b>\n` +
         `💾 Jami e'lon saqlashlar: <b>${favCount.count} marta</b>\n` +
-        `🏆 Eng xaridorgir moshina: <b>${topFavCarText}</b>\n\n` +
+        `🏆 Eng xaridorgir mashina: <b>${topFavCarText}</b>\n\n` +
         
         `📈 <b>UMUMIY KO'RSATKICHLAR:</b>\n` +
         `👥 Barcha foydalanuvchilar: <b>${userCount.count} ta</b>\n` +
@@ -4455,7 +4455,7 @@ bot.callbackQuery("admin_pending", async (ctx) => {
       const photoUrls = await Promise.all(ad.photoId.split(",").map(async (id) => `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${(await bot.api.getFile(id)).file_path}`));
       const collagePath = await previewCollage(photoUrls, ad);
 
-      let caption = `🆔 <b>ID: ${ad.id}</b>\n🚗 Moshina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n`;
+      let caption = `🆔 <b>ID: ${ad.id}</b>\n🚗 Mashina: ${ad.carDetails}\n📅 Yili: ${ad.year}\n👣 Probeg: ${kmText(ad.probeg)}\n💎 Kraskasi: ${ad.paint}\n🎨 Rangi: ${ad.color}\n✅ Karobka: ${ad.transmission}\n⛽ Yoqilg'i: ${ad.fuel}\n`;
       if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 Tarixi: ${ad.history}\n`;
       if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 Barter: ${ad.barter}\n`;
       caption += `💰 Narxi:${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ad.userId}">Profil</a>`;
@@ -4478,7 +4478,7 @@ bot.callbackQuery("admin_pending", async (ctx) => {
       const photoUrls = await Promise.all(editData.photoId.split(",").map(async (id) => `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${(await bot.api.getFile(id)).file_path}`));
       const collagePath = await previewCollage(photoUrls, editData, { id: editData.oldAdId });
 
-      let caption = `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 Eski ID: ${editData.oldAdId}\n🚗 Moshina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${editData.probeg} km\n💎 Kraskasi: ${editData.paint}\n🎨 Rangi: ${editData.color}\n✅ Karobka: ${editData.transmission}\n⛽ Yoqilg'i: ${editData.fuel}\n`;
+      let caption = `🔄 <b>E'LONNI YANGILASH SO'ROVI!</b>\n\n🆔 Eski ID: ${editData.oldAdId}\n🚗 Mashina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${editData.probeg} km\n💎 Kraskasi: ${editData.paint}\n🎨 Rangi: ${editData.color}\n✅ Karobka: ${editData.transmission}\n⛽ Yoqilg'i: ${editData.fuel}\n`;
       if (editData.history && editData.history !== "Ko'rsatilmagan") caption += `🛠 Tarixi: ${editData.history}\n`;
       if (editData.barter && editData.barter !== "Yo'q") caption += `🔄 Barter: ${editData.barter}\n`;
       caption += `💰 Narxi: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${editData.userId}">Profil</a>`;
@@ -4524,7 +4524,7 @@ async function searchCarConversation(conversation, ctx) {
               const kb = brandKeyboard("sb");
               kb.row().text("❌ Bekor qilish", "cancel_search");
 
-              const msgPrompt = await ctx.reply("🔍 <b>Qaysi moshina markasini qidiryapsiz?</b>", { reply_markup: kb, parse_mode: "HTML" });
+              const msgPrompt = await ctx.reply("🔍 <b>Qaysi mashina markasini qidiryapsiz?</b>", { reply_markup: kb, parse_mode: "HTML" });
               chatToClean.push(msgPrompt.message_id);
 
               const res = await conversation.waitFor(["callback_query:data", "message:text"]);
@@ -4545,7 +4545,7 @@ async function searchCarConversation(conversation, ctx) {
               kb.row().text("🔙 Orqaga", "back_to_brand").text("❌ Bekor qilish", "cancel_search");
 
               const promptText = !brandObj?.id
-                  ? "🔍 <b>Qidirayotgan moshinangiz rusumini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>"
+                  ? "🔍 <b>Qidirayotgan mashinangiz rusumini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>"
                   : `🔍 <b>${brand}</b> qaysi modelini qidiryapsiz?`;
 
               const msgPrompt = await ctx.reply(promptText, { reply_markup: kb, parse_mode: "HTML" });
@@ -4663,7 +4663,7 @@ async function searchCarConversation(conversation, ctx) {
 
              kb.row().text("✅ Qidiruvni yakunlash", "sr_done");
 
-             listText += `👇 <i>To'liq ko'rish uchun moshina raqamini bosing:</i>`;
+             listText += `👇 <i>To'liq ko'rish uchun mashina raqamini bosing:</i>`;
              return { listText, kb };
          };
 
@@ -4768,14 +4768,14 @@ async function searchCarConversation(conversation, ctx) {
       // Obuna tugmasi: model ID ham saqlanadi (Telegram tugma ma'lumoti 64 baytdan oshmasligi uchun nomi qisqartiriladi)
       const alertPrefix = `als:${modelId || 0}:${Math.min(maxPrice, 999999)}:`;
       const alertKb = new InlineKeyboard().text("🔔 Qidiruvga obuna bo'lish", alertPrefix + cutBytes(query, 64 - Buffer.byteLength(alertPrefix)));
-      await ctx.reply(`<i>Agar ushbu moshina bozorga chiqqanda darhol xabardor bo'lishni istasangiz, qo'ng'iroqchani bosing:</i>`, { parse_mode: "HTML", reply_markup: alertKb });
+      await ctx.reply(`<i>Agar ushbu mashina bozorga chiqqanda darhol xabardor bo'lishni istasangiz, qo'ng'iroqchani bosing:</i>`, { parse_mode: "HTML", reply_markup: alertKb });
 
       // ================= YANGI QO'SHILGAN QISM =================
       const againKb = new InlineKeyboard()
           .text("🔍 Ha, yana qidirish", "search_again")
           .text("❌ Yo'q, rahmat", "search_stop");
 
-      const promptMsg = await ctx.reply("🔄 <b>Yana boshqa moshina qidirishni xohlaysizmi?</b>", {
+      const promptMsg = await ctx.reply("🔄 <b>Yana boshqa mashina qidirishni xohlaysizmi?</b>", {
           parse_mode: "HTML",
           reply_markup: againKb
       });
@@ -4915,7 +4915,7 @@ else if (step === "MODEL") {
 
         // "Boshqa" tanlanganda matnni o'zgartirish
         const promptText = !ad.brand_id && ad.brandKnown !== false
-            ? "🚙 <b>Moshinangiz markasi va modelini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>"
+            ? "🚙 <b>Mashinangiz markasi va modelini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>"
             : `🚙 <b>${ad.brand}</b> modelini tanlang yoki yozing:`;
             
         msgPrompt = await ctx.reply(promptText, { reply_markup: kb, parse_mode: "HTML" });
@@ -4962,7 +4962,7 @@ else if (step === "MODEL") {
 
       else if (step === "PROBEG") {
         const kb = optionKb("probegs", "pr:", "back_YEAR", { Salon: "Salon (0 km)" });
-        msgPrompt = await ctx.reply("👣 <b>Probegini kiriting (masalan: 35000):</b>\n<i>Agar moshina yangi bo'lsa «Salon (0 km)» ni" + (catalog.AD_OPTIONS.probegs.length > 1 ? ", probeg aniq bo'lmasa pastdagi variantlardan birini" : "") + " tanlang.</i>", { reply_markup: kb, parse_mode: "HTML" });
+        msgPrompt = await ctx.reply("👣 <b>Probegini kiriting (masalan: 35000):</b>\n<i>Agar mashina yangi bo'lsa «Salon (0 km)» ni" + (catalog.AD_OPTIONS.probegs.length > 1 ? ", probeg aniq bo'lmasa pastdagi variantlardan birini" : "") + " tanlang.</i>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
@@ -4998,7 +4998,7 @@ else if (step === "MODEL") {
 
       else if (step === "COLOR") {
         const kb = optionKb("colors", "c:", "back_PAINT");
-        msgPrompt = await ctx.reply("🎨 <b>Moshina rangini tanlang yoki yozing:</b>", { reply_markup: kb, parse_mode: "HTML" });
+        msgPrompt = await ctx.reply("🎨 <b>Mashina rangini tanlang yoki yozing:</b>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
@@ -5119,8 +5119,8 @@ else if (step === "MODEL") {
       else if (step === "HISTORY") {
         const kb = new InlineKeyboard().text("O'tkazib yuborish", "skip_history").row().text("🔙 Orqaga", "back_REGION").text("❌ Bekor", "cancel_ad");
         msgPrompt = await ctx.reply(
-          "🛠 <b>Moshina tarixi va xizmat ko'rsatish holati:</b>\n\n" +
-          "<i>Xaridorlar ishonchini oshirish uchun moshinaga qanday qaralganini yozing. Masalan:\n" +
+          "🛠 <b>Mashina tarixi va xizmat ko'rsatish holati:</b>\n\n" +
+          "<i>Xaridorlar ishonchini oshirish uchun mashinaga qanday qaralganini yozing. Masalan:\n" +
           "«2 yil oldin LPG o'rnatilgan, har 7500 km da Liqui Moly Molygen 5w-30 quyilgan, 46 ming km da karobka moyi almashtirilgan.»</i>\n\n" +
           "Yozishni istamasangiz «O'tkazib yuborish» ni bosing.", { reply_markup: kb, parse_mode: "HTML" }
         );
@@ -5141,7 +5141,7 @@ else if (step === "MODEL") {
 
       else if (step === "BARTER") {
         const kb = new InlineKeyboard().text("Yo'q, faqat naqd", "brtr:Yo'q").row().text("🔙 Orqaga", "back_HISTORY").text("❌ Bekor", "cancel_ad");
-        msgPrompt = await ctx.reply("🔄 <b>Barter (Ayirboshlash) bormi?</b>\n\n<i>Agar bor bo'lsa, qaysi moshinalarga almashishingizni yozing. Agar yo'q bo'lsa tugmani bosing.</i>", { reply_markup: kb, parse_mode: "HTML" });
+        msgPrompt = await ctx.reply("🔄 <b>Barter (Ayirboshlash) bormi?</b>\n\n<i>Agar bor bo'lsa, qaysi mashinalarga almashishingizni yozing. Agar yo'q bo'lsa tugmani bosing.</i>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
         if (res.message) chatToClean.push(res.message.message_id);
@@ -5167,7 +5167,7 @@ else if (step === "MODEL") {
           .text("🔙 Orqaga", "back_BARTER").text("❌ Bekor", "cancel_ad");
 
         msgPrompt = await ctx.reply(
-          "💳 <b>Moshinani nasiyaga (bo'lib to'lash) berasizmi?</b>\n\n" +
+          "💳 <b>Mashinani nasiyaga (bo'lib to'lash) berasizmi?</b>\n\n" +
           "<i>Agar xaridor pulni bo'lib-bo'lib to'lashiga rozi bo'lsangiz «Ha» ni tanlang. " +
           "Bu e'loningizga xaridorlarni ko'proq jalb qiladi!</i>",
           { reply_markup: kb, parse_mode: "HTML" }
@@ -5256,7 +5256,7 @@ else if (step === "MODEL") {
           .text("Oddiy sotuv", "urg:no").row()
           .text("🔙 Orqaga", "back_NASIYA").text("❌ Bekor", "cancel_ad");
 
-        msgPrompt = await ctx.reply("🔥 <b>Qaynoq narxda sotasizmi?</b>\n\n<i>Agar moshinani bozor narxidan arzonroq va tezroq sotmoqchi bo'lsangiz «Ha, qaynoq narxda» ni tanlang — admin ma'qullasa, e'lon kanalga «🔥 QAYNOQ NARX» sarlavhasi bilan chiqadi (bepul).</i>", { reply_markup: kb, parse_mode: "HTML" });
+        msgPrompt = await ctx.reply("🔥 <b>Qaynoq narxda sotasizmi?</b>\n\n<i>Agar mashinani bozor narxidan arzonroq va tezroq sotmoqchi bo'lsangiz «Ha, qaynoq narxda» ni tanlang — admin ma'qullasa, e'lon kanalga «🔥 QAYNOQ NARX» sarlavhasi bilan chiqadi (bepul).</i>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
 
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
@@ -5277,7 +5277,7 @@ else if (step === "MODEL") {
 
       else if (step === "MEDIA") {
         const kb = new InlineKeyboard().text("✅ Bo'ldi (Yuborish)", "done_media").row().text("🔙 Orqaga", "back_URGENT").text("❌ Bekor", "cancel_ad");
-        msgPrompt = await ctx.reply("📸🎥 <b>Rasm va qisqa Video yuboring (Maks 6 ta rasm, 1 ta video):</b>\n\n<i>Video yuborish majburiy emas, lekin moshinani 30 soniyalik videoga olib yuborsangiz, tezroq sotiladi!</i>", { reply_markup: kb, parse_mode: "HTML" });
+        msgPrompt = await ctx.reply("📸🎥 <b>Rasm va qisqa Video yuboring (Maks 6 ta rasm, 1 ta video):</b>\n\n<i>Video yuborish majburiy emas, lekin mashinani 30 soniyalik videoga olib yuborsangiz, tezroq sotiladi!</i>", { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         
         ad.photos = ad.photos || [];
@@ -5476,7 +5476,7 @@ async function evaluateCarConversation(conversation, ctx) {
 
   // Marka/model ro'yxati endi bazada (catalog.js) — bu yerdagi eski ro'yxat olib tashlandi
 
-  await ctx.reply("🧮 <b>Aqlli baholash tizimiga xush kelibsiz!</b>\n\nMoshinangizning bozordagi real narxini ma'lumotlar bazamizdagi e'lonlar asosida hisoblab beramiz.", { reply_markup: mainMenu, parse_mode: "HTML" });
+  await ctx.reply("🧮 <b>Aqlli baholash tizimiga xush kelibsiz!</b>\n\nMashinangizning bozordagi real narxini ma'lumotlar bazamizdagi e'lonlar asosida hisoblab beramiz.", { reply_markup: mainMenu, parse_mode: "HTML" });
 
   while (true) {
     let msgPrompt;
@@ -5501,7 +5501,7 @@ async function evaluateCarConversation(conversation, ctx) {
       else if (step === "MODEL") {
         const kb = modelKeyboard("m", ad.brandObj?.id);
         kb.row().text("🔙 Orqaga", "back_BRAND").text("❌ Bekor qilish", "cancel_ad");
-        const modelPrompt = ad.brandObj?.id ? `🚙 <b>${ad.brand}</b> modelini tanlang:` : "🚙 <b>Moshina rusumini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>";
+        const modelPrompt = ad.brandObj?.id ? `🚙 <b>${ad.brand}</b> modelini tanlang:` : "🚙 <b>Mashina rusumini to'liq yozing:</b>\n<i>(Masalan: Changan UNI-K)</i>";
         msgPrompt = await ctx.reply(modelPrompt, { reply_markup: kb, parse_mode: "HTML" });
         chatToClean.push(msgPrompt.message_id);
         const res = await conversation.waitFor(["callback_query:data", "message:text"]);
@@ -5563,7 +5563,7 @@ async function evaluateCarConversation(conversation, ctx) {
             await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(()=>{});
 
             if (!estimate.ok) {
-                await ctx.reply(`📭 <b>Kechirasiz, bazamizda ${ad.year} yil ${ad.brand} ${ad.model} uchun yetarli ma'lumot yo'q.</b>\n\nMoshinangizning narxi holatiga qarab turlicha bo'lishi mumkin.`, { parse_mode: "HTML", reply_markup: mainMenu });
+                await ctx.reply(`📭 <b>Kechirasiz, bazamizda ${ad.year} yil ${ad.brand} ${ad.model} uchun yetarli ma'lumot yo'q.</b>\n\nMashinangizning narxi holatiga qarab turlicha bo'lishi mumkin.`, { parse_mode: "HTML", reply_markup: mainMenu });
             } else {
                 const { minPrice, maxPrice, median, label, confident } = estimate; // o'xshash e'lonlarning o'rta yarmi
 
@@ -5572,10 +5572,10 @@ async function evaluateCarConversation(conversation, ctx) {
                   `🚗 <b>Model:</b> ${ad.brand} ${ad.model}\n` +
                   `📅 <b>Yili:</b> ${ad.year}\n` +
                   (ad.transmission ? `⚙️ <b>Karobka:</b> ${ad.transmission}\n` : "") + "\n" +
-                  `Bazamizdagi e'lonlar va sotilgan moshinalar tahliliga ko'ra bozor narxi:\n\n` +
+                  `Bazamizdagi e'lonlar va sotilgan mashinalar tahliliga ko'ra bozor narxi:\n\n` +
                   `💰 <b>~${formatNum(median)}$</b>  (ko'pchiligi <b>${formatNum(minPrice)}$ – ${formatNum(maxPrice)}$</b>)\n` +
                   `📈 <i>${label}${confident ? "" : " — ma'lumot kam, taxminiy baho"}</i>\n\n` +
-                  `<i>⚠️ Eslatma: Aniq narx moshinaning kraskasi, probegi va umumiy holatiga qarab o'zgarishi mumkin!\n\nMoshinangizni hoziroq sotuvga qo'yish uchun «📝 E'lon berish tugmasini bosing.</i>`;
+                  `<i>⚠️ Eslatma: Aniq narx mashinaning kraskasi, probegi va umumiy holatiga qarab o'zgarishi mumkin!\n\nMashinangizni hoziroq sotuvga qo'yish uchun «📝 E'lon berish tugmasini bosing.</i>`;
 
                 await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenu });
             }
@@ -5628,11 +5628,11 @@ async function creditCalcConversation(conversation, ctx) {
 
   await ctx.reply(
     `✅ Hisob-kitob <b>${isUzs ? "so'mda 🇺🇿" : "dollarda 💵"}</b> bo'ladi.\n\n` +
-    `1️⃣ Endi <b>moshina narxini</b> kiriting (${sign}):\n<i>(Masalan: ${examplePrice})</i>`,
+    `1️⃣ Endi <b>mashina narxini</b> kiriting (${sign}):\n<i>(Masalan: ${examplePrice})</i>`,
     { parse_mode: "HTML", reply_markup: mainMenu }
   );
 
-  // 1. Moshina narxi
+  // 1. Mashina narxi
   const priceRes = await conversation.waitFor("message:text");
   if (cancelTexts.includes(priceRes.message.text)) return ctx.reply("❌ <b>Hisoblash to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
   const carPrice = parseInt(priceRes.message.text.replace(/\D/g, "")) || 0;
@@ -5647,7 +5647,7 @@ async function creditCalcConversation(conversation, ctx) {
   const downRes = await conversation.waitFor("message:text");
   if (cancelTexts.includes(downRes.message.text)) return ctx.reply("❌ <b>Hisoblash to'xtatildi.</b>\n\n💡 Tanlagan bo'limingizni ochish uchun pastdagi tugmani <b>yana bir marta bosing.</b>", { parse_mode: "HTML", reply_markup: mainMenu });
   let downPayment = parseInt(downRes.message.text.replace(/\D/g, "")) || 0;
-  if (downPayment >= carPrice) return ctx.reply("❗️ Boshlang'ich to'lov moshina narxidan kam bo'lishi kerak.", { reply_markup: mainMenu });
+  if (downPayment >= carPrice) return ctx.reply("❗️ Boshlang'ich to'lov mashina narxidan kam bo'lishi kerak.", { reply_markup: mainMenu });
 
   // 3. Necha oyga
   await ctx.reply(
@@ -5712,7 +5712,7 @@ async function creditCalcConversation(conversation, ctx) {
 
   let resultText =
     `📊 <b>HISOB-KITOB NATIJASI</b> ${isUzs ? "🇺🇿" : "💵"}\n\n` +
-    `🚗 Moshina narxi: <b>${fmt(carPrice)} ${sign}</b>\n` +
+    `🚗 Mashina narxi: <b>${fmt(carPrice)} ${sign}</b>\n` +
     `💵 Boshlang'ich to'lov: <b>${fmt(downPayment)} ${sign}</b>\n` +
     `🏦 Kreditga olinadigan: <b>${fmt(loanAmount)} ${sign}</b>\n` +
     `📅 Muddat: <b>${months} oy</b>\n` +
@@ -5759,7 +5759,7 @@ async function becomeDealerConversation(conversation, ctx) {
 
   await ctx.reply(
     "🏢 <b>AVTOSALON / DOIMIY SOTUVCHI BO'LISH</b>\n\n" +
-    "Agar siz doimiy ravishda moshina savdosi bilan shug'ullansangiz (avtosalon, diler yoki ko'p moshina sotuvchi), sizga maxsus imkoniyatlar beramiz:\n\n" +
+    "Agar siz doimiy ravishda mashina savdosi bilan shug'ullansangiz (avtosalon, diler yoki ko'p mashina sotuvchi), sizga maxsus imkoniyatlar beramiz:\n\n" +
     "✅ E'lonlaringizda «Ishonchli sotuvchi» belgisi\n" +
     `✅ Cheksiz e'lon berish imkoniyati${paidAdsOn() ? ` (har bir e'lon ${somFmt(getPrice("ad"))})` : ""}\n` +
     "✅ Kanalda salon reklamasi joylash huquqi\n" +
@@ -6172,7 +6172,7 @@ bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
       
       // YANGI: Agar uzer botni blok qilib qo'ygan bo'lsa, dastur qulab tushmasligi uchun himoya (try-catch)
       try {
-          await bot.api.sendMessage(ad.userId, `🎉 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz kanalga joylandi.\n\n💡 <b>Eslatma:</b> Agar moshinangiz sotilsa, pastdagi <b>«📂 Mening e'lonlarim»</b> bo'limiga kirib <b>«Sotildi»</b> deb belgilab qo'yishni unutmang. Shuningdek, o'sha yerdan e'lon narxini pasaytirishingiz ham mumkin!${voteHintForSeller()}\n\nE'loningiz: ${channelPostLink(msg.message_id)}`, { parse_mode: "HTML", reply_markup: mainMenu });
+          await bot.api.sendMessage(ad.userId, `🎉 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz kanalga joylandi.\n\n💡 <b>Eslatma:</b> Agar mashinangiz sotilsa, pastdagi <b>«📂 Mening e'lonlarim»</b> bo'limiga kirib <b>«Sotildi»</b> deb belgilab qo'yishni unutmang. Shuningdek, o'sha yerdan e'lon narxini pasaytirishingiz ham mumkin!${voteHintForSeller()}\n\nE'loningiz: ${channelPostLink(msg.message_id)}`, { parse_mode: "HTML", reply_markup: mainMenu });
       } catch (e) {
         console.log(`⚠️ ${ad.userId} ID egasi botni blok qilgani sababli xabar bormadi.`);
       }
@@ -6270,7 +6270,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
             `🎉 <b>Tabriklaymiz!</b>\n\n` +
             `Sizning <b>${ad.carDetails}</b> e'loningiz kanalga <b>"🔥 QAYNOQ NARX"</b> maqomida joylandi!\n\n` +
             `E'loningiz: ${channelPostLink(msg.message_id)}\n\n` +
-            `📌 <b>Eslatma:</b> Agar moshinangiz sotilsa, pastdagi «📂 Mening e'lonlarim» bo'limiga kirib «Sotildi» deb belgilab qo'yishni unutmang. Shuningdek, o'sha yerdan e'lon narxini pasaytirishingiz ham mumkin!` +
+            `📌 <b>Eslatma:</b> Agar mashinangiz sotilsa, pastdagi «📂 Mening e'lonlarim» bo'limiga kirib «Sotildi» deb belgilab qo'yishni unutmang. Shuningdek, o'sha yerdan e'lon narxini pasaytirishingiz ham mumkin!` +
             voteHintForSeller(),
             { parse_mode: "HTML", reply_markup: mainMenu }
           );
@@ -6478,15 +6478,15 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
         await bot.api.sendMessage(ad.userId, `🎉 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz kanalda "SOTILDI" deb belgilandi.`, { parse_mode: "HTML" });
 
         // Avtomatik tabriknoma (Reklama) asosiy kanalga
-               // Moshina necha kunda sotilganini hisoblaymiz
-                // Moshina necha kunda sotilganini hisoblaymiz
+               // Mashina necha kunda sotilganini hisoblaymiz
+                // Mashina necha kunda sotilganini hisoblaymiz
         let daysText = "o'z xaridorini topdi";
         try {
             const createdDate = new Date(ad.created_at);
             const now = new Date();
             const diffDays = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));
 
-            // FAQAT tez sotilgan (7 kungacha) moshinalar uchun kun sonini ko'rsatamiz.
+            // FAQAT tez sotilgan (7 kungacha) mashinalar uchun kun sonini ko'rsatamiz.
             // Uzoq turganlar uchun kun yozilmaydi (teskari taassurot bo'lmasligi uchun).
             if (diffDays <= 0) {
                 daysText = "atigi <b>bugun</b> joylanib, bugunoq o'z xaridorini topdi";
@@ -6507,8 +6507,8 @@ bot.callbackQuery(/^confirm_sold:(\d+)/, async (ctx) => {
         const congratsText =
           `🎉 <b>YANA BITTA MOSHINA SOTILDI!</b>\n\n` +
           `🚗 <b>${ad.carDetails}</b> — ${daysText}${soldPriceText}! 🤝\n\n` +
-          `Sotuvchini tabriklaymiz! Bizning botimiz orqali moshinalar <b>maklersiz, komissiyasiz va tez</b> sotilmoqda.\n\n` +
-          `🚘 <b>Sizda ham sotiladigan moshina bormi?</b>\n` +
+          `Sotuvchini tabriklaymiz! Bizning botimiz orqali mashinalar <b>maklersiz, komissiyasiz va tez</b> sotilmoqda.\n\n` +
+          `🚘 <b>Sizda ham sotiladigan mashina bormi?</b>\n` +
           `Uni bepul joylang — minglab xaridor kutmoqda! 👇\n` +
           `🤖 @arzonida_bot`;
 
@@ -6660,7 +6660,7 @@ bot.command("start", async (ctx) => {
       if (favAdId) {
           try {
               await db.execute("INSERT IGNORE INTO favorites (userId, adId) VALUES (?, ?)", [ctx.from.id, favAdId]);
-              await ctx.reply(`❤️ <b>E'lon saqlandi!</b> (ID: ${favAdId})\n\nAgar ushbu moshina narxi tushsa, bot sizga darhol avtomatik xabar yuboradi!`, { parse_mode: "HTML" });
+              await ctx.reply(`❤️ <b>E'lon saqlandi!</b> (ID: ${favAdId})\n\nAgar ushbu mashina narxi tushsa, bot sizga darhol avtomatik xabar yuboradi!`, { parse_mode: "HTML" });
           } catch(e) {}
       }
   }
@@ -6695,12 +6695,12 @@ bot.command("start", async (ctx) => {
 
   const welcomeText = 
     `🚗 <b>Avto-bozorimizga xush kelibsiz!</b>\n\n` +
-    `Bu bot orqali siz moshinangizni tez va oson sotishingiz yoki o'zingizga mos avtomobil topishingiz mumkin.\n\n` +
+    `Bu bot orqali siz mashinangizni tez va oson sotishingiz yoki o'zingizga mos avtomobil topishingiz mumkin.\n\n` +
     `🤖 <b>Botning asosiy imkoniyatlari:</b>\n` +
-    `➖ <b>Tekin e'lon berish:</b> Moshinangiz ma'lumotlari va rasmlarini yuboring, bot avtomatik tarzda chiroyli kollaj yasab kanalga joylaydi.\n` +
+    `➖ <b>Tekin e'lon berish:</b> Mashinangiz ma'lumotlari va rasmlarini yuboring, bot avtomatik tarzda chiroyli kollaj yasab kanalga joylaydi.\n` +
     `➖ <b>Aqlli qidiruv:</b> O'zingiz izlayotgan marka va narxni kiriting, bot kanaldagi eng yaxshi variantlarni topib beradi.\n` +
-    `➖ <b>Bildirishnoma (Obuna):</b> Siz izlayotgan moshina sotuvga chiqqan zahoti bot sizga darhol xabar beradi.\n` +
-    `➖ <b>E'lonlarni boshqarish:</b> Moshinangiz sotilsa yoki narxini tushirmoqchi bo'lsangiz, eski xabarni o'chirmasdan osongina yangilashingiz mumkin.\n\n` +
+    `➖ <b>Bildirishnoma (Obuna):</b> Siz izlayotgan mashina sotuvga chiqqan zahoti bot sizga darhol xabar beradi.\n` +
+    `➖ <b>E'lonlarni boshqarish:</b> Mashinangiz sotilsa yoki narxini tushirmoqchi bo'lsangiz, eski xabarni o'chirmasdan osongina yangilashingiz mumkin.\n\n` +
     `👇 <i>Quyidagi menyu orqali o'zingizga kerakli bo'limni tanlang!</i>\n\n`+
     `(💡 Agar menyu tugmalari ko'rinmasa, xabar yozish joyidagi 🎛 belgisini bosing)`
     ;
@@ -6955,7 +6955,7 @@ bot.callbackQuery(/^manage_ad:(\d+)/, async (ctx) => {
   const vipLine = PROMO_KINDS.filter((k) => tsActive(ad[PROMOS[k].col])).map((k) => `\n${PROMOS[k].title}: ${fmtTash(ad[PROMOS[k].col])} gacha`).join("");
   const todayN = (await todayViews([Number(ad.id)])).get(Number(ad.id)) || 0;
   const viewsLine = `\n👁 <b>Ko'rishlar:</b> ${Number(ad.views) || 0}${todayN ? ` (bugun +${todayN})` : ""} · 📞 ${Number(ad.contacts) || 0}`;
-  const text = `🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n💰 <b>Narxi: ${formatNum(ad.price)}$</b>${vipLine}${viewsLine}${votesLine}\n\n👇 <i>Kerakli amalni tanlang:</i>`;
+  const text = `🆔 <b>ID: ${ad.id}</b>\n🚗 <b>Mashina: ${ad.carDetails}</b>\n💰 <b>Narxi: ${formatNum(ad.price)}$</b>${vipLine}${viewsLine}${votesLine}\n\n👇 <i>Kerakli amalni tanlang:</i>`;
   
   await ctx.answerCallbackQuery().catch(()=>{});
   await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: kb });
@@ -7051,7 +7051,7 @@ bot.hears("🏆 150.000 so'm Yutib oling!", async (ctx) => {
 
   const shareMessage = 
     "🚗 O'zbekistondagi eng zo'r va qulay onlayn Avto-Bozor bot!\n\n" +
-    "Moshinangizni tekinga soting yoki o'zingiz izlagan moshinani juda oson toping.\n\n" +
+    "Mashinangizni tekinga soting yoki o'zingiz izlagan mashinani juda oson toping.\n\n" +
     "👇 Hoziroq kirib ko'ring:\n" + 
     refLink;
 
@@ -7169,7 +7169,7 @@ async function editPriceConversation(conversation, ctx) {
   const result = await conversation.external(() => changeAdPrice({ adId, userId: ctx.from.id, newPrice }));
   await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(() => {});
   if (!result.ok) return ctx.reply(result.error, { parse_mode: "HTML", reply_markup: mainMenu });
-  await ctx.reply(`✅ <b>Narx muvaffaqiyatli o'zgartirildi!</b>\nKanalda moshinangiz narxi <b>${formatNum(result.newPrice)}$</b> bo'lib o'zgardi.`, { parse_mode: "HTML", reply_markup: mainMenu });
+  await ctx.reply(`✅ <b>Narx muvaffaqiyatli o'zgartirildi!</b>\nKanalda mashinangiz narxi <b>${formatNum(result.newPrice)}$</b> bo'lib o'zgardi.`, { parse_mode: "HTML", reply_markup: mainMenu });
 }
 // (editPriceConversation va soldConversation yuqorida, tugmalaridan oldin ulangan)
 /**
@@ -7232,7 +7232,7 @@ bot.callbackQuery(/^free_up_req:(\d+)/, async (ctx) => {
   const result = await useFreeUp({ adId: parseInt(ctx.match[1]), userId: ctx.from.id });
   if (!result.ok) return ctx.reply(result.error, { parse_mode: "HTML" });
   await ctx.deleteMessage().catch(() => {});
-  await ctx.reply(`✅ <b>E'loningiz muvaffaqiyatli ko'tarildi!</b>\n\nMoshinangiz kanalda eng so'nggi xabarlar qatoriga chiqdi.`, { parse_mode: "HTML" });
+  await ctx.reply(`✅ <b>E'loningiz muvaffaqiyatli ko'tarildi!</b>\n\nMashinangiz kanalda eng so'nggi xabarlar qatoriga chiqdi.`, { parse_mode: "HTML" });
 });
 /**
  * ✅ АҚЛЛИ ХАБАРНОМАГА ОБУНА БЎЛИШ
@@ -7303,7 +7303,7 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
   const collagePath = await createCollage(photoUrls, editBadge, lookFor(merged));
 
   let newCaption = vipHeader(oldAd) +
-    `🆔 ID: ${oldAd.id}\n🚗 Moshina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${kmText(editData.probeg)}\n` +
+    `🆔 ID: ${oldAd.id}\n🚗 Mashina: ${editData.carDetails}\n📅 Yili: ${editData.year}\n👣 Probeg: ${kmText(editData.probeg)}\n` +
     `💎 Kraskasi: ${editData.paint}\n🎨 Rangi: ${editData.color}\n✅ Karobka: ${editData.transmission}\n` +
     `⛽ Yoqilg'i: ${editData.fuel}\n`;
 
@@ -7317,7 +7317,7 @@ bot.callbackQuery(/^approve_edit:(\d+)/, async (ctx) => {
     newCaption += `💳 Nasiya (bo'lib to'lash): ${editData.nasiya}\n`;
   }
   newCaption += `💰 Narxi: ${editData.price}$\n☎️ +${editData.phone}\n🚩 #${editData.region.replace(/\s+/g, "_")}\n\n` +
-    `⚠️ Moshina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
+    `⚠️ Mashina savdosiga admin javobgar emas, oldindan to'lov qilmang. Ogohlik davr talabi ❗\n\n👉 ${inviteLink()}`;
   newCaption = addPriceVoteLine(newCaption); // 👇 Narxga baho bering: 🔥 · 👍 · 🤔
   if (postStyle() !== "0") newCaption = await buildChannelCaption(merged);
 
@@ -7632,7 +7632,7 @@ bot.on("message:successful_payment", async (ctx) => {
             await bot.api.deleteMessage(CHANNEL_ID, ad.channelMsgId).catch(()=>{});
         } catch(e) { console.error("VIP yuborishda xato:", e); }
 
-        const vipCaption = `🌟 <b>VIP E'LON!</b> 🌟\n\n🆔 ID: ${ad.id}\n🚗 Moshina: ${ad.carDetails}\n💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n👉 Moshina rasmlari uchun tugmani bosing!`;
+        const vipCaption = `🌟 <b>VIP E'LON!</b> 🌟\n\n🆔 ID: ${ad.id}\n🚗 Mashina: ${ad.carDetails}\n💰 Narxi: ${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n👉 Mashina rasmlari uchun tugmani bosing!`;
         
         if (newMsgId) {
             // Matnni VIP qilib o'zgartirish va PIN qilish
@@ -7650,7 +7650,7 @@ bot.callbackQuery(/^keep_ad:(\d+)/, async (ctx) => {
     const adId = ctx.match[1];
     // Vaqtni bugungi kunga yangilab qo'yamiz (yana 15 kunga uzayadi)
     await db.execute("UPDATE ads SET created_at = CURRENT_TIMESTAMP WHERE id = ?", [adId]);
-    await ctx.editMessageText("✅ <b>E'loningiz muddati yana 15 kunga uzaytirildi!</b> Moshina sotilguncha bazamizda turadi.", { parse_mode: "HTML" });
+    await ctx.editMessageText("✅ <b>E'loningiz muddati yana 15 kunga uzaytirildi!</b> Mashina sotilguncha bazamizda turadi.", { parse_mode: "HTML" });
 });
 // =====================================================================
 // 📊 ҲАФТАЛИК БОЗОР АНАЛИТИКАСИ (ЯКШАНБА КУНЛАРИ УЧУН)
@@ -7887,7 +7887,7 @@ async function sendTopSearched() {
       text += `${medals[i]} <b>${name}</b> — <code>${r.cnt} marta</code>\n`;
     });
 
-    text += `\n💡 <i>Sotuvchilar uchun: agar sizda shu ro'yxatdagi moshina bo'lsa — hoziroq e'lon bering, xaridorlar tayyor turibdi!</i>`;
+    text += `\n💡 <i>Sotuvchilar uchun: agar sizda shu ro'yxatdagi mashina bo'lsa — hoziroq e'lon bering, xaridorlar tayyor turibdi!</i>`;
 
     const kb = new InlineKeyboard()
       .url("➕ Tekin e'lon berish", "https://t.me/arzonida_bot").row()
@@ -8022,21 +8022,21 @@ async function sendSellCallPost() {
   try {
     // Bir necha xil matn — bot har safar tasodifiy bittasini tanlaydi
     const messages = [
-      `🚗 <b>Moshinangizni sotmoqchimisiz?</b>\n\n` +
+      `🚗 <b>Mashinangizni sotmoqchimisiz?</b>\n\n` +
       `Bizning bot orqali <b>3 daqiqada</b> bepul e'lon bering va to'g'ridan-to'g'ri xaridor toping!\n\n` +
       `✅ Maklersiz\n✅ Komissiyasiz\n✅ Mutlaqo BEPUL\n\n` +
-      `Minglab xaridor sizning moshinangizni kutmoqda 👇`,
+      `Minglab xaridor sizning mashinangizni kutmoqda 👇`,
 
-      `💰 <b>Eski moshinangiz turibdimi?</b>\n\n` +
+      `💰 <b>Eski mashinangiz turibdimi?</b>\n\n` +
       `Uni bu yerda soting! Rasmini yuboring, bot o'zi chiroyli e'lon yasab, kanalga joylaydi.\n\n` +
-      `🔥 Xaridorlar har kuni shu yerdan moshina qidirmoqda. Navbatingizni o'tkazib yubormang! 👇`,
+      `🔥 Xaridorlar har kuni shu yerdan mashina qidirmoqda. Navbatingizni o'tkazib yubormang! 👇`,
 
       `📢 <b>SOTUVCHILAR UCHUN!</b>\n\n` +
-      `Moshinangizni tez va bepul sotishning eng oson yo'li — bizning botimiz.\n\n` +
+      `Mashinangizni tez va bepul sotishning eng oson yo'li — bizning botimiz.\n\n` +
       `Bir necha bosishda e'loningiz tayyor. Vositachilarga ortiqcha pul to'lamang!\n\n` +
       `👇 Hoziroq sinab ko'ring:`,
 
-      `🚘 <b>Moshina almashtirmoqchimisiz?</b>\n\n` +
+      `🚘 <b>Mashina almashtirmoqchimisiz?</b>\n\n` +
       `Avval eskisini soting! Bu yerda e'lon berish <b>bepul</b>, tez va oson.\n\n` +
       `Sizga faqat rasm va narxni yuborish kifoya — qolganini bot bajaradi 👇`
     ];
@@ -8048,11 +8048,11 @@ async function sendSellCallPost() {
     const kb = APP_IN_CHANNEL
       ? new InlineKeyboard()
           .url("➕ BEPUL E'LON BERISH (ilovada)", miniAppLink("new")).row()
-          .url("🧮 Moshinamni baholash", miniAppLink("evaluate")).row()
+          .url("🧮 Mashinamni baholash", miniAppLink("evaluate")).row()
           .url("🤖 Bot orqali", "https://t.me/arzonida_bot")
       : new InlineKeyboard()
           .url("➕ BEPUL E'LON BERISH", "https://t.me/arzonida_bot").row()
-          .url("🧮 Moshinamni baholash", "https://t.me/arzonida_bot");
+          .url("🧮 Mashinamni baholash", "https://t.me/arzonida_bot");
 
     await bot.api.sendMessage(CHANNEL_ID, text, { parse_mode: "HTML", reply_markup: kb });
     console.log("✅ 'E'lon bering' chaqiriq posti yuborildi!");
@@ -8155,7 +8155,7 @@ async function runAutomations() {
           [ADMIN_ID]
       );
       for (let ad of ads5) {
-          const text = `💡 <b>Aqlli maslahatchi:</b>\n\n🚗 Sizning <b>${ad.carDetails}</b> mashinangiz e'loniga 5 kun bo'ldi. \n\nKuzatuvlarimizga ko'ra, moshina 5 kunda sotilmasa, uning narxini biroz tushirish va "Qaynoq narx" xabarini jo'natish xaridor topishni 3 barobar tezlashtiradi!\n\n👇 <i>Narxni tushirish uchun pastdagi tugmani bosing:</i>`;
+          const text = `💡 <b>Aqlli maslahatchi:</b>\n\n🚗 Sizning <b>${ad.carDetails}</b> mashinangiz e'loniga 5 kun bo'ldi. \n\nKuzatuvlarimizga ko'ra, mashina 5 kunda sotilmasa, uning narxini biroz tushirish va "Qaynoq narx" xabarini jo'natish xaridor topishni 3 barobar tezlashtiradi!\n\n👇 <i>Narxni tushirish uchun pastdagi tugmani bosing:</i>`;
           await bot.api.sendMessage(ad.userId, text, {
               parse_mode: "HTML",
               reply_markup: new InlineKeyboard().text("📉 Narxni tushirish", `edit_price:${ad.id}`)
@@ -8217,7 +8217,7 @@ bot.callbackQuery(/^ask_bump:(\d+)/, async (ctx) => {
     }
 
     // Adminga so'rov yuborish
-    const adminText = `🚀 <b>UP (Tepaga ko'tarish) SO'ROVI!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Moshina: ${ad.carDetails}</b>\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>\n\n<i>E'lon kanalda 15 kunlik bo'ldi. Uzer uni qayta ko'tarmoqchi. Ruxsat berasizmi?</i>`;
+    const adminText = `🚀 <b>UP (Tepaga ko'tarish) SO'ROVI!</b>\n\n🆔 <b>ID: ${adId}</b>\n🚗 <b>Mashina: ${ad.carDetails}</b>\n👤 <b>Uzer:</b> <a href="tg://user?id=${ad.userId}">${ctx.from.first_name}</a>\n\n<i>E'lon kanalda 15 kunlik bo'ldi. Uzer uni qayta ko'tarmoqchi. Ruxsat berasizmi?</i>`;
     
     await bot.api.sendMessage(ADMIN_ID, adminText, {
         parse_mode: "HTML",
@@ -8287,7 +8287,7 @@ bot.callbackQuery(/^approve_bump:(\d+)/, async (ctx) => {
         await ctx.editMessageText(`✅ <b>${ad.carDetails}</b> (ID: ${ad.id}) kanalda muvaffaqiyatli UP qilindi!`, { parse_mode: "HTML" });
         
         // Mijozni xursand qilish
-        await bot.api.sendMessage(ad.userId, `🚀 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz adminga ma'qullandi va kanalda eng yangi xabarlar qatoriga ko'tarildi! Moshina tezroq sotilishiga tilakdoshmiz.`, { parse_mode: "HTML" }).catch(()=>{});
+        await bot.api.sendMessage(ad.userId, `🚀 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz adminga ma'qullandi va kanalda eng yangi xabarlar qatoriga ko'tarildi! Mashina tezroq sotilishiga tilakdoshmiz.`, { parse_mode: "HTML" }).catch(()=>{});
 
     } catch (err) {
         console.error("Bump xatosi:", err);
