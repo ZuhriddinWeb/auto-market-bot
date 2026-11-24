@@ -458,7 +458,7 @@ async function loadBotSettings() {
 }
 // Avto-xabar yoqilganmi? (sukut bo'yicha — yoqilgan, ya'ni avvalgidek ishlaydi)
 // Sukut bo'yicha O'CHIQ turadiganlari (admin o'zi yoqmaguncha): kanal postidagi qo'shimcha tugmalar
-const AUTO_DEFAULT_OFF = new Set(["share_btn", "btn_admin", "views_nudge"]);
+const AUTO_DEFAULT_OFF = new Set(["share_btn", "btn_admin", "views_nudge", "top3_classic"]);
 function isAutoOn(key) {
   const v = botSettings.get(`auto:${key}`);
   if (v === undefined) return !AUTO_DEFAULT_OFF.has(key);
@@ -2776,7 +2776,8 @@ bot.callbackQuery("admin_close", async (ctx) => {
 const AUTO_POSTS = [
   { key: "sellcall13", group: "kanal", btn: "E'lon bering · 13:00", title: "📣 «E'lon bering» posti", when: "har kuni 13:00", run: () => sendSellCallPost() },
   { key: "sellcall19", group: "kanal", btn: "E'lon bering · 19:00", title: "📣 «E'lon bering» posti", when: "har kuni 19:00", run: () => sendSellCallPost() },
-  { key: "top3", group: "kanal", btn: "Eng arzon TOP-3 · 20:00", title: "🚗 Eng arzon TOP-3", when: "har kuni 20:00", run: () => sendDailyTop3() },
+  { key: "top3", group: "kanal", btn: "Kunning TOP-3 · 20:00", title: "🏆 Kunning eng yaxshi 3 ta taklifi (rasm, bozordan eng arzon)", when: "har kuni 20:00", run: () => sendDailyTop3(), preview: true },
+  { key: "top3_classic", group: "kanal", btn: "TOP-3 eski ko'rinishda", title: "📜 TOP-3 ni eski (matnli, eng arzon narx) ko'rinishda chiqarish", when: "yoqilsa — yangisi o'rniga" },
   { key: "weekly_analytics", group: "kanal", btn: "Haftalik hisobot", title: "📊 Haftalik bozor hisoboti + «Bozor indeksi» rasmi", when: "yakshanba 10:00", run: () => publishChartPost("weekly_analytics"), preview: true },
   { key: "weekly_chart", group: "kanal", btn: "Narx dinamikasi", title: "📈 Narx dinamikasi (8 hafta, har hafta boshqa model)", when: "yakshanba 15:00", run: () => publishChartPost("weekly_chart"), preview: true },
   { key: "weekly_topsearch", group: "kanal", btn: "Top qidiruvlar", title: "🔎 Eng ko'p qidirilganlar", when: "yakshanba 18:00", run: () => sendTopSearched() },
@@ -3188,7 +3189,7 @@ bot.callbackQuery(/^ap_t:(\w+)$/, async (ctx) => {
 bot.callbackQuery(/^ap_all:([01])$/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
   const on = ctx.match[1] === "1";
-  try { for (const p of AUTO_POSTS) await setAutoOn(p.key, on); }
+  try { for (const p of AUTO_POSTS) if (p.key !== "top3_classic") await setAutoOn(p.key, on); }
   catch (e) { return ctx.answerCallbackQuery({ text: "Saqlab bo'lmadi, qayta urinib ko'ring.", show_alert: true }).catch(() => {}); }
   await ctx.answerCallbackQuery({ text: on ? "✅ Hammasi yoqildi" : "⛔️ Hammasi o'chirildi" }).catch(() => {});
   await showAutoPosts(ctx);
@@ -7807,6 +7808,7 @@ const CHART_POSTS = {
   weekly_chart: { build: (o) => buildDynamicsPost(o), rotate: true, when: "har yakshanba 15:00, har hafta boshqa model" },
   weekly_numbers: { build: () => buildWeekNumbersPost(), when: "har shanba 17:00" },
   monthly_years: { build: (o) => buildYearsPost(o), rotate: true, when: "har oyning 1-kuni 11:00, har oy boshqa model" },
+  top3: { build: () => buildTop3Post(), when: "har kuni 20:00" },
 };
 async function sendPostToChannel(p) {
   if (p.png) await bot.api.sendPhoto(CHANNEL_ID, new InputFile(p.png, "avtobozor.png"), { caption: p.caption, parse_mode: "HTML", reply_markup: p.kb });
@@ -7898,7 +7900,51 @@ async function sendTopSearched() {
 // =====================================================================
 // 🏆 HAR KUNLIK "TOP-3" AVTO-POST TIZIMI
 // =====================================================================
-async function sendDailyTop3() { 
+// 🏆 Kunlik TOP-3: yangi (rasmli, bozordan eng arzon) yoki eski (matnli) — Avto-xabarlar → «TOP-3 eski ko'rinishda»
+async function sendDailyTop3() {
+  if (isAutoOn("top3_classic")) return sendDailyTop3Classic();
+  return publishChartPost("top3");
+}
+async function buildTop3Post() {
+  const [rows] = await db.execute("SELECT * FROM ads WHERE status = 'active' AND channelMsgId IS NOT NULL AND created_at >= NOW() - INTERVAL 24 HOUR ORDER BY id DESC LIMIT 300");
+  if (!rows.length) return null;
+  const scored = [];
+  for (const ad of rows) {
+    const c = await market.compareAd(ad).catch(() => null);
+    scored.push({ ad, pct: c && c.confident && c.kind === "cheap" ? Math.abs(c.diff) : 0 });
+  }
+  // Avval — bozor narxidan eng ko'p arzonlari; 3 ta bo'lmasa, qolgan joy narxi eng pastlari bilan to'ldiriladi
+  let pick = scored.filter((x) => x.pct >= 3).sort((a, b) => b.pct - a.pct).slice(0, 3);
+  const byMarket = pick.length > 0;
+  if (pick.length < 3) {
+    const used = new Set(pick.map((x) => x.ad.id));
+    const rest = scored.filter((x) => !used.has(x.ad.id) && (parseInt(String(x.ad.price).replace(/\D/g, ""), 10) || 0) >= 300)
+      .sort((a, b) => (parseInt(String(a.ad.price).replace(/\D/g, ""), 10) || 0) - (parseInt(String(b.ad.price).replace(/\D/g, ""), 10) || 0));
+    pick = pick.concat(rest.slice(0, 3 - pick.length).map((x) => ({ ad: x.ad, pct: 0 })));
+  }
+  const tz = new Date(Date.now() + 5 * 3600e3), date = `${tz.getUTCDate()}-${UZ_MONTHS[tz.getUTCMonth()]}`;
+  const items = [];
+  for (const { ad, pct } of pick) {
+    let photo = null;
+    try { const id = String(ad.photoId || "").split(",")[0]; if (id) { const f = await bot.api.getFile(id); photo = await downloadBuffer(`https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${f.file_path}`); } } catch (e) {}
+    items.push({ title: ad.carDetails, specs: [ad.year, kmSp(ad.probeg), ad.transmission].filter((x) => x && x !== "—").join(" · "), price: `${spNum(ad.price)}$`, pct: pct || null, region: ad.region, photo });
+  }
+  const png = await CHART_LIB.renderTop3(sharp, { date, items, todayCount: rows.length, byMarket });
+  const ch = String(CHANNEL_ID).replace("@", ""), medals = ["🥇", "🥈", "🥉"];
+  let caption = `🏆 <b>Kunning eng yaxshi takliflari</b> · ${date}\n\n`;
+  pick.forEach(({ ad, pct }, i) => { caption += `${medals[i]} <a href="https://t.me/${ch}/${ad.channelMsgId}">${escapeHtml(ad.carDetails)}${ad.year ? `, ${escapeHtml(ad.year)}` : ""}</a> — <b>${spNum(ad.price)}$</b>${pct ? ` (−${pct}%)` : ""}\n`; });
+  const others = rows.filter((a) => !pick.some((x) => x.ad.id === a.id));
+  if (others.length) {
+    const names = [...new Set(others.map((a) => modelTagName(a)).filter(Boolean))].slice(0, 6).map(escapeHtml);
+    caption += `\n📋 Bugun yana <b>${others.length} ta</b> yangi e'lon: ${names.join(" · ")}${others.length > names.length ? " va boshqalar" : ""}\n`;
+  }
+  caption += `\n👆 <i>Nomini bosing — e'lon ochiladi</i>`;
+  const kb = new InlineKeyboard();
+  if (WEBAPP_URL) kb.url("🔥 Hammasi ilovada", miniAppLink("deal"));
+  kb.url("➕ Bepul e'lon berish", `https://t.me/${BOT_LINK_USERNAME}`);
+  return { png, caption: caption.slice(0, 1024), kb };
+}
+async function sendDailyTop3Classic() { 
   try {
     const [allAds] = await db.execute(`
       SELECT id, carDetails, price, channelMsgId

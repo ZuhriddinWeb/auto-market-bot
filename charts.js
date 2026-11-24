@@ -341,4 +341,58 @@ function priceBadgeSvg(cw, ch, badge) {
   </svg>`;
 }
 
-module.exports = { createCharts, brandStripSvg, priceBadgeSvg };
+// =====================================================================
+// 🏆 KUNNING ENG YAXSHI 3 TA TAKLIFI (1080×1350): rasmli qatorlar, o'rin belgisi, narx, bozor belgisi, viloyat
+// items: [{ title, specs, price, pct (yoki null), region, photo (Buffer|null) }]
+// =====================================================================
+const TOP_REGION = { "Toshkent sh.": "01", "Toshkent vil.": "10", "Sirdaryo": "20", "Jizzax": "25", "Samarqand": "30", "Farg'ona": "40", "Namangan": "50", "Andijon": "60", "Qashqadaryo": "70", "Surxondaryo": "75", "Buxoro": "80", "Navoiy": "85", "Xorazm": "90", "Qoraqalpog'iston": "95" };
+async function renderTop3(sharp, { date, items, todayCount, byMarket }) {
+  const Wt = 1080, Ht = 1350;
+  const n = items.length, rowH = 224, gap = 22, top0 = 382;
+  let s = `<defs><linearGradient id="tg" x1="0" y1="0" x2="0.7" y2="1"><stop offset="0" stop-color="#0f3f8f"/><stop offset="0.55" stop-color="#1667d9"/><stop offset="1" stop-color="#3f8cf3"/></linearGradient></defs><rect width="${Wt}" height="${Ht}" fill="url(#tg)"/>`;
+  // logotip
+  s += `<rect x="64" y="60" width="54" height="54" rx="15" fill="#fff"/><g transform="translate(73,69) scale(1.5)" fill="none" stroke="#1667d9" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15l1.6-5A2 2 0 0 1 7.5 8.6h9a2 2 0 0 1 1.9 1.4L20 15v3H4z"/><circle cx="7.5" cy="18" r="1.6"/><circle cx="16.5" cy="18" r="1.6"/></g>`;
+  s += `<text x="134" y="100" font-family="${F}" font-size="38" font-weight="800"><tspan fill="#fff">Avto</tspan><tspan fill="#a9ceff">Bozor</tspan></text>`;
+  const dw = textW(date, 26, 700) + 48;
+  s += `<rect x="${Wt - 64 - dw}" y="60" width="${dw}" height="54" rx="27" fill="#fff" fill-opacity="0.16"/>${T(Wt - 64 - dw / 2, 96, date, { size: 26, w: 700, fill: "#fff", a: "middle" })}`;
+  s += T(64, 222, "Kunning eng yaxshi", { size: 70, w: 800, fill: "#fff", ls: -1.5 }) + T(64, 298, `${n} ta taklifi`, { size: 70, w: 800, fill: "#ffd34d", ls: -1.5 });
+  s += T(64, 344, byMarket ? "Bozor narxidan eng ko'p arzon e'lonlar" : "Bugungi eng arzon e'lonlar", { size: 28, w: 500, fill: "#dbe8ff" });
+  const medal = ["#e8a90c", "#8f9bb0", "#b7743a"];
+  const comps = [];
+  items.forEach((it, i) => {
+    const y = top0 + i * (rowH + gap);
+    s += `<rect x="64" y="${y + 6}" width="${Wt - 128}" height="${rowH}" rx="28" fill="#000" opacity="0.12"/><rect x="64" y="${y}" width="${Wt - 128}" height="${rowH}" rx="28" fill="#fff"/>`;
+    if (!it.photo) s += `<rect x="80" y="${y + 22}" width="250" height="180" rx="18" fill="#e3e8ef"/><g transform="translate(169,${y + 76}) scale(3)" fill="none" stroke="#a9b4c4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15l1.6-5A2 2 0 0 1 7.5 8.6h9a2 2 0 0 1 1.9 1.4L20 15v3H4z"/><circle cx="7.5" cy="18" r="1.6"/><circle cx="16.5" cy="18" r="1.6"/></g>`;
+    s += `<circle cx="98" cy="${y + 40}" r="31" fill="${medal[i] || medal[2]}" stroke="#fff" stroke-width="4"/>${T(98, y + 51, i + 1, { size: 30, w: 800, fill: "#fff", a: "middle" })}`;
+    const tx = 352, tw = Wt - 64 - 24 - tx;
+    const tt = fitText(it.title, tw, 36, 26, 800);
+    s += T(tx, y + 58, tt.t, { size: tt.sz, w: 800, fill: C.ink });
+    s += T(tx, y + 98, fitText(it.specs, tw, 24, 18, 400).t, { size: 24, w: 500, fill: C.ink2 });
+    s += T(tx, y + 158, it.price, { size: 46, w: 800, fill: C.ink });
+    if (it.pct) { const px = tx + textW(it.price, 46, 800) + 18, pw = textW(`−${it.pct}% bozordan`, 22, 800) + 32; s += `<rect x="${px}" y="${y + 122}" width="${pw}" height="44" rx="22" fill="${C.dealSoft}"/>${T(px + pw / 2, y + 152, `−${it.pct}% bozordan`, { size: 22, w: 800, fill: C.deal, a: "middle" })}`; }
+    if (it.region) {
+      const code = TOP_REGION[it.region] || "", rw = textW(it.region, 20, 700) + 22, cw = code ? 44 : 0;
+      s += `<g transform="translate(${tx},${y + 178})"><rect width="${cw + rw}" height="32" rx="8" fill="#fff" stroke="${C.ink}" stroke-width="3"/>${code ? `<line x1="${cw}" x2="${cw}" y1="1" y2="31" stroke="${C.ink}" stroke-width="3"/>${T(cw / 2, 23, code, { size: 20, w: 800, fill: C.ink, a: "middle" })}` : ""}${T(cw + 11, 23, it.region, { size: 20, w: 700, fill: C.ink })}</g>`;
+    }
+    if (it.photo) comps.push({ i, y });
+  });
+  const ft = Ht - 56 - 124;
+  s += `<rect x="64" y="${ft}" width="${Wt - 128}" height="124" rx="26" fill="#fff" fill-opacity="0.14"/>`;
+  s += T(96, ft + 56, todayCount ? `Bugun +${todayCount} ta yangi e'lon` : "Kanalda yangi e'lonlar", { size: 34, w: 800, fill: "#fff" }) + T(96, ft + 94, "Hammasi kanalda va ilovada", { size: 24, w: 500, fill: "#dbe8ff" });
+  s += `<rect x="${Wt - 96 - 190}" y="${ft + 27}" width="190" height="70" rx="20" fill="#ffd34d"/>${T(Wt - 96 - 95, ft + 72, "Ko'rish →", { size: 28, w: 800, fill: C.ink, a: "middle" })}`;
+  const base = await sharp(Buffer.from(`<svg width="${Wt}" height="${Ht}" xmlns="http://www.w3.org/2000/svg">${s}</svg>`)).png().toBuffer();
+  const mask = Buffer.from(`<svg width="250" height="180"><rect width="250" height="180" rx="18" fill="#fff"/></svg>`);
+  const layers = [];
+  for (const c of comps) {
+    try {
+      const ph = await sharp(items[c.i].photo).resize(250, 180, { fit: "cover" }).composite([{ input: mask, blend: "dest-in" }]).png().toBuffer();
+      layers.push({ input: ph, left: 80, top: c.y + 22 });
+    } catch (e) { /* rasm buzuq bo'lsa — kulrang joy qoladi */ }
+  }
+  // o'rin belgilari rasm ustida tursin
+  const medals = items.map((_, i) => { const y = top0 + i * (rowH + gap); return `<circle cx="98" cy="${y + 40}" r="31" fill="${medal[i] || medal[2]}" stroke="#fff" stroke-width="4"/>${T(98, y + 51, i + 1, { size: 30, w: 800, fill: "#fff", a: "middle" })}`; }).join("");
+  layers.push({ input: Buffer.from(`<svg width="${Wt}" height="${Ht}" xmlns="http://www.w3.org/2000/svg">${medals}</svg>`), left: 0, top: 0 });
+  return sharp(base).composite(layers).jpeg({ quality: 90 }).toBuffer();
+}
+
+module.exports = { createCharts, brandStripSvg, priceBadgeSvg, renderTop3 };
