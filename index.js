@@ -881,14 +881,14 @@ async function buildChannelCaptionNew(ad, style) {
     if (mk) c += mk.kind === "cheap" ? `🔥 Bozor narxidan <b>${Math.abs(mk.diff)}% arzon</b> <i>(${mk.count} ta o'xshash e'lon)</i>\n` : mk.kind === "market" ? `👍 Bozor narxida <i>(${mk.count} ta o'xshash e'lon)</i>\n` : "";
     c += `\n🛣 ${km} · ⚙️ ${tr} · ⛽ ${fuel}\n🎨 ${escapeHtml(ad.color || "—")} · 💎 ${escapeHtml(ad.paint || "—")}\n`;
     if (extra.length) c += `<blockquote expandable>${extra.join("\n")}</blockquote>`;
-    c += `📞 <code>${phone}</code>\n${tags}${tags ? " · " : ""}🆔 ${ad.id}\n\n⚠️ <i>Mashinani ko'rmasdan oldindan pul o'tkazmang.</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
+    c += `📞 <code>${phone}</code>\n${tags}${tags ? " · " : ""}🆔 ${ad.id}\n\n⚠️ <i>Moshina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   } else {
     const line = "━━━━━━━━━━━━━━";
     c = head + `🚗 <b>${car.toUpperCase()} · ${escapeHtml(ad.year)}</b>\n`;
     c += drop ? `💰 <s>${spNum(ad.old_price)} $</s> <b>${price} $</b> 📉\n` : `💰 <b>${price} $</b>${mk && mk.kind === "cheap" ? `   🔥 <i>bozordan ${Math.abs(mk.diff)}% arzon</i>` : mk && mk.kind === "market" ? "   👍 <i>bozor narxida</i>" : ""}\n`;
     c += `${line}\n🛣 Yurgan: <b>${km}</b>\n⚙️ Karobka: <b>${tr}</b>\n⛽ Yoqilg'i: <b>${fuel}</b>\n🎨 Rangi: <b>${escapeHtml(ad.color || "—")}</b> · 💎 Kraska: <b>${escapeHtml(ad.paint || "—")}</b>\n`;
     if (extra.length) c += extra.join("\n") + "\n";
-    c += `${line}\n📞 <code>${phone}</code>\n📍 ${tags}${tags ? " · " : ""}🆔 ${ad.id}\n⚠️ <i>Oldindan to'lov qilmang!</i> 👉 <a href="${invite}">Obuna bo'lish</a>`;
+    c += `${line}\n📞 <code>${phone}</code>\n📍 ${tags}${tags ? " · " : ""}🆔 ${ad.id}\n⚠️ <i>Moshina savdosiga admin javobgar emas. Oldindan to'lov qilmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   }
   // Telegram: rasm izohi ≤ 1024 belgi — sig'masa, qo'shimcha ma'lumotni qisqartiramiz
   if (captionVisibleLength(c) > 1000 && extra.length) {
