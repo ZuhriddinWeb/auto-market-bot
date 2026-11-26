@@ -910,3 +910,157 @@ button.offer-box { cursor: pointer; }
 .pm-actions { margin-top: 14px; }
 .pm-when { display: flex; gap: 8px; align-items: center; }
 .pm-when .input { flex: 1; min-width: 0; }
+
+/* =====================================================================
+ * 🧭 YANGI ADMIN PANEL — sayt uslubida: yon menyu, yuqori panel, kartalar
+ * Telefonda: ☰ menyu + tablar; katta ekranda (900px+): chapda doimiy menyu
+ * ===================================================================== */
+.ap-side { display: none; }
+.ap-top { display: flex; align-items: center; gap: 10px; margin: -2px 0 10px; min-height: 44px; }
+.ap-burger { flex: none; width: 40px; height: 40px; border-radius: 12px; border: 0; background: var(--surface); color: var(--ink); display: grid; place-items: center; box-shadow: 0 0 0 1px var(--line); cursor: pointer; }
+.ap-burger svg { width: 22px; height: 22px; }
+.ap-crumb { min-width: 0; display: flex; flex-direction: column; line-height: 1.15; }
+.ap-crumb span { font-size: 12px; color: var(--ink-3); font-weight: 600; letter-spacing: .3px; text-transform: uppercase; }
+.ap-crumb b { font: 700 18px/1.2 var(--display); letter-spacing: -.3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-status { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 20px; background: var(--deal-soft); color: var(--deal); }
+.ap-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ap-status.off { background: var(--amber-soft); color: var(--amber); }
+.ap-search { display: none; }
+.ap-tabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px 14px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+.ap-tabs::-webkit-scrollbar { display: none; }
+.ap-tabs button { flex: none; border: 0; background: none; color: var(--ink-2); font: 600 14px var(--font); padding: 9px 10px 10px; border-bottom: 2.5px solid transparent; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.ap-tabs button.on { color: var(--brand); border-color: var(--brand); }
+.ap-tabs b { background: var(--danger); color: #fff; font-size: 11px; border-radius: 10px; padding: 1px 6px; }
+body.admin-mode h1.page { font-size: 22px; }
+
+/* Menyu ro'yxati (yon menyu va ☰ oynasi uchun umumiy) */
+.ap-logo { display: flex; align-items: center; gap: 10px; padding: 6px 10px 18px; color: #fff; }
+.ap-logo i { width: 34px; height: 34px; border-radius: 10px; background: var(--brand); display: grid; place-items: center; }
+.ap-logo i svg { width: 20px; height: 20px; color: #fff; }
+.ap-logo b { font: 700 18px var(--display); letter-spacing: -.3px; }
+.ap-logo b span { color: #8cbcff; }
+.ap-logo em { margin-left: auto; font: 600 11px var(--font); font-style: normal; color: #8b9bb4; text-transform: uppercase; letter-spacing: 1px; }
+.ap-nav { display: flex; flex-direction: column; gap: 2px; }
+.ap-sec { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #64748b; padding: 14px 12px 6px; }
+.ap-nv { display: flex; align-items: center; gap: 11px; width: 100%; border: 0; background: none; color: #cbd5e1; font: 500 14.5px var(--font); text-align: left; padding: 9px 12px; border-radius: 10px; cursor: pointer; }
+.ap-nv svg { width: 19px; height: 19px; flex: none; opacity: .85; }
+.ap-nv span { flex: 1; min-width: 0; }
+.ap-nv b { background: var(--danger); color: #fff; font-size: 11px; border-radius: 10px; padding: 2px 7px; }
+.ap-nv:hover { background: rgba(255,255,255,.06); color: #fff; }
+.ap-nv.on { background: rgba(74,140,245,.2); color: #fff; }
+.ap-nv.on svg { opacity: 1; color: #8cbcff; }
+.ap-exit { margin-top: 14px; color: #8b9bb4; }
+.ap-exit svg { transform: rotate(180deg); }
+.ap-drawer-back { position: fixed; inset: 0; z-index: 300; background: var(--scrim); animation: fadeIn .15s; }
+.ap-drawer { position: absolute; top: 0; bottom: 0; left: 0; width: min(300px, 84vw); background: #0f1a2b; padding: 18px 12px calc(18px + env(safe-area-inset-bottom)); overflow-y: auto; box-shadow: 8px 0 30px rgba(0,0,0,.3); animation: apSlide .2s ease-out; }
+@keyframes apSlide { from { transform: translateX(-100%); } to { transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Kartalar va jadval */
+.ap-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.ap-kpi { text-align: left; border: 0; font: inherit; color: var(--ink); background: var(--surface); border-radius: 16px; padding: 13px 14px; box-shadow: 0 0 0 1px var(--line); display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+button.ap-kpi { cursor: pointer; }
+.ap-kpi .l { color: var(--ink-2); font-size: 13px; font-weight: 500; }
+.ap-kpi b { font: 700 24px/1.15 var(--display); letter-spacing: -.5px; }
+.ap-kpi .d { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.ap-kpi .d.up { color: var(--deal); } .ap-kpi .d.warn { color: var(--amber); } .ap-kpi .d.down { color: var(--danger); }
+.ap-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.ap-card { background: var(--surface); border-radius: 16px; box-shadow: 0 0 0 1px var(--line); padding: 14px 16px; min-width: 0; }
+.ap-card > h3 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; margin: 0 0 10px; }
+.ap-card > h3 svg { width: 18px; height: 18px; color: var(--brand); flex: none; }
+.ap-card > h3 span { flex: 1; min-width: 0; }
+.ap-more { border: 0; background: none; color: var(--brand); font: 600 13px var(--font); cursor: pointer; padding: 4px 0; flex: none; }
+.ap-card .help { margin: 0 0 10px; }
+.ap-empty { color: var(--ink-3); font-size: 14px; margin: 6px 0; }
+.ap-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.ap-row:first-of-type { border-top: 0; padding-top: 2px; }
+.ap-th { width: 64px; height: 48px; border-radius: 9px; object-fit: cover; background: var(--surface-2); flex: none; }
+.ap-rt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ap-rt b { font-weight: 700; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-rt small { color: var(--ink-2); font-size: 12.5px; }
+.ap-acts { display: flex; gap: 6px; flex: none; }
+.ap-ok, .ap-no { width: 38px; height: 36px; border: 0; border-radius: 10px; display: grid; place-items: center; cursor: pointer; font: 700 15px var(--font); }
+.ap-ok { background: var(--brand); color: #fff; } .ap-ok svg { width: 18px; height: 18px; stroke-width: 3; }
+.ap-no { background: rgba(217,45,58,.12); color: var(--danger); }
+.ap-ok:disabled { opacity: .5; }
+.ap-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.ap-chip { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 12px; white-space: nowrap; }
+.ap-chip.ok { background: var(--deal-soft); color: var(--deal); }
+.ap-chip.warn { background: var(--amber-soft); color: var(--amber); }
+.ap-chip.bad { background: rgba(217,45,58,.12); color: var(--danger); }
+.a-card .ap-chips { margin: 2px 0 6px; }
+.ap-bars { display: flex; align-items: flex-end; gap: 5px; height: 120px; border-bottom: 1px solid var(--line); }
+.ap-bars i { flex: 1; position: relative; background: color-mix(in srgb, var(--brand) 35%, transparent); border-radius: 4px 4px 0 0; min-width: 0; }
+.ap-bars i.h { background: var(--brand); }
+.ap-bars i em { position: absolute; left: 50%; bottom: calc(100% + 3px); transform: translateX(-50%); font: 600 10.5px var(--font); font-style: normal; color: var(--ink-3); opacity: 0; transition: opacity .15s; white-space: nowrap; }
+.ap-bars i:hover em, .ap-bars i.h em { opacity: 1; }
+.ap-ax { display: flex; gap: 5px; margin-top: 5px; }
+.ap-ax span { flex: 1; text-align: center; color: var(--ink-3); font-size: 10.5px; min-width: 0; white-space: nowrap; }
+.ap-wk { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin-top: 12px; }
+.ap-wk b { font: 700 19px var(--display); margin-right: 4px; }
+.ap-wk small { color: var(--ink-2); font-size: 12.5px; }
+.ap-tl { display: flex; align-items: center; gap: 12px; padding: 7px 0; font-size: 14px; }
+.ap-tl time { font-weight: 700; width: 44px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.ap-tl i { width: 9px; height: 9px; border-radius: 50%; background: var(--brand); flex: none; }
+.ap-tl.off { color: var(--ink-3); } .ap-tl.off i { background: var(--line); }
+.ap-tg { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; font-size: 14px; width: 100%; border: 0; background: none; color: var(--ink); font-family: inherit; text-align: left; }
+.ap-tg.link { cursor: pointer; } .ap-tg.link b { color: var(--brand); }
+.ap-tg b.okc { color: var(--deal); font-size: 13px; } .ap-tg b.noc { color: var(--ink-3); font-size: 13px; font-weight: 600; }
+.switch.sm { width: 42px; height: 25px; }
+.switch.sm .track { border-radius: 13px; }
+.switch.sm .track::after { width: 21px; height: 21px; }
+.switch.sm input:checked + .track::after { transform: translateX(17px); }
+.ap-fd { display: block; width: 100%; text-align: left; border: 0; border-top: 1px solid var(--line); background: none; color: var(--ink-2); font: 400 13.5px/1.4 var(--font); padding: 8px 0; cursor: pointer; }
+.ap-fd:first-of-type { border-top: 0; }
+.ap-fd b { color: var(--ink); font-weight: 600; }
+.ap-fd small { color: var(--ink-3); }
+.ap-qa { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.ap-qa button { border: 0; background: var(--surface-2); color: var(--ink); border-radius: 12px; padding: 12px 6px; font: 600 12.5px var(--font); display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
+.ap-qa em { font-style: normal; font-size: 20px; }
+
+/* Imkoniyatlar sahifasi */
+.ap-ftools { display: grid; gap: 10px; margin-bottom: 12px; }
+.ap-ftools .search-box { margin: 0; }
+.ap-fsum { font-size: 13px; color: var(--ink-2); } .ap-fsum b { color: var(--ink); }
+.ap-frow { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }
+.ap-fgroup .help + .ap-frow { border-top: 0; }
+.ap-ftxt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ap-ftxt b { font-size: 14.5px; font-weight: 700; }
+.ap-ftxt span { font-size: 13px; color: var(--ink-2); line-height: 1.35; }
+.ap-ftxt small { font-size: 12px; color: var(--ink-3); }
+.ap-frow:not(.on) .ap-ftxt b { color: var(--ink-2); }
+.ap-fact { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; max-width: 52%; }
+.ap-mini { border: 0; background: var(--surface-2); color: var(--ink); border-radius: 9px; padding: 6px 9px; font: 600 12.5px var(--font); display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.ap-mini svg { width: 14px; height: 14px; }
+.ap-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.ap-btns .btn { flex: 1 1 180px; }
+.ap-qlist { display: grid; gap: 6px; margin-top: 10px; font-size: 13.5px; }
+.ap-qlist div { display: flex; justify-content: space-between; gap: 8px; } .ap-qlist span { color: var(--ink-2); flex: none; }
+.ap-reg { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 0; font-size: 13.5px; }
+.ap-reg .input { padding: 8px 10px; font-size: 14px; min-height: 0; }
+@media (max-width: 420px) { .ap-frow { flex-wrap: wrap; } .ap-fact { max-width: none; width: 100%; } .ap-reg { grid-template-columns: 1fr auto; } .ap-reg > span { grid-column: 1 / -1; font-weight: 600; } }
+
+/* 900px+ — haqiqiy sayt ko'rinishi: chapda menyu, kontent keng */
+@media (min-width: 900px) {
+  body.admin-mode { max-width: none; padding-left: 256px; }
+  body.admin-mode .ap-side { display: flex; flex-direction: column; position: fixed; top: 0; bottom: 0; left: 0; width: 256px; background: #0f1a2b; padding: 20px 12px; overflow-y: auto; z-index: 30; }
+  body.admin-mode #app { max-width: 1240px; margin: 0 auto; padding: 0 28px 40px; }
+  body.admin-mode .tabbar { display: none; }
+  body.admin-mode.has-tabbar #app { padding-bottom: 40px; }
+  body.admin-mode .ap-burger, body.admin-mode .ap-tabs { display: none; }
+  body.admin-mode .ap-top { margin: 0 -28px 20px; padding: 14px 28px; background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20; }
+  body.admin-mode .ap-crumb b { font-size: 21px; }
+  body.admin-mode .ap-status { margin-left: 14px; }
+  body.admin-mode .ap-search { display: flex; align-items: center; gap: 8px; margin-left: auto; background: var(--surface-2); border-radius: 10px; padding: 0 12px; width: 320px; color: var(--ink-3); }
+  body.admin-mode .ap-search svg { width: 17px; height: 17px; flex: none; }
+  .ap-q { border: 0; background: none; outline: none; font: 400 14px var(--font); color: var(--ink); padding: 10px 0; width: 100%; }
+  .ap-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .ap-kpi { padding: 16px 18px; } .ap-kpi b { font-size: 28px; }
+  .ap-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+  .ap-card { padding: 16px 18px; }
+  .ap-card.w2 { grid-column: span 2; }
+  .ap-wk { grid-template-columns: repeat(4, auto); justify-content: start; gap: 24px; }
+  body.admin-mode .a-card, body.admin-mode .list { max-width: 900px; }
+}
+@media (min-width: 900px) and (max-width: 1180px) { .ap-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 899px) { .ap-rt b { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; } }

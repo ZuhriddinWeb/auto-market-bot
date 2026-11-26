@@ -458,7 +458,7 @@ async function loadBotSettings() {
 }
 // Avto-xabar yoqilganmi? (sukut bo'yicha — yoqilgan, ya'ni avvalgidek ishlaydi)
 // Sukut bo'yicha O'CHIQ turadiganlari (admin o'zi yoqmaguncha): kanal postidagi qo'shimcha tugmalar
-const AUTO_DEFAULT_OFF = new Set(["share_btn", "btn_admin", "views_nudge", "top3_classic"]);
+const AUTO_DEFAULT_OFF = new Set(["share_btn", "btn_admin", "views_nudge", "top3_classic", ...require("./kanal").FEATURES.filter((f) => f.key !== "adm_warn").map((f) => f.key)]);
 function isAutoOn(key) {
   const v = botSettings.get(`auto:${key}`);
   if (v === undefined) return !AUTO_DEFAULT_OFF.has(key);
@@ -899,7 +899,8 @@ async function buildChannelCaptionNew(ad, style) {
       ? `<b>${car}, ${escapeHtml(ad.year)}</b>\n💰 <s>${spNum(ad.old_price)}$</s> <b>${price}$</b> 📉 −${spNum((parseInt(ad.old_price) || 0) - (parseInt(ad.price) || 0))}$\n`
       : `<b>${car}, ${escapeHtml(ad.year)} · ${price}$</b>\n`);
     if (mk) c += mk.kind === "cheap" ? `🔥 Bozor narxidan <b>${Math.abs(mk.diff)}% arzon</b> <i>(${mk.count} ta o'xshash e'lon)</i>\n` : mk.kind === "market" ? `👍 Bozor narxida <i>(${mk.count} ta o'xshash e'lon)</i>\n` : "";
-    c += `<pre>${escapeHtml(table)}</pre>`;
+    // <pre> ostida Telegram «Копировать код» tugmasini chiqaradi — shuning uchun har qator alohida <code>, hammasi blok ichida
+    c += `<blockquote>${table.split("\n").map((l) => `<code>${escapeHtml(l)}</code>`).join("\n")}</blockquote>`;
     if (extra.length) c += `<blockquote expandable>${extra.join("\n")}</blockquote>`;
     c += `📞 <code>${phone}</code>\n${tags ? tags + "\n" : ""}${idLine}\n\n⚠️ <i>Mashina savdosiga admin javobgar emas. Mashinani ko'rmasdan oldindan pul o'tkazmang!</i>\n👉 <a href="${invite}">Kanalga obuna bo'lish</a>`;
   } else if (style === "1") {
@@ -1324,8 +1325,12 @@ async function flushUserLog(entry) {
 }
 
 // from — ctx.from yoki Mini App foydalanuvchisi ({ id, first_name, username })
+// 🕒 Admin paneldagi «So'nggi harakatlar» uchun (xotirada, oxirgi 40 ta)
+const recentActions = [];
 function logUserAction(from, action) {
   if (!from || !from.id || Number(from.id) === ADMIN_ID || !action) return;
+  recentActions.unshift({ id: Number(from.id), name: String(from.first_name || from.username || "Foydalanuvchi").slice(0, 40), action: String(action).replace(/<[^>]*>/g, "").slice(0, 200), at: Date.now() });
+  if (recentActions.length > 40) recentActions.length = 40;
   const now = Date.now();
   let entry = userLogs.get(from.id);
   if (!entry) {
@@ -1430,6 +1435,8 @@ bot.use(async (ctx, next) => {
 
 // 🎨 Post konstruktori: admin yozgan matn/rasm
 bot.use((ctx, next) => pmInputMw(ctx, next));
+// 💬 Muhokama guruhi (izohlar) va kanal DM (pullik takliflar) — kanal.js
+bot.use((ctx, next) => (kanal ? kanal.mw(ctx, next) : next()));
 
 // 3. ЖАРАЁНЛАРНИ УЛАШ
 bot.use(conversations());
@@ -1997,7 +2004,10 @@ async function submitNewAdToAdmin({ ad, userId, firstName, source = "bot", recei
   }
 
   // Rasm izohi 1024 belgidan oshmasligi kerak — oshsa faqat admin ko'radigan matnda "Tarixi" ni qisqartiramiz
-  const makeCaption = (a) => `🆔 <b>ID: ${adId}</b>\n\n${buildAdCaption(a, priceBadge)}\n\n👤 Foydalanuvchi: ${userLink}${countText}${urgentText}${sourceText}${paidText}`;
+  // 🛡 Avto-ogohlantirishlar (narx juda past, rasm takrori, bloklangan raqam)
+  let warnTextAdm = "";
+  try { const w = kanal.warnText(await kanal.adWarnings({ id: adId, userId, carDetails: fullCarName, model_id: ad.model_id, year: ad.year, price: ad.price, transmission: ad.trans, photoId: ad.photos.join(","), phone: ad.phone })); if (w) warnTextAdm = `\n\n⚠️ <b>Diqqat:</b>\n${w}`; } catch (e) {}
+  const makeCaption = (a) => `🆔 <b>ID: ${adId}</b>\n\n${buildAdCaption(a, priceBadge)}\n\n👤 Foydalanuvchi: ${userLink}${countText}${urgentText}${sourceText}${paidText}${warnTextAdm}`;
   let adminCaption = makeCaption(ad);
   if (adminCaption.length > 1000 && ad.history && ad.history !== "Ko'rsatilmagan") {
     const keep = Math.max(40, ad.history.length - (adminCaption.length - 1000) - 1);
@@ -2811,7 +2821,13 @@ const AUTO_GROUPS = [
   ["voqea", "📢 <b>Kanalga — voqea bo'lganda</b>"],
   ["post", "📝 <b>E'lon postining o'zida</b>"],
   ["sotuvchi", "👤 <b>Sotuvchilarga — shaxsiy eslatma</b>"],
+  ["yangi", "🆕 <b>Kanal — yangi postlar</b>"],
+  ["tizim", "⚙️ <b>Kanal tizimi va moderatsiya</b>"],
 ];
+// Bot xabari 4096 belgidan oshmasligi uchun bo'limlar sahifalarga bo'lingan
+const AUTO_PAGES = [["kanal", "voqea"], ["post", "sotuvchi"], ["yangi", "tizim"]];
+const AUTO_PAGE_NAMES = ["📢 Kanal", "📝 Post · 👤 Sotuvchi", "🆕 Yangi · ⚙️ Tizim"];
+let autoPage = 0;
 function autoPostsView() {
   let text = "⏰ <b>AVTO-XABARLAR</b>\n\nBot o'zi yuboradigan xabarlar. Tugmani bossangiz — yoqiladi yoki o'chadi. " +
     "Sozlama bazada saqlanadi, bot qayta ishga tushsa ham o'zgarmaydi.\n";
@@ -2819,18 +2835,24 @@ function autoPostsView() {
     text += `\n⚠️ <b>Kanalda ${channelVoteWarning} reaksiyasi yoqilmagan!</b> Kanal → ✏️ Tahrirlash → Reaksiyalar bo'limida yoqing, aks holda odamlar baho bera olmaydi.\n`;
   }
   const kb = new InlineKeyboard();
+  AUTO_PAGE_NAMES.forEach((n, i) => kb.text(`${i === autoPage ? "• " : ""}${n}`, `ap_pg:${i}`));
+  kb.row();
   // 🎨 E'lon posti ko'rinishi
   const ps = postStyle();
-  text += `\n🎨 <b>E'lon posti ko'rinishi:</b> ${POST_STYLES[ps]}\n<i>Yangi e'lonlar shu ko'rinishda chiqadi. Kanaldagi faol e'lonlarni ham o'tkazish — «🔄 Faol e'lonlarga qo'llash».</i>\n`;
-  Object.keys(POST_STYLES).forEach((k, i) => { kb.text(`${k === ps ? "✅ " : ""}${POST_STYLES[k]}`, `ps_set:${k}`); if (i === 2) kb.row(); });
-  kb.row().text("👁 Namuna", "ps_prev").text(postRestyleJob ? "⏹ To'xtatish" : "🔄 Faol e'lonlarga qo'llash", postRestyleJob ? "ps_stop" : "ps_bulk").row();
-  for (const [g, title] of AUTO_GROUPS) {
+  if (autoPage === 1) {
+    text += `\n🎨 <b>E'lon posti ko'rinishi:</b> ${POST_STYLES[ps]}\n<i>Yangi e'lonlar shu ko'rinishda chiqadi. Kanaldagi faol e'lonlarni ham o'tkazish — «🔄 Faol e'lonlarga qo'llash».</i>\n`;
+    Object.keys(POST_STYLES).forEach((k, i) => { kb.text(`${k === ps ? "✅ " : ""}${POST_STYLES[k]}`, `ps_set:${k}`); if (i === 2) kb.row(); });
+    kb.row().text("👁 Namuna", "ps_prev").text(postRestyleJob ? "⏹ To'xtatish" : "🔄 Faol e'lonlarga qo'llash", postRestyleJob ? "ps_stop" : "ps_bulk").row();
+  }
+  if (autoPage === 2) text += `\n<i>⏱ Navbat va oraliq: /navbat · 🗺 Viloyat kanallari: /viloyat</i>\n`;
+  for (const [g, title] of AUTO_GROUPS.filter(([g]) => AUTO_PAGES[autoPage].includes(g))) {
     text += `\n${title}\n`;
     for (const p of AUTO_POSTS.filter((x) => x.group === g)) {
       const on = isAutoOn(p.key);
       text += `${on ? "✅" : "⛔️"} ${p.title} — <i>${p.when}</i>\n`;
       kb.text(`${on ? "✅" : "⛔️"} ${p.btn}`, `ap_t:${p.key}`);
       if (p.preview) kb.text("👁", `ap_prev:${p.key}`);
+      if (p.kprev) kb.text("👁", `kn_prev:${p.key}`);
       if (p.run) kb.text("▶️ Hozir", `ap_run:${p.key}`);
       kb.row();
     }
@@ -2851,6 +2873,29 @@ async function showAutoPosts(ctx) {
 // Shablon → rang → sarlavha → ... → post matni → tugmalar → ko'rish → hozir yoki belgilangan vaqtda yuborish.
 // =====================================================================
 const PM = require("./postmaker");
+// =====================================================================
+// 📢 KANAL: yangi imkoniyatlar (kanal.js) — har biri «⏰ Avto-xabarlar» → «🆕 Yangi · ⚙️ Tizim» da yoqiladi
+// =====================================================================
+const kanal = require("./kanal").createKanal({
+  db, bot, CHANNEL_ID, CHANNEL_USER, ADMIN_ID, isAutoOn, market, formatNum, escapeHtml, InlineKeyboard, InputFile, sharp, PM,
+  getSetting: (k) => botSettings.get(k), setSetting: (k, v) => setBotSetting(k, v),
+  WEBAPP_URL, BOT_LINK_USERNAME, miniAppLink: (p) => miniAppLink(p), hashTag, modelTagName: (a) => modelTagName(a), postStyle: () => postStyle(),
+  buildTop3Post: () => buildTop3Post(), publishApprovedAd: (id) => publishApprovedAd(id),
+  fileBuffer: async (fid) => { const f = await bot.api.getFile(fid); return downloadBuffer(`https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${f.file_path}`); },
+});
+for (const f of kanal.FEATURES) AUTO_POSTS.push({ ...f, ...(f.runnable ? { run: () => kanal.runNow(f.key), kprev: ["digest", "toc", "tips", "story"].includes(f.key) } : {}) });
+// Admin panel «Bugun kanalda» uchun — eski jadval (runScheduledPosts bilan bir xil vaqtlar)
+const BASE_TIMELINE = [
+  { time: "10:00", key: "weekly_analytics", title: "Haftalik hisobot", days: [0] },
+  { time: "11:00", key: "monthly_years", title: "Yil bo'yicha narx", monthDay: 1 },
+  { time: "12:00", key: "remind_new", title: "Sotuvchilarga eslatmalar" },
+  { time: "13:00", key: "sellcall13", title: "«E'lon bering»" },
+  { time: "15:00", key: "weekly_chart", title: "Narx dinamikasi", days: [0] },
+  { time: "17:00", key: "weekly_numbers", title: "Hafta raqamlarda", days: [6] },
+  { time: "18:00", key: "weekly_topsearch", title: "Top qidiruvlar", days: [0] },
+  { time: "19:00", key: "sellcall19", title: "«E'lon bering»" },
+  { time: "20:00", key: "top3", title: "Kunning TOP-3" },
+];
 const pmLinks = () => ({ bot: `https://t.me/${BOT_LINK_USERNAME}`, app: WEBAPP_URL ? miniAppLink("") : null, channel: inviteLink(), deal: WEBAPP_URL ? miniAppLink("deal") : null });
 const pmKeyboard = (spec) => { const kb = new InlineKeyboard(); for (const row of PM.buildButtons(spec, pmLinks())) { row.forEach(([t, u]) => kb.url(t, u)); kb.row(); } return kb; };
 async function pmImage(rec) {
@@ -3178,6 +3223,12 @@ bot.callbackQuery("admin_autoposts", async (ctx) => {
   await checkChannelReactions(); // 🔥 👍 🤔 kanalda yoqilganini tekshiramiz
   await showAutoPosts(ctx);
 });
+bot.callbackQuery(/^ap_pg:([0-2])$/, async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
+  autoPage = Number(ctx.match[1]);
+  await ctx.answerCallbackQuery().catch(() => {});
+  await showAutoPosts(ctx);
+});
 bot.callbackQuery(/^ap_t:(\w+)$/, async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery().catch(() => {});
   const p = AUTO_POSTS.find((x) => x.key === ctx.match[1]);
@@ -3212,7 +3263,8 @@ bot.callbackQuery(/^ap_run:(\w+)$/, async (ctx) => {
   const p = AUTO_POSTS.find((x) => x.key === ctx.match[1] && x.run);
   if (!p) return ctx.answerCallbackQuery({ text: "Bu xabarni qo'lda yuborib bo'lmaydi." }).catch(() => {});
   await ctx.answerCallbackQuery({ text: "⏳ Kanalga yuborilmoqda..." }).catch(() => {});
-  await p.run();
+  const r = await p.run();
+  if (r && r.ok === false) return ctx.reply(`❗️ <b>${p.title}</b> — chiqmadi: ${escapeHtml(r.error || "")}`, { parse_mode: "HTML" });
   await ctx.reply(`✅ <b>${p.title}</b> — bajarildi, kanalni tekshiring.\n<i>Mos ma'lumot bo'lmasa (masalan, oxirgi 24 soatda e'lon yo'q), post chiqmaydi.</i>`, { parse_mode: "HTML" });
 });
 // =====================================================================
@@ -4459,6 +4511,7 @@ bot.callbackQuery("admin_pending", async (ctx) => {
       if (ad.history && ad.history !== "Ko'rsatilmagan") caption += `🛠 Tarixi: ${ad.history}\n`;
       if (ad.barter && ad.barter !== "Yo'q") caption += `🔄 Barter: ${ad.barter}\n`;
       caption += `💰 Narxi:${formatNum(ad.price)}$\n☎️ +${ad.phone}\n🚩 #${ad.region.replace(/\s+/g, "_")}\n\n👤 Foydalanuvchi: <a href="tg://user?id=${ad.userId}">Profil</a>`;
+      try { const w = kanal.warnText(await kanal.adWarnings(ad)); if (w) caption += `\n\n⚠️ <b>Diqqat:</b>\n${w}`; } catch (e) {}
 
       const adminKb = new InlineKeyboard()
       .text("✅ Qabul qilish", `approve:${ad.id}`)
@@ -6096,96 +6149,84 @@ bot.callbackQuery(/^dealer_reject:(\d+)/, async (ctx) => {
 /**
  * ✅ АДМИН ТАСДИҚЛАШИ (Каналга юбориш)
  */
+// ✅ Tasdiqlangan e'lonni kanalga chiqarish (admin tugmasi va ⏱ navbat — ikkalasi shu funksiyadan foydalanadi)
+async function publishApprovedAd(adOrId) {
+  const adId = typeof adOrId === "object" ? adOrId.id : adOrId;
+  const [[ad]] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
+  if (!ad || ad.status !== "pending") return { ok: false, error: "E'lon allaqachon ko'rib chiqilgan" };
+  const photos = ad.photoId.split(",");
+  const photoUrls = await Promise.all(
+    photos.map(async (id) => {
+      const file = await bot.api.getFile(id);
+      return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+    })
+  );
+  const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year, ad);
+  const collagePath = await createCollage(photoUrls, badgeInfo, lookFor({ ...ad, status: "active" }));
+  // Matn — hozirgi ko'rinish sozlamasi bo'yicha (Avto-xabarlar → «E'lon posti ko'rinishi»)
+  const caption = await buildChannelCaption({ ...ad, status: "active" });
+  const channelMarkup = AD_CHANNEL_MARKUP(ad.id); // ilova tugmasi ham shu yerda
+  try {
+    const msg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
+      caption: caption, reply_markup: channelMarkup, parse_mode: "HTML",
+    });
+    kanal.markPosted();
+    console.log(`✅ YANGI E'LON KANALGA TUSHDI! Kanal: ${CHANNEL_ID}, Xabar ID: ${msg.message_id}`);
+    await addShareButton(ad.id, msg.message_id); // ↗️ ulashish tugmasi uchun post ID si kerak edi
+    await savePostLook({ ...ad, status: "active" });
+
+    let vidMsg = null;
+    if (ad.videoId) {
+      try { vidMsg = await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: msg.message_id }); }
+      catch (vidErr) { console.error("Videoni kanalga yuborishda xatolik:", vidErr); }
+    }
+    // 2-KANALGA HAM NUSXALASH
+    let secondMsgId = null;
+    try {
+      const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID;
+      if (SECOND_CHANNEL_ID) {
+        const secondMsg = await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, msg.message_id, { reply_markup: channelMarkup });
+        secondMsgId = secondMsg.message_id;
+        if (vidMsg) await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, vidMsg.message_id, { reply_to_message_id: secondMsgId });
+      }
+    } catch (err) {
+      console.error("2-kanalga nusxalashda xato yuz berdi:", err);
+    }
+    await db.execute("UPDATE ads SET status='active', channelMsgId=?, secondChannelMsgId=?, posted_at = COALESCE(posted_at, NOW()) WHERE id=?", [msg.message_id, secondMsgId, adId]);
+    if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
+    await kanal.copyRegional(ad, msg.message_id, channelMarkup); // 🗺 viloyat kanali (yoqilgan bo'lsa)
+    try {
+      await bot.api.sendMessage(ad.userId, `🎉 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz kanalga joylandi.\n\n💡 <b>Eslatma:</b> Agar mashinangiz sotilsa, pastdagi <b>«📂 Mening e'lonlarim»</b> bo'limiga kirib <b>«Sotildi»</b> deb belgilab qo'yishni unutmang. Shuningdek, o'sha yerdan e'lon narxini pasaytirishingiz ham mumkin!${voteHintForSeller()}\n\nE'loningiz: ${channelPostLink(msg.message_id)}`, { parse_mode: "HTML", reply_markup: mainMenu });
+    } catch (e) {
+      console.log(`⚠️ ${ad.userId} ID egasi botni blok qilgani sababli xabar bormadi.`);
+    }
+    notifyAlertsForAd(ad, msg.message_id); // 🔔 mos obunachilarga (tungi sokinlik bilan)
+    return { ok: true, msgId: msg.message_id };
+  } catch (e) {
+    console.error("Kanalga yuborishda xatolik:", e);
+    if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
+    return { ok: false, error: e.description || e.message };
+  }
+}
 bot.callbackQuery(/^approve:(\d+)/, async (ctx) => {
   const adId = ctx.match[1];
   const [rows] = await db.execute("SELECT * FROM ads WHERE id = ?", [adId]);
   const ad = rows[0];
-
-  if (ad && ad.status === "pending") {
-        // E'lon egasi dilermi tekshiramiz
-       const [[dealerRow]] = await db.execute("SELECT is_dealer, dealer_name, dealer_paused FROM users WHERE id = ?", [ad.userId]);
-    const dealerBadge = (dealerRow && dealerRow.is_dealer === 1 && dealerRow.dealer_paused !== 1)
-      ? `✅ <b>Ishonchli sotuvchi: ${dealerRow.dealer_name}</b>\n\n`
-      : "";
-    const photos = ad.photoId.split(",");
-    const photoUrls = await Promise.all(
-      photos.map(async (id) => {
-        const file = await bot.api.getFile(id);
-        return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
-      })
-    );
-        const badgeInfo = await getPriceBadgeForImage(ad.carDetails, ad.price, ad.year, ad);
-    const collagePath = await createCollage(photoUrls, badgeInfo, lookFor({ ...ad, status: "active" }));
-
-    // Matn — hozirgi ko'rinish sozlamasi bo'yicha (Avto-xabarlar → «E'lon posti ko'rinishi»)
-    let caption = await buildChannelCaption({ ...ad, status: "active" });
-
-    const channelMarkup = AD_CHANNEL_MARKUP(ad.id); // ilova tugmasi ham shu yerda
-      // .url("📢 KANALIMIZ", "https://t.me/engarzonidamoshina");
-
-    try {
-      const msg = await bot.api.sendPhoto(CHANNEL_ID, new InputFile(collagePath), {
-        caption: caption, reply_markup: channelMarkup, parse_mode: "HTML",
-      });
-
-      console.log(`✅ YANGI E'LON KANALGA TUSHDI! Kanal: ${CHANNEL_ID}, Xabar ID: ${msg.message_id}`);
-      await addShareButton(ad.id, msg.message_id); // ↗️ ulashish tugmasi uchun post ID si kerak edi
-      await savePostLook({ ...ad, status: "active" });
-
-      let vidMsg = null; // Video uchun maxsus o'zgaruvchi
-      if (ad.videoId) {
-        try {
-          vidMsg = await bot.api.sendVideo(CHANNEL_ID, ad.videoId, { reply_to_message_id: msg.message_id });
-        } catch (vidErr) {
-          console.error("Videoni kanalga yuborishda xatolik:", vidErr);
-        }
-      }
-
-      // ================= YANGI: 2-KANALGA HAM NUSXALASH =================
-      let secondMsgId = null; // 2-kanal ID sini saqlash uchun
-      try {
-        const SECOND_CHANNEL_ID = process.env.SECOND_CHANNEL_ID; 
-        
-        if (SECOND_CHANNEL_ID) { 
-          const secondMsg = await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, msg.message_id, {
-            reply_markup: channelMarkup
-          });
-          secondMsgId = secondMsg.message_id; // <-- ID ni ushlab oldik!
-          
-          if (vidMsg) {
-            await bot.api.copyMessage(SECOND_CHANNEL_ID, CHANNEL_ID, vidMsg.message_id, {
-              reply_to_message_id: secondMsgId
-            });
-          }
-        }
-      } catch (err) {
-        console.error("2-kanalga nusxalashda xato yuz berdi:", err);
-      }
-      // ==================================================================
-
-      // MUHIM: Endi ikkala kanal ID si ham bazaga saqlanadi
-      await db.execute("UPDATE ads SET status='active', channelMsgId=?, secondChannelMsgId=?, posted_at = COALESCE(posted_at, NOW()) WHERE id=?", [msg.message_id, secondMsgId, adId]);
-      
-      if (fs.existsSync(collagePath)) fs.unlinkSync(collagePath);
-      
-      await ctx.editMessageCaption({ caption: "✅ Kanalga joylandi!", parse_mode: "HTML", reply_markup: new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending") });
-      
-      // YANGI: Agar uzer botni blok qilib qo'ygan bo'lsa, dastur qulab tushmasligi uchun himoya (try-catch)
-      try {
-          await bot.api.sendMessage(ad.userId, `🎉 <b>Tabriklaymiz!</b>\n\nSizning <b>${ad.carDetails}</b> e'loningiz kanalga joylandi.\n\n💡 <b>Eslatma:</b> Agar mashinangiz sotilsa, pastdagi <b>«📂 Mening e'lonlarim»</b> bo'limiga kirib <b>«Sotildi»</b> deb belgilab qo'yishni unutmang. Shuningdek, o'sha yerdan e'lon narxini pasaytirishingiz ham mumkin!${voteHintForSeller()}\n\nE'loningiz: ${channelPostLink(msg.message_id)}`, { parse_mode: "HTML", reply_markup: mainMenu });
-      } catch (e) {
-        console.log(`⚠️ ${ad.userId} ID egasi botni blok qilgani sababli xabar bormadi.`);
-      }
-      
-      notifyAlertsForAd(ad, msg.message_id); // 🔔 mos obunachilarga (tungi sokinlik bilan)
-      
-    } catch (e) {
-      console.error("Kanalga yuborishda xatolik:", e);
-      await ctx.reply("Xatolik: Kanalga yuborib bo'lmadi. Bot kanalda admin ekanligini tekshiring.");
+  if (!ad || ad.status !== "pending") return ctx.answerCallbackQuery("Bu e'lon allaqachon ko'rib chiqilgan.").catch(() => {});
+  const nextKb = new InlineKeyboard().text("➡️ Keyingisini ko'rish", "admin_pending");
+  // ⏱ Postlarni tekis tarqatish yoqilgan bo'lsa — navbatga
+  if (await kanal.shouldQueue()) {
+    const q = await kanal.queueAd(ad);
+    if (q) {
+      await ctx.editMessageCaption({ caption: `⏱ Navbatga qo'yildi — kanalga taxminan <b>${q.eta}</b> da chiqadi (navbatda ${q.pos}-o'rin).\n<i>Navbat: /navbat</i>`, parse_mode: "HTML", reply_markup: nextKb }).catch(() => {});
+      await bot.api.sendMessage(ad.userId, `✅ <b>E'loningiz tasdiqlandi!</b>\n\n<b>${ad.carDetails}</b> kanalga taxminan <b>${q.eta}</b> da chiqadi — e'lonlar navbat bilan joylanadi, shunda har biri ko'proq ko'riladi.`, { parse_mode: "HTML" }).catch(() => {});
+      return;
     }
-  } else {
-     await ctx.answerCallbackQuery("Bu e'lon allaqachon ko'rib chiqilgan.");
   }
+  const r = await publishApprovedAd(ad);
+  if (r.ok) await ctx.editMessageCaption({ caption: "✅ Kanalga joylandi!", parse_mode: "HTML", reply_markup: nextKb });
+  else if (/ko'rib chiqilgan/.test(r.error)) await ctx.answerCallbackQuery("Bu e'lon allaqachon ko'rib chiqilgan.").catch(() => {});
+  else await ctx.reply("Xatolik: Kanalga yuborib bo'lmadi. Bot kanalda admin ekanligini tekshiring.");
 });
 
 
@@ -6260,6 +6301,7 @@ bot.callbackQuery(/^approve_hot:(\d+)/, async (ctx) => {
 
       // 3. IKKALA kanal ID sini ham bazaga bitta qilib saqlash
       await db.execute("UPDATE ads SET status='active', channelMsgId=?, secondChannelMsgId=?, posted_at = COALESCE(posted_at, NOW()) WHERE id=?", [msg.message_id, secondMsgId, adId]);
+      kanal.markPosted(); await kanal.copyRegional(ad, msg.message_id, channelMarkup);
 
       if (require('fs').existsSync(collagePath)) require('fs').unlinkSync(collagePath);
       
@@ -8492,7 +8534,7 @@ setInterval(checkVipExpiry, 10 * 60 * 1000).unref();
 setTimeout(checkVipExpiry, 60 * 1000).unref();
 
 setInterval(() => runScheduledPosts(new Date()), 60 * 1000 * 30);
-module.exports = { pmPublish, pmTick, pmParseWhen, postStyle, buildChannelCaption, renderAdImage, updateChannelPost, refreshChannelCaption, AD_CHANNEL_MARKUP_FN: (...a) => AD_CHANNEL_MARKUP(...a), offers, offerCounterWait, buildWeeklyReport, sendWeeklyAnalytics, CHART_POSTS, publishChartPost, charts, nudgeLowViewAds, loadBotSettings, alertMatchesAd, notifyAlertsForAd, flushNotifyQueue, deliverNotice, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
+module.exports = { kanal, publishApprovedAd, recentActions, BASE_TIMELINE, AUTO_POSTS, pmPublish, pmTick, pmParseWhen, postStyle, buildChannelCaption, renderAdImage, updateChannelPost, refreshChannelCaption, AD_CHANNEL_MARKUP_FN: (...a) => AD_CHANNEL_MARKUP(...a), offers, offerCounterWait, buildWeeklyReport, sendWeeklyAnalytics, CHART_POSTS, publishChartPost, charts, nudgeLowViewAds, loadBotSettings, alertMatchesAd, notifyAlertsForAd, flushNotifyQueue, deliverNotice, runScheduledPosts, addPriceVoteLine, AD_CHANNEL_MARKUP, checkVipExpiry, changeAdPrice, useFreeUp, finishSalonAppAds, downloadBuffer, createCollage, submitNewAdToAdmin }; // testlar uchun
 
 // ==============================================================
 // 🧯 JAVOBSIZ TUGMALAR (eng oxirida turishi shart — boshqa handlerlardan keyin)
@@ -8670,6 +8712,7 @@ const adminAwaiting = () => !!(adminPriceEdit || adminInput);
 // 🚀 ISHGA TUSHIRISH: avval jadvallar va katalog, keyin Mini App va bot
 // ==============================================================
 dbReady.finally(async () => {
+  kanal.start(); // 📢 yangi kanal imkoniyatlari taymeri (har daqiqa)
   // 📱 MINI APP serveri (Railway PORT ni o'zi beradi). Xato bo'lsa ham bot ishlayveradi.
   try {
     const { startWebApp } = require("./webapp");
@@ -8688,6 +8731,22 @@ dbReady.finally(async () => {
       offers,
       postMaker: { PM, image: pmImage, check: pmCheck, publish: pmPublish, schedule: pmSchedule, list: pmList, cancel: pmCancel, parseWhen: pmParseWhen },
       maintenance: { info: maintenanceInfo, set: setMaintenance, remember: maintRemember, text: MAINT_PLAIN },
+      // ⚙️ Imkoniyatlar va 📊 boshqaruv paneli (ilovadagi yangi admin panel)
+      features: {
+        kanal, baseTimeline: BASE_TIMELINE,
+        groups: AUTO_GROUPS.map(([key, t]) => ({ key, title: t.replace(/<[^>]*>/g, "") })),
+        items: () => AUTO_POSTS.map((p) => ({ key: p.key, group: p.group, btn: p.btn, title: p.title, when: p.when, on: isAutoOn(p.key), run: !!p.run, preview: !!(p.preview || p.kprev) })),
+        setOn: (k, on) => setAutoOn(k, on), setSetting: (k, v) => setBotSetting(k, v),
+        styles: () => POST_STYLES, postStyle: () => postStyle(),
+        recentActions: () => recentActions,
+        isKanal: (k) => kanal.FEATURES.some((f) => f.key === k),
+        previewChart: async (key) => {
+          if (!CHART_POSTS[key]) return { ok: false, error: "Bu post uchun namuna yo'q" };
+          const ctx = { reply: (t, o) => bot.api.sendMessage(ADMIN_ID, t, o), replyWithPhoto: (ph, o) => bot.api.sendPhoto(ADMIN_ID, ph, o) };
+          await previewChartPost(ctx, key, 0); return { ok: true };
+        },
+        run: async (key) => { const p = AUTO_POSTS.find((x) => x.key === key && x.run); if (!p) return { ok: false, error: "Bu xabarni qo'lda yuborib bo'lmaydi" }; try { return (await p.run()) || { ok: true }; } catch (e) { return { ok: false, error: e.description || e.message }; } },
+      },
       admin: { runAdminAction, runAdminText, runAdminCommand, cancelAdminInput, rejectAdWithReason, startBroadcast, broadcastStatus, adminAwaiting, adminBlobs, queueDone, isVipActive, fmtTash },
     });
   } catch (e) {

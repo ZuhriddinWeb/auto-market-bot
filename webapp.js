@@ -752,9 +752,11 @@ function startWebApp(deps) {
   // ---------- Mening e'lonlarim ----------
   async function handleMyAds(req, res, user) {
     const [rows] = await db.execute(
-      "SELECT * FROM ads WHERE userId = ? AND status IN ('active', 'sold', 'pending') ORDER BY FIELD(status, 'pending', 'active', 'sold'), created_at DESC",
+      "SELECT * FROM ads WHERE userId = ? AND status IN ('active', 'sold', 'pending', 'queued') ORDER BY FIELD(status, 'queued', 'pending', 'active', 'sold'), created_at DESC",
       [user.id]
     );
+    // ⏱ Tasdiqlangan, kanalga chiqish navbatida — foydalanuvchiga «tekshiruvda» kabi ko'rinadi, belgisi boshqa
+    rows.forEach((r) => { if (r.status === "queued") { r.status = "pending"; r._queued = true; } });
     const [[u]] = await db.execute("SELECT free_ups FROM users WHERE id = ?", [user.id]);
     const [editRows] = await db.execute("SELECT oldAdId FROM ad_edits WHERE userId = ?", [user.id]);
     const editing = new Set(editRows.map(e => Number(e.oldAdId)));
@@ -782,7 +784,7 @@ function startWebApp(deps) {
     logLine(user, `Mening e'lonlarimni ochdi (${rows.length} ta)`, "my");
     sendJson(res, 200, {
       ok: true, freeUps: u?.free_ups || 0,
-      items: rows.map(r => ({ ...card(r, badges, null), editPending: editing.has(Number(r.id)), votes: votes.get(Number(r.id)) || null, stats: statsOf(r) })),
+      items: rows.map(r => ({ ...card(r, badges, null), editPending: editing.has(Number(r.id)), queued: !!r._queued, votes: votes.get(Number(r.id)) || null, stats: statsOf(r) })),
     });
   }
 
@@ -1219,6 +1221,114 @@ function startWebApp(deps) {
       maintenance: deps.maintenance ? deps.maintenance.info() : { on: false } });
   }
 
+  // =====================================================================
+  // 📊 BOSHQARUV PANELI (dashboard) va ⚙️ IMKONIYATLAR (har bir funksiyani yoqish / o'chirish)
+  // =====================================================================
+  const AF = () => deps.features || null;
+  async function handleAdminDashboard(req, res, user) {
+    if (!needAdmin(res, user)) return;
+    const F = AF(), K = F && F.kanal;
+    const [activeAds, adsToday, adsYesterday, soldWeek, drops7, offers7, income30, salonIncome30, paidAds30, users, usersToday, queued] = await Promise.all([
+      count("SELECT COUNT(*) AS c FROM ads WHERE status = 'active'"),
+      count("SELECT COUNT(*) AS c FROM ads WHERE created_at >= CURDATE()"),
+      count("SELECT COUNT(*) AS c FROM ads WHERE created_at >= CURDATE() - INTERVAL 1 DAY AND created_at < CURDATE()"),
+      count("SELECT COUNT(*) AS c FROM ads WHERE status = 'sold' AND sold_at >= NOW() - INTERVAL 7 DAY"),
+      count("SELECT COUNT(*) AS c FROM ads WHERE price_dropped_at >= NOW() - INTERVAL 7 DAY"),
+      count("SELECT COUNT(*) AS c FROM offers WHERE created_at >= NOW() - INTERVAL 7 DAY"),
+      count("SELECT COALESCE(SUM(amount), 0) AS c FROM vip_requests WHERE status = 'approved' AND created_at >= NOW() - INTERVAL 30 DAY"),
+      count("SELECT COALESCE(SUM(price), 0) AS c FROM salon_ads WHERE status IN ('active', 'deleted') AND created_at >= NOW() - INTERVAL 30 DAY"),
+      count("SELECT COALESCE(SUM(paid_amount), 0) AS c FROM ads WHERE paid_amount > 0 AND status IN ('active', 'sold') AND created_at >= NOW() - INTERVAL 30 DAY"),
+      count("SELECT COUNT(*) AS c FROM users"),
+      count("SELECT COUNT(*) AS c FROM users WHERE joined_at >= CURDATE()"),
+      count("SELECT COUNT(*) AS c FROM ads WHERE status = 'queued'"),
+    ]);
+    const payCount30 = await count("SELECT COUNT(*) AS c FROM vip_requests WHERE status = 'approved' AND created_at >= NOW() - INTERVAL 30 DAY");
+    // 14 kunlik yangi e'lonlar
+    const series = [];
+    try {
+      const [rows] = await db.execute("SELECT DATE(created_at) AS d, COUNT(*) AS c FROM ads WHERE created_at >= CURDATE() - INTERVAL 13 DAY GROUP BY DATE(created_at)");
+      const m = new Map(rows.map((r) => [new Date(r.d).toISOString().slice(0, 10), Number(r.c)]));
+      const [[now]] = await db.execute("SELECT CURDATE() AS d");
+      const base = new Date(now.d);
+      for (let i = 13; i >= 0; i--) { const dt = new Date(base.getTime() - i * 86400000); const k = dt.toISOString().slice(0, 10); series.push({ d: k, day: dt.getUTCDate(), c: m.get(k) || 0 }); }
+    } catch (e) {}
+    // Moderatsiya: birinchi 5 ta + ogohlantirishlar
+    const [pend] = await db.execute("SELECT * FROM ads WHERE status = 'pending' ORDER BY id ASC LIMIT 20");
+    const [pc] = await db.execute("SELECT COUNT(*) AS c FROM ads WHERE status = 'pending'");
+    let warnAds = 0;
+    const mod = [];
+    for (const a of pend) {
+      const ws = K ? await K.adWarnings(a).catch(() => []) : [];
+      if (ws.some((w) => w.level !== "ok")) warnAds++;
+      if (mod.length < 5) {
+        const fid = split(a.photoId)[0];
+        mod.push({ id: Number(a.id), title: a.carDetails, year: a.year, price: digits(a.price), region: a.region, source: a.source || "bot", at: a.created_at, thumb: fid ? fileUrl(fid, 240) : null, warnings: ws });
+      }
+    }
+    let subs = null, subsWeek = null;
+    if (K) { subs = await K.subscribers(); subsWeek = await count("SELECT COALESCE(SUM(joined) - SUM(left_count), 0) AS c FROM channel_events WHERE channel_id = 'main' AND date >= CURDATE() - INTERVAL 6 DAY"); }
+    // Bugun kanalda
+    let timeline = K ? K.todayTimeline(F.baseTimeline || []) : [];
+    try {
+      if (deps.postMaker) {
+        const today = new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
+        for (const p of await deps.postMaker.list()) {
+          const t = new Date(new Date(p.runAt).getTime() + 5 * 3600e3);
+          if (t.toISOString().slice(0, 10) === today) timeline.push({ time: t.toISOString().slice(11, 16), title: "🎨 " + (p.title || "Post"), key: "pm", on: true, planned: true });
+        }
+        timeline.sort((a, b) => a.time.localeCompare(b.time));
+      }
+    } catch (e) {}
+    const quick = ["smooth_post", "offers", "adm_warn", "comment_spam", "digest", "quiz"].map((k) => { const it = F && F.items().find((x) => x.key === k); return it ? { key: k, title: it.btn, on: it.on } : null; }).filter(Boolean);
+    sendJson(res, 200, { ok: true,
+      kpi: { activeAds, adsToday, adsYesterday, pending: Number(pc[0].c) || 0, warnAds, subs, subsWeek, income30: income30 + salonIncome30 + paidAds30, payCount30, users, usersToday, queued },
+      week: { sold: soldWeek, drops: drops7, offers: offers7 },
+      series, moderation: mod, timeline, quick,
+      postStyle: F ? F.postStyle() : null,
+      feed: (F ? F.recentActions() : []).slice(0, 8),
+      kanal: K ? K.status() : null,
+    });
+  }
+  async function handleAdminFeatures(req, res, user) {
+    if (!needAdmin(res, user)) return;
+    const F = AF();
+    if (!F) return sendJson(res, 400, { ok: false, error: "Mavjud emas" });
+    sendJson(res, 200, { ok: true, groups: F.groups, items: F.items(), styles: F.styles(), style: F.postStyle(), kanal: F.kanal.status(), regionsList: F.kanal.REGIONS, queue: await F.kanal.queueList() });
+  }
+  async function handleAdminFeatureSet(req, res, user) {
+    if (!needAdmin(res, user)) return;
+    const F = AF(), b = (await readJson(req)) || {};
+    if (!F) return sendJson(res, 400, { ok: false, error: "Mavjud emas" });
+    if (b.key) {
+      const it = F.items().find((x) => x.key === b.key);
+      if (!it) return sendJson(res, 404, { ok: false, error: "Topilmadi" });
+      await F.setOn(b.key, !!b.on);
+      logLine(user, `🖥 Admin (ilova): ${b.on ? "yoqdi" : "o'chirdi"} — ${it.btn}`, null, 0);
+      return sendJson(res, 200, { ok: true, on: !!b.on });
+    }
+    if (b.all != null) { for (const it of F.items()) if (it.key !== "top3_classic") await F.setOn(it.key, !!b.all); return sendJson(res, 200, { ok: true }); }
+    if (b.gap != null) {
+      const n = int(b.gap); if (![3, 5, 7, 10, 15, 20, 30].includes(n)) return sendJson(res, 400, { ok: false, error: "Noto'g'ri oraliq" });
+      await F.setSetting("smooth:gap", String(n)); return sendJson(res, 200, { ok: true });
+    }
+    if (b.region) { const r = await F.kanal.setRegionChannel(String(b.region), String(b.channel || "")); return sendJson(res, r.ok ? 200 : 400, r); }
+    sendJson(res, 400, { ok: false, error: "Noto'g'ri so'rov" });
+  }
+  async function handleAdminFeatureRun(req, res, user) {
+    if (!needAdmin(res, user)) return;
+    const F = AF(), b = (await readJson(req)) || {};
+    if (!F) return sendJson(res, 400, { ok: false, error: "Mavjud emas" });
+    const key = String(b.key || "");
+    if (b.mode === "flush") { const n = await F.kanal.flushQueue(); return sendJson(res, 200, { ok: true, text: `${n} ta e'lon kanalga chiqarildi` }); }
+    if (b.mode === "preview") {
+      const r = F.isKanal(key) ? await F.kanal.previewTo(ADMIN_ID, key).catch((e) => ({ ok: false, error: e.message })) : await F.previewChart(key);
+      return sendJson(res, r.ok ? 200 : 400, r.ok ? { ok: true, text: "👁 Namuna botdagi chatingizga yuborildi — kanalga hech narsa ketmadi." } : r);
+    }
+    const r = await F.run(key);
+    logLine(user, `🖥 Admin (ilova): hozir yubordi — ${key}`, null, 0);
+    sendJson(res, r && r.ok === false ? 400 : 200, r && r.ok === false ? r : { ok: true, text: "✅ Kanalga yuborildi" });
+  }
+
   // 🛠 Texnik ishlar rejimini yoqish / o'chirish (kanalga xabar ham shu yerda ketadi)
   async function handleAdminMaintenance(req, res, user) {
     if (!needAdmin(res, user)) return;
@@ -1244,6 +1354,8 @@ function startWebApp(deps) {
     const [salons] = await db.execute("SELECT * FROM salon_ads WHERE status = 'pending' ORDER BY id ASC LIMIT 20");
     const [dealers] = await db.execute("SELECT id, first_name, username, dealer_name, dealer_phone, joined_at FROM users WHERE COALESCE(is_dealer, 0) = 0 AND dealer_name IS NOT NULL ORDER BY id DESC LIMIT 30");
     const um = await userMap([...ads, ...edits, ...qs, ...salons].map(x => x.userId).concat(pays.map(p => p.payer)));
+    const warnMap = new Map();
+    if (AF() && AF().kanal) for (const a of ads) warnMap.set(Number(a.id), await AF().kanal.adWarnings(a).catch(() => []));
     const adView = (a) => ({
       id: Number(a.id), title: a.carDetails, price: digits(a.price), year: a.year, probeg: a.probeg, paint: a.paint, color: a.color,
       transmission: a.transmission, fuel: a.fuel, region: a.region, phone: a.phone, history: a.history, barter: a.barter, nasiya: a.nasiya,
@@ -1251,7 +1363,7 @@ function startWebApp(deps) {
     });
     const P = PROMOS || {};
     sendJson(res, 200, { ok: true,
-      ads: ads.map(a => ({ ...adView(a), user: who(um, a.userId), urgent: !!a.urgent, paid: Number(a.paid_amount) || 0, receipt: fileUrl(a.receiptId, 960), createdAt: a.created_at })),
+      ads: ads.map(a => ({ ...adView(a), warnings: warnMap.get(Number(a.id)) || [], user: who(um, a.userId), urgent: !!a.urgent, paid: Number(a.paid_amount) || 0, receipt: fileUrl(a.receiptId, 960), createdAt: a.created_at })),
       edits: edits.map(e => ({ ...adView(e), editId: Number(e.editId), oldAdId: Number(e.oldAdId), user: who(um, e.userId), createdAt: e.created_at })),
       bumps: qs.filter(q => q.kind === "bump").map(q => ({ ...adView(q), user: who(um, q.userId), at: q.qAt })),
       sold: qs.filter(q => q.kind === "sold").map(q => ({ ...adView(q), soldPrice: q.sold_price ? digits(q.sold_price) : null, user: who(um, q.userId), at: q.qAt })),
@@ -1516,6 +1628,10 @@ function startWebApp(deps) {
     // 🖥 Admin paneli
     ["GET", /^\/api\/admin\/summary$/, (q, s, u) => handleAdminSummary(q, s, u)],
     ["POST", /^\/api\/admin\/maintenance$/, (q, s, u) => handleAdminMaintenance(q, s, u)],
+    ["GET", /^\/api\/admin\/dashboard$/, (q, s, u) => handleAdminDashboard(q, s, u)],
+    ["GET", /^\/api\/admin\/features$/, (q, s, u) => handleAdminFeatures(q, s, u)],
+    ["POST", /^\/api\/admin\/features$/, (q, s, u) => handleAdminFeatureSet(q, s, u)],
+    ["POST", /^\/api\/admin\/features\/run$/, (q, s, u) => handleAdminFeatureRun(q, s, u)],
     ["POST", /^\/api\/admin\/post\/preview$/, (q, s, u) => handleAdminPostPreview(q, s, u)],
     ["POST", /^\/api\/admin\/post\/send$/, (q, s, u) => handleAdminPostSend(q, s, u)],
     ["GET", /^\/api\/admin\/post\/list$/, (q, s, u) => handleAdminPostList(q, s, u)],
