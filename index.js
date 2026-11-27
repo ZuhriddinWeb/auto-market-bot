@@ -68,6 +68,15 @@ try {
   }
 } catch (e) { /* bo'lmasa — asl fonts.conf ishlatiladi */ }
 const bot = new Bot(process.env.BOT_TOKEN);
+// ✏️ «message is not modified» — xato emas: post allaqachon aynan shu ko'rinishda (masalan, tugma 2 marta bosilganda).
+// Barcha edit* chaqiruvlari uchun buni muvaffaqiyat deb hisoblaymiz — log ifloslanmaydi, keyingi qadamlar (bazani yangilash) to'xtab qolmaydi.
+try {
+  bot.api.config.use(async (prev, method, payload, signal) => {
+    const res = await prev(method, payload, signal);
+    if (res && res.ok === false && /^edit/.test(method) && /message is not modified/i.test(res.description || "")) return { ok: true, result: true };
+    return res;
+  });
+} catch (e) {}
 
 // 🚪 Global tugmalar, menyu matnlari va buyruqlar ro'yxati — «tugallanmagan suhbatdan chiqish» uchun
 // (pastdagi bot.use(conversations()) yonidagi izohga qarang). Barcha handlerlar shu yerdan o'tib ro'yxatga tushadi.
