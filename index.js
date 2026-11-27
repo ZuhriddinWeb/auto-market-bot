@@ -2882,6 +2882,7 @@ async function showAutoPosts(ctx) {
 // Shablon → rang → sarlavha → ... → post matni → tugmalar → ko'rish → hozir yoki belgilangan vaqtda yuborish.
 // =====================================================================
 const PM = require("./postmaker");
+const { dealStatus } = require("./market");
 // =====================================================================
 // 📢 KANAL: yangi imkoniyatlar (kanal.js) — har biri «⏰ Avto-xabarlar» → «🆕 Yangi · ⚙️ Tizim» da yoqiladi
 // =====================================================================
@@ -2889,7 +2890,7 @@ const kanal = require("./kanal").createKanal({
   db, bot, CHANNEL_ID, CHANNEL_USER, ADMIN_ID, isAutoOn, market, formatNum, escapeHtml, InlineKeyboard, InputFile, sharp, PM,
   getSetting: (k) => botSettings.get(k), setSetting: (k, v) => setBotSetting(k, v),
   WEBAPP_URL, BOT_LINK_USERNAME, miniAppLink: (p) => miniAppLink(p), hashTag, modelTagName: (a) => modelTagName(a), postStyle: () => postStyle(),
-  buildTop3Post: () => buildTop3Post(), publishApprovedAd: (id) => publishApprovedAd(id),
+  buildTop3Post: () => buildTop3Post(), dealStatus, publishApprovedAd: (id) => publishApprovedAd(id),
   fileBuffer: async (fid) => { const f = await bot.api.getFile(fid); return downloadBuffer(`https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${f.file_path}`); },
 });
 for (const f of kanal.FEATURES) AUTO_POSTS.push({ ...f, ...(f.runnable ? { run: () => kanal.runNow(f.key), kprev: ["digest", "toc", "tips", "story"].includes(f.key) } : {}) });
@@ -7791,7 +7792,7 @@ async function buildWeeklyReport() {
     const deals = [];
     for (const ad of fresh) {
       const c = await market.compareAd(ad).catch(() => null);
-      if (c && c.confident && c.kind === "cheap" && c.diff <= -7) deals.push({ ad, d: Math.abs(c.diff) });
+      if (dealStatus(ad, c) === "trusted") deals.push({ ad, d: Math.abs(c.diff) }); // 7–35% arzon, nasiyasiz
     }
     deals.sort((a, b) => b.d - a.d);
     const ch = String(CHANNEL_ID).replace("@", "");
@@ -7846,8 +7847,15 @@ async function buildDynamicsPost(off = 0) {
 async function buildYearsPost(off = 0) {
   const y = await charts.buildYears(off);
   if (!y) return null;
-  return { png: y.png, offset: y.offset, label: y.name, kb: chartKb(false),
-    caption: `📅 <b>${escapeHtml(y.name)}: yil bo'yicha bozor narxi</b>\n\nSaqlab qo'ying 📌 — mashinangiz taxminan qancha turishini bilasiz.\n<i>Aniq narx kraska, yurgan masofasi va holatiga qarab farq qiladi.</i>\n\n👉 Aniq baho: @${BOT_LINK_USERNAME}` };
+  // Obunachilar uchun: o'z modelini tanlash tugmasi (ilovadagi «Narxini bilish»)
+  const kb = new InlineKeyboard();
+  if (WEBAPP_URL) kb.url("🔎 Boshqa model narxini bilish", miniAppLink("evaluate")).row();
+  kb.url("➕ Bepul e'lon berish", BOT_URL());
+  const how = WEBAPP_URL
+    ? `🚗 <b>Mashinangiz boshqa modelmi?</b>\nPastdagi <b>«🔎 Boshqa model narxini bilish»</b> tugmasini bosing — modeli va yilini tanlang, bozor narxi bir zumda chiqadi 👇`
+    : `🚗 <b>Mashinangiz boshqa modelmi?</b>\nBotga yozing — modeli va yilini tanlang, bozor narxini aytamiz 👉 @${BOT_LINK_USERNAME}`;
+  return { png: y.png, offset: y.offset, label: y.name, kb,
+    caption: `📅 <b>${escapeHtml(y.name)}: yil bo'yicha bozor narxi</b>\n\nSaqlab qo'ying 📌 — mashinangiz taxminan qancha turishini bilasiz.\n<i>Aniq narx kraska, yurgan masofasi va holatiga qarab farq qiladi.</i>\n\n${how}` };
 }
 async function buildWeekNumbersPost() {
   const w = await charts.buildWeekNumbers();
@@ -7964,7 +7972,9 @@ async function buildTop3Post() {
   const scored = [];
   for (const ad of rows) {
     const c = await market.compareAd(ad).catch(() => null);
-    scored.push({ ad, pct: c && c.confident && c.kind === "cheap" ? Math.abs(c.diff) : 0 });
+    const st = dealStatus(ad, c);
+    if (st === "suspicious") continue; // 35% dan ortiq arzon yoki nasiya — TOP-3 ga kirmaydi
+    scored.push({ ad, pct: st === "trusted" ? Math.abs(c.diff) : 0 });
   }
   // Avval — bozor narxidan eng ko'p arzonlari; 3 ta bo'lmasa, qolgan joy narxi eng pastlari bilan to'ldiriladi
   let pick = scored.filter((x) => x.pct >= 3).sort((a, b) => b.pct - a.pct).slice(0, 3);

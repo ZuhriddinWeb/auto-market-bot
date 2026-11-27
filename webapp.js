@@ -20,6 +20,7 @@
 //
 // Xavfsizlik: har bir so'rovda Telegram yuborgan initData bot tokeni bilan tekshiriladi.
 // ==============================================================
+const { dealStatus } = require("./market");
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -224,7 +225,7 @@ function startWebApp(deps) {
       try {
         const c = await market.compareAd(ad);
         if (!c || !c.confident) return;
-        if (c.kind === "cheap") out.set(ad.id, { type: "cheap", pct: Math.abs(c.diff), text: `Bozordan ${Math.abs(c.diff)}% arzon` });
+        if (c.kind === "cheap") out.set(ad.id, { type: "cheap", pct: Math.abs(c.diff), text: `Bozordan ${Math.abs(c.diff)}% arzon`, trusted: dealStatus(ad, c) === "trusted" });
         else if (c.kind === "market") out.set(ad.id, { type: "market", text: "Bozor narxida" });
       } catch (e) {}
     }));
@@ -348,7 +349,8 @@ function startWebApp(deps) {
       // «🔥 Arzon»: bozor narxidan kamida 5% arzon (ishonchli hisob) — eng katta chegirmadan boshlab
       const [all] = await db.execute(`SELECT ${COLS} FROM ads WHERE ${whereSql} ORDER BY created_at DESC LIMIT 500`, params);
       const b = await priceBadges(all);
-      const deals = all.filter(r => (b.get(r.id) || {}).type === "cheap").sort((x, y) => b.get(y.id).pct - b.get(x.id).pct);
+      // Faqat ishonchli arzonlar (7–35%, nasiyasiz) — kanaldagi «eng yaxshi takliflar» bilan bir xil qoida
+      const deals = all.filter(r => (b.get(r.id) || {}).type === "cheap" && b.get(r.id).trusted).sort((x, y) => b.get(y.id).pct - b.get(x.id).pct);
       cnt = { total: deals.length };
       rows = deals.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
       badges = b;

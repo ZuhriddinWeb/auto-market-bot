@@ -115,7 +115,7 @@ function createKanal(d) {
     try {
       const c = await market.compareAd(ad);
       if (c && c.confident) {
-        if (c.diff <= -40) out.push({ level: "bad", text: `narx bozordan ${Math.abs(c.diff)}% past` });
+        if (c.diff < -35) out.push({ level: "bad", text: `narx bozordan ${Math.abs(c.diff)}% past — tekshiring` });
         else if (c.diff >= 45) out.push({ level: "warn", text: `narx bozordan ${c.diff}% baland` });
         else if (c.diff <= -5) out.push({ level: "ok", text: `bozordan −${Math.abs(c.diff)}%` });
       }
@@ -241,10 +241,12 @@ function createKanal(d) {
     const [rows] = await db.execute("SELECT * FROM ads WHERE status = 'active' AND channelMsgId IS NOT NULL AND posted_at >= NOW() - INTERVAL 24 HOUR ORDER BY id DESC LIMIT 300");
     const [[sold]] = await db.execute("SELECT COUNT(*) AS c FROM ads WHERE status = 'sold' AND sold_at >= NOW() - INTERVAL 24 HOUR");
     if (!rows.length) return null;
-    const scored = [];
+    const scored = [], bad = new Set();
     for (const ad of rows.slice(0, 150)) {
       const c = await market.compareAd(ad).catch(() => null);
-      if (c && c.confident && c.diff <= -5) scored.push({ ad, pct: Math.abs(c.diff) });
+      const st = d.dealStatus(ad, c); // faqat ishonchli arzonlar: 7–35%, nasiyasiz
+      if (st === "trusted") scored.push({ ad, pct: Math.abs(c.diff) });
+      else if (st === "suspicious") bad.add(ad.id);
     }
     scored.sort((a, b) => b.pct - a.pct);
     const models = new Map();
@@ -257,7 +259,7 @@ function createKanal(d) {
       text += `\n🔥 <b>Bozordan arzonlari:</b>\n`;
       scored.slice(0, 5).forEach(({ ad, pct }, i) => { text += `${i + 1}. <a href="${postLink(ad.channelMsgId)}">${adName(ad)}</a> — <b>${sp(priceNum(ad.price))}$</b> (−${pct}%)\n`; });
     } else {
-      const cheap = rows.filter((a) => priceNum(a.price) >= 300).sort((a, b) => priceNum(a.price) - priceNum(b.price)).slice(0, 5);
+      const cheap = rows.filter((a) => priceNum(a.price) >= 300 && !bad.has(a.id)).sort((a, b) => priceNum(a.price) - priceNum(b.price)).slice(0, 5);
       text += `\n💰 <b>Eng arzonlari:</b>\n`;
       cheap.forEach((ad, i) => { text += `${i + 1}. <a href="${postLink(ad.channelMsgId)}">${adName(ad)}</a> — <b>${sp(priceNum(ad.price))}$</b>\n`; });
     }

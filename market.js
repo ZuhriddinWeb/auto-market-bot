@@ -156,4 +156,18 @@ function createMarket({ db, catalog }) {
   return { marketPrice, compareAd, transGroup, modelInfo, clear };
 }
 
-module.exports = { createMarket, transGroup, median };
+// 🔥 «Eng yaxshi takliflar» ro'yxatlari uchun: faqat ishonchli arzonlar.
+//   • bozordan 7–35% arzon (35% dan ham arzon bo'lsa — ko'pincha xato: yili noto'g'ri, boshlang'ich to'lov, avariyali)
+//   • nasiya e'lonlari kirmaydi (narx o'rniga ko'pincha boshlang'ich to'lov yoziladi)
+const DEAL_MIN = 7, DEAL_MAX = 35;
+const hasNasiya = (ad) => { const n = String((ad && ad.nasiya) || "").trim().toLowerCase(); return !!n && !["yo'q", "yo‘q", "yoq", "йўқ", "нет", "no", "-", "ko'rsatilmagan"].includes(n); };
+// c — compareAd natijasi. Qaytaradi: "trusted" | "suspicious" | null (oddiy)
+function dealStatus(ad, c) {
+  if (hasNasiya(ad)) return "suspicious";
+  if (!c || !c.confident) return null;
+  if (c.diff < -DEAL_MAX) return "suspicious";
+  if (c.diff <= -DEAL_MIN) return "trusted";
+  return null;
+}
+
+module.exports = { createMarket, transGroup, median, dealStatus, hasNasiya, DEAL_MIN, DEAL_MAX };
